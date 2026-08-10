@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% import "charts.html" as ch %}
+{% block title %}{{ t('inventory.title') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('inventory.title') }}</h1>
+  <p>{{ t('inventory.subtitle') }}</p>
+</div>
+
+<section class="tiles tiles-big">
+  <div class="tile">
+    <div class="label">{{ t('inventory.total_value') }}</div>
+    <div class="value">{{ t.money(inv.total_value) }}</div>
+    <div class="sub">{{ t('inventory.items_in_stock') }}: {{ t.number(inv.items_in_stock) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('inventory.dead') }}</div>
+    <div class="value" style="color: var(--bad)">{{ t.money(inv.dead_value) }}</div>
+    <div class="sub">{{ t.percent(inv.dead_share) }} · {{ t.number(inv.dead_items) }} {{ t('common.product')|lower }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('inventory.stockout_title') }}</div>
+    <div class="value" style="color: var(--warn)">{{ t.number(risk_count) }}</div>
+    <div class="sub">{{ t.money(risk_weekly) }} / {{ t('common.days')|lower }} 7</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('inventory.overstock_title') }}</div>
+    <div class="value">{{ t.money(over_value) }}</div>
+    <div class="sub">{{ t.number(over_count) }} {{ t('common.product')|lower }}</div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>{{ t('inventory.split_title') }}</h2>
+  <div class="legend">
+    <span><i class="swatch" style="background: var(--c-healthy)"></i>{{ t('inventory.healthy') }} — {{ t('inventory.healthy_desc', days=slow_days) }}</span>
+    <span><i class="swatch" style="background: var(--c-slow)"></i>{{ t('inventory.slow') }} — {{ t('inventory.slow_desc', from_days=slow_days, to_days=inv.dead_stock_days) }}</span>
+    <span><i class="swatch" style="background: var(--c-dead)"></i>{{ t('inventory.dead') }} — {{ t('inventory.dead_desc', days=inv.dead_stock_days) }}</span>
+  </div>
+  {{ ch.stack(split, t) }}
+</section>
+
+{# ---------------------------------------------------------- running out #}
+<section class="panel page-break">
+  <h2>{{ t('inventory.stockout_title') }}</h2>
+  <p class="note">{{ t('inventory.stockout_note', months=t.number(cover_months, 2)) }}</p>
+  {% if risk %}
+    <div class="table-wrap scroll-y">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th class="nosort">{{ t('common.rank') }}</th>
+            <th>{{ t('common.product') }}</th>
+            <th>{{ t('common.family') }}</th>
+            <th class="num">{{ t('common.stock') }}</th>
+            <th class="num">{{ t('inventory.col_rate') }}</th>
+            <th class="num">{{ t('inventory.col_cover') }}</th>
+            <th class="num">{{ t('inventory.col_weekly_revenue') }}</th>
+            <th class="num">{{ t('inventory.col_suggested') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in risk %}
+          <tr>
+            <td class="muted">{{ loop.index }}</td>
+            <td class="name">{{ r.item_name }}</td>
+            <td class="name muted">{{ r.family_name }}</td>
+            <td class="num" data-value="{{ r.stock }}">
+              {% if r.stock <= 0 %}<span class="pill pill-bad">{{ t.number(r.stock) }}</span>
+              {% else %}{{ t.number(r.stock) }}{% endif %}
+            </td>
+            <td class="num" data-value="{{ r.monthly_rate }}">{{ t.number(r.monthly_rate) }}</td>
+            <td class="num" data-value="{{ r.cover_months }}">{{ t.number(r.cover_months, 2) }}</td>
+            <td class="num strong" data-value="{{ r.weekly_revenue }}">{{ t.money(r.weekly_revenue) }}</td>
+            <td class="num" data-value="{{ r.suggested_order_qty }}">{{ t.number(r.suggested_order_qty) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('inventory.stockout_empty') }}</div>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------ dead stock #}
+<section class="panel page-break">
+  <h2>{{ t('inventory.dead_title') }}</h2>
+  <p class="note">{{ t('inventory.dead_note', days=inv.dead_stock_days) }}</p>
+  {% if dead %}
+    <div class="filter-row">
+      <input type="search" placeholder="{{ t('common.search') }}" data-filters="dead-table">
+      <span class="muted"><span id="dead-table-count">{{ dead|length }}</span> {{ t('common.of_total', total=t.number(dead_count)) }}</span>
+    </div>
+    <div class="table-wrap scroll-y">
+      <table class="sortable" id="dead-table">
+        <thead>
+          <tr>
+            <th>{{ t('common.product') }}</th>
+            <th>{{ t('common.family') }}</th>
+            <th class="num">{{ t('common.stock') }}</th>
+            <th class="num">{{ t('common.cost') }}</th>
+            <th class="num">{{ t('common.value') }}</th>
+            <th class="num">{{ t('common.last_sale') }}</th>
+            <th class="num">{{ t('common.days') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in dead %}
+          <tr>
+            <td class="name">{{ r.item_name }}</td>
+            <td class="name muted">{{ r.family_name }}</td>
+            <td class="num" data-value="{{ r.stock }}">{{ t.number(r.stock) }}</td>
+            <td class="num" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+            <td class="num strong" data-value="{{ r.stock_value }}">{{ t.money(r.stock_value) }}</td>
+            <td class="num" data-value="{{ r.last_sale_effective }}">
+              {{ t.date(r.last_sale_effective) if r.last_sale_effective else t('common.none') }}
+            </td>
+            <td class="num" data-value="{{ r.days_since_sale or 99999 }}">
+              {{ t.number(r.days_since_sale) if r.days_since_sale is not none else '—' }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('inventory.dead_empty') }}</div>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------- overstock #}
+<section class="split-2">
+  <div class="panel">
+    <h2>{{ t('inventory.overstock_title') }}</h2>
+    <p class="note">{{ t('inventory.overstock_note', months=t.number(over_months)) }}</p>
+    {% if over %}
+      <div class="table-wrap scroll-y">
+        <table class="sortable">
+          <thead>
+            <tr>
+              <th>{{ t('common.product') }}</th>
+              <th class="num">{{ t('common.stock') }}</th>
+              <th class="num">{{ t('inventory.col_cover') }}</th>
+              <th class="num">{{ t('inventory.col_excess') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in over %}
+            <tr>
+              <td class="name">{{ r.item_name }}</td>
+              <td class="num" data-value="{{ r.stock }}">{{ t.number(r.stock) }}</td>
+              <td class="num" data-value="{{ r.cover_months }}">{{ t.number(r.cover_months, 1) }}</td>
+              <td class="num strong" data-value="{{ r.excess_value }}">{{ t.money(r.excess_value) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty">{{ t('inventory.overstock_empty') }}</div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>{{ t('inventory.negative_title') }}</h2>
+    <p class="note">{{ t('inventory.negative_note') }}</p>
+    {% if neg %}
+      <div class="table-wrap scroll-y">
+        <table class="sortable">
+          <thead>
+            <tr>
+              <th>{{ t('common.product') }}</th>
+              <th class="num">{{ t('common.stock') }}</th>
+              <th class="num">{{ t('common.last_sale') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in neg %}
+            <tr>
+              <td class="name">{{ r.item_name }}</td>
+              <td class="num" data-value="{{ r.stock }}"><span class="pill pill-bad">{{ t.number(r.stock) }}</span></td>
+              <td class="num" data-value="{{ r.last_sale_effective }}">{{ t.date(r.last_sale_effective) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty">{{ t('inventory.negative_empty') }}</div>
+    {% endif %}
+  </div>
+</section>
+
+{# ------------------------------------------------------------------- ABC #}
+<section class="split-2">
+  <div class="panel">
+    <h2>{{ t('inventory.abc_title') }}</h2>
+    <p class="note">{{ t('inventory.abc_note') }}</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t('inventory.col_abc') }}</th>
+            <th class="num">{{ t('common.product') }}</th>
+            <th class="num">{{ t('common.revenue') }}</th>
+            <th class="num">{{ t('common.share') }}</th>
+            <th class="num">{{ t('inventory.total_value') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in abc %}
+          <tr>
+            <td class="strong">{{ t('inventory.abc_' ~ r.abc|lower) }}</td>
+            <td class="num">{{ t.number(r.items) }}</td>
+            <td class="num">{{ t.money(r.revenue) }}</td>
+            <td class="num">{{ t.percent(r.revenue_share) }}</td>
+            <td class="num">{{ t.money(r.stock_value) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>{{ t('inventory.family_title') }}</h2>
+    {{ ch.hbar(fam_chart, t) }}
+  </div>
+</section>
+{% endblock %}

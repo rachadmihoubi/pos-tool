@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ t('app.error_title') }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('app.error_title') }}</h1>
+  <p>{{ t('app.error_body') }}</p>
+</div>
+<section class="panel">
+  <pre style="white-space: pre-wrap; font-size: 13.5px; margin: 0; color: var(--bad);">{{ message }}</pre>
+</section>
+{% endblock %}

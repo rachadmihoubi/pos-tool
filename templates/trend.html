@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% import "charts.html" as ch %}
+{% block title %}{{ t('trend.title') }}{% endblock %}
+
+{% macro delta(value) %}
+  {% if value is none %}<span class="muted">—</span>
+  {% else %}
+    <span class="delta {{ 'up' if value > 0.005 else ('down' if value < -0.005 else 'flat') }}">{{ t.signed_percent(value) }}</span>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('trend.title') }}</h1>
+  <p>{{ t('trend.subtitle') }}</p>
+</div>
+
+<div class="banner banner-info">{{ t('trend.incomplete_month') }}</div>
+
+<section class="panel">
+  <h2>{{ t('trend.monthly_revenue') }}</h2>
+  <div class="legend">
+    <span><i class="swatch" style="background: var(--c1)"></i>{{ t('trend.col_revenue') }}</span>
+    <span><i class="swatch" style="background: var(--c2)"></i>{{ t('trend.col_profit') }}</span>
+    <span><i class="swatch" style="background: var(--c3)"></i>{{ t('trend.col_margin') }}</span>
+  </div>
+  {{ ch.combo(money_chart, t) }}
+</section>
+
+<section class="split-2">
+  <div class="panel">
+    <h2>{{ t('trend.tickets_trend') }}</h2>
+    <div class="legend">
+      <span><i class="swatch" style="background: var(--c1)"></i>{{ t('trend.col_tickets') }}</span>
+      <span><i class="swatch" style="background: var(--c3)"></i>{{ t('trend.col_basket') }}</span>
+    </div>
+    {{ ch.combo(volume_chart, t, money=False) }}
+  </div>
+  <div class="panel">
+    <h2>{{ t('trend.customers_trend') }}</h2>
+    {{ ch.combo(customer_chart, t, money=False) }}
+  </div>
+</section>
+
+<section class="panel">
+  <h2>{{ t('trend.heatmap_title') }}</h2>
+  <p class="note">{{ t('trend.heatmap_note') }}</p>
+  {{ ch.heat(heat_chart, t) }}
+</section>
+
+<section class="panel">
+  <h2>{{ t('trend.seasonality_title') }}</h2>
+  <p class="note">{{ t('trend.seasonality_note') }}</p>
+  {{ ch.diverging(season_chart, t) }}
+</section>
+
+<section class="panel">
+  <h2>{{ t('trend.table_title') }}</h2>
+  <div class="table-wrap scroll-y">
+    <table class="sortable">
+      <thead>
+        <tr>
+          <th>{{ t('trend.col_month') }}</th>
+          <th class="num">{{ t('trend.col_revenue') }}</th>
+          <th class="num">{{ t('trend.col_mom') }}</th>
+          <th class="num">{{ t('trend.col_profit') }}</th>
+          <th class="num">{{ t('trend.col_margin') }}</th>
+          <th class="num">{{ t('trend.col_tickets') }}</th>
+          <th class="num">{{ t('trend.col_basket') }}</th>
+          <th class="num">{{ t('trend.col_customers') }}</th>
+          <th class="num">{{ t('trend.col_yoy') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in monthly %}
+        <tr>
+          <td data-value="{{ r.month_label }}">{{ t.month_label(r.month) }}</td>
+          <td class="num" data-value="{{ r.revenue }}">{{ t.money(r.revenue) }}</td>
+          <td class="num" data-value="{{ r.revenue_mom or 0 }}">{{ delta(r.revenue_mom) }}</td>
+          <td class="num" data-value="{{ r.gross_profit }}">{{ t.money(r.gross_profit) }}</td>
+          <td class="num" data-value="{{ r.margin_pct or 0 }}">{{ t.percent(r.margin_pct) }}</td>
+          <td class="num" data-value="{{ r.tickets }}">{{ t.number(r.tickets) }}</td>
+          <td class="num" data-value="{{ r.avg_basket }}">{{ t.money(r.avg_basket) }}</td>
+          <td class="num" data-value="{{ r.active_customers }}">{{ t.number(r.active_customers) }}</td>
+          <td class="num" data-value="{{ r.revenue_yoy or 0 }}">{{ delta(r.revenue_yoy) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

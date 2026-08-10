@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}{{ t('diagnostics.title') }}{% endblock %}
+
+{% macro finding_card(f, index) %}
+  <article class="finding sev-{{ f.severity }}">
+    <div class="finding-head">
+      <h3>{{ f.title }}</h3>
+      <div>
+        <span class="pill pill-{{ 'bad' if f.severity in ('critical', 'high')
+                                  else ('warn' if f.severity == 'medium'
+                                  else ('good' if f.severity == 'good' else 'flat')) }}">
+          {{ f.severity_label }}
+        </span>
+        {% if f.money %}
+          <div class="money" style="color: {{ 'var(--bad)' if f.kind == 'failing' else 'var(--good)' }}">
+            {{ f.money_label }}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <p class="statement">{{ f.statement }}</p>
+
+    {% if f.action %}
+      <div class="action"><b>{{ t('diagnostics.what_to_do') }}:</b> {{ f.action }}</div>
+    {% endif %}
+
+    {% if f.fix %}
+      <p class="fix">→ {{ f.fix }}</p>
+    {% endif %}
+
+    {% if f.workings %}
+      <button type="button" class="toggle" data-workings="w-{{ f.kind }}-{{ index }}">
+        {{ t('diagnostics.show_workings') }}
+      </button>
+      <div class="workings" id="w-{{ f.kind }}-{{ index }}" hidden>{{ f.workings }}</div>
+    {% endif %}
+  </article>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('diagnostics.title') }}</h1>
+  <p>{{ t('diagnostics.subtitle') }}</p>
+</div>
+
+{% if diag.failing %}
+  <div class="banner banner-bad">
+    {{ t('diagnostics.total_at_stake',
+          amount=diag.total_at_stake_label, count=t.number(diag.count)) }}
+  </div>
+{% endif %}
+
+<section>
+  <h2 style="font-size: 19px; margin: 0 0 12px;">
+    ⚠ {{ t('diagnostics.failing_title') }}
+  </h2>
+  {% if diag.failing %}
+    {% for f in diag.failing %}{{ finding_card(f, loop.index) }}{% endfor %}
+  {% else %}
+    <div class="empty">{{ t('diagnostics.failing_empty') }}</div>
+  {% endif %}
+</section>
+
+<section class="page-break">
+  <h2 style="font-size: 19px; margin: 0 0 12px;">
+    ✓ {{ t('diagnostics.working_title') }}
+  </h2>
+  {% if diag.working %}
+    {% for f in diag.working %}{{ finding_card(f, loop.index) }}{% endfor %}
+  {% else %}
+    <div class="empty">{{ t('diagnostics.working_empty') }}</div>
+  {% endif %}
+</section>
+{% endblock %}

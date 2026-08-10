@@ -1,0 +1,185 @@
+{# =========================================================================
+   charts.html - the drawing half of the charts.
+
+   The geometry is worked out in poslib/charts.py; these macros only turn
+   that into SVG shapes. Plain SVG means no library to download, the charts
+   print properly, and they mirror correctly for Arabic.
+   ========================================================================= #}
+
+{# ------------------------------------------------- bars, optionally + line #}
+{% macro combo(c, t, money=True) %}
+  {% if c.empty %}
+    <div class="empty">{{ t('app.no_data') }}</div>
+  {% else %}
+  <svg class="chart" viewBox="0 0 {{ c.width }} {{ c.height }}"
+       preserveAspectRatio="xMidYMid meet" role="img">
+
+    {# horizontal guides and the value scale #}
+    {% for g in c.grid %}
+      <line class="grid-line" x1="{{ c.x0 }}" y1="{{ g.y }}" x2="{{ c.x1 }}" y2="{{ g.y }}"/>
+      <text class="axis-text" x="{{ c.value_axis_x }}" y="{{ g.y + 4 }}"
+            text-anchor="{{ c.value_anchor }}">{{ t.money_short(g.value) if money else t.number(g.value) }}</text>
+    {% endfor %}
+
+    <line class="axis-line" x1="{{ c.x0 }}" y1="{{ c.y1 }}" x2="{{ c.x1 }}" y2="{{ c.y1 }}"/>
+
+    {% for b in c.bars %}
+      <rect class="bar-1" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="2">
+        <title>{{ b.label }} — {{ t.money(b.value) if money else t.number(b.value) }}</title>
+      </rect>
+    {% endfor %}
+    {% for b in c.bars2 %}
+      <rect class="bar-2" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="2">
+        <title>{{ b.label }} — {{ t.money(b.value) if money else t.number(b.value) }}</title>
+      </rect>
+    {% endfor %}
+
+    {% if c.polyline %}
+      {# the line has its own scale, written up the other side #}
+      {% for a in c.line_axis %}
+        <text class="axis-text" x="{{ c.line_axis_x }}" y="{{ a.y + 4 }}"
+              text-anchor="{{ c.line_anchor }}" style="fill: var(--c3)">
+          {{ t.percent(a.value / 100) if c.line_is_percent else t.money_short(a.value) }}
+        </text>
+      {% endfor %}
+      <polyline class="line-1" points="{{ c.polyline }}"/>
+      {% for p in c.line_points %}
+        <circle class="line-dot" cx="{{ p.x }}" cy="{{ p.y }}" r="3.5">
+          <title>{{ p.label }} — {{ t.percent(p.value / 100) if c.line_is_percent else t.money(p.value) }}</title>
+        </circle>
+      {% endfor %}
+    {% endif %}
+
+    {% for l in c.x_labels %}
+      <text class="axis-text" x="{{ l.x }}" y="{{ c.y1 + 22 }}" text-anchor="middle">{{ l.text }}</text>
+    {% endfor %}
+  </svg>
+  {% endif %}
+{% endmacro %}
+
+
+{# --------------------------------------------------------- sideways bars #}
+{% macro hbar(c, t, money=True) %}
+  {% if c.empty %}
+    <div class="empty">{{ t('app.no_data') }}</div>
+  {% else %}
+  <svg class="chart" viewBox="0 0 {{ c.width }} {{ c.height }}"
+       preserveAspectRatio="xMidYMid meet" role="img">
+    {% for b in c.bars %}
+      <rect class="hbar" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="3">
+        <title>{{ b.label }} — {{ t.money(b.value) if money else t.number(b.value) }}</title>
+      </rect>
+      <text class="hbar-label" x="{{ b.label_x }}" y="{{ b.text_y }}"
+            text-anchor="{{ b.label_anchor }}">{{ b.label|truncate(30, true, '…') }}</text>
+      <text class="value-text" x="{{ b.value_x }}" y="{{ b.text_y }}"
+            text-anchor="{{ b.value_anchor }}">{{ t.money_short(b.value) if money else t.number(b.value) }}</text>
+    {% endfor %}
+  </svg>
+  {% endif %}
+{% endmacro %}
+
+
+{# ------------------------------------------------------------- plain line #}
+{% macro line(c, t, percent=True) %}
+  {% if c.empty %}
+    <div class="empty">{{ t('app.no_data') }}</div>
+  {% else %}
+  <svg class="chart" viewBox="0 0 {{ c.width }} {{ c.height }}"
+       preserveAspectRatio="xMidYMid meet" role="img">
+    {% for g in c.grid %}
+      <line class="grid-line" x1="{{ c.x0 }}" y1="{{ g.y }}" x2="{{ c.x1 }}" y2="{{ g.y }}"/>
+      <text class="axis-text" x="{{ c.value_axis_x }}" y="{{ g.y + 4 }}"
+            text-anchor="{{ c.value_anchor }}">{{ t.percent(g.value / 100, 0) if percent else t.money_short(g.value) }}</text>
+    {% endfor %}
+    {% for g in c.x_grid %}
+      <text class="axis-text" x="{{ g.x }}" y="{{ c.y1 + 22 }}"
+            text-anchor="middle">{{ t.percent(g.value / 100, 0) if percent else t.number(g.value) }}</text>
+    {% endfor %}
+    <line class="axis-line" x1="{{ c.x0 }}" y1="{{ c.y1 }}" x2="{{ c.x1 }}" y2="{{ c.y1 }}"/>
+    <polygon class="area-1" points="{{ c.area }}"/>
+    <polyline class="line-1" points="{{ c.polyline }}" style="stroke: var(--c1)"/>
+    {% if c.reference %}
+      <line class="ref-line" x1="{{ c.x0 }}" y1="{{ c.reference.y }}"
+            x2="{{ c.x1 }}" y2="{{ c.reference.y }}"/>
+    {% endif %}
+    <text class="axis-text" x="{{ (c.x0 + c.x1) / 2 }}" y="{{ c.height - 8 }}"
+          text-anchor="middle">{{ c.x_label }}</text>
+  </svg>
+  {% endif %}
+{% endmacro %}
+
+
+{# ------------------------------------------------- one bar split into parts #}
+{% macro stack(c, t) %}
+  {% if c.empty %}
+    <div class="empty">{{ t('app.no_data') }}</div>
+  {% else %}
+  <svg class="stack" viewBox="0 0 {{ c.width }} {{ c.height }}"
+       preserveAspectRatio="none" role="img" style="height: {{ c.height }}px">
+    {% for p in c.parts %}
+      <rect x="{{ p.x }}" y="0" width="{{ p.w }}" height="{{ c.height }}" fill="{{ p.colour }}">
+        <title>{{ p.label }} — {{ t.money(p.value) }} ({{ t.percent(p.share) }})</title>
+      </rect>
+      {% if p.wide %}
+        <text class="stack-label" x="{{ p.centre }}" y="{{ c.height / 2 - 3 }}"
+              text-anchor="middle">{{ p.label }}</text>
+        <text class="stack-sub" x="{{ p.centre }}" y="{{ c.height / 2 + 17 }}"
+              text-anchor="middle">{{ t.money_short(p.value) }} · {{ t.percent(p.share, 0) }}</text>
+      {% endif %}
+    {% endfor %}
+  </svg>
+  {% endif %}
+{% endmacro %}
+
+
+{# ----------------------------------------------------------------- heatmap #}
+{% macro heat(c, t) %}
+  {% if c.empty %}
+    <div class="empty">{{ t('app.no_data') }}</div>
+  {% else %}
+  <svg class="chart" viewBox="0 0 {{ c.width }} {{ c.height }}"
+       preserveAspectRatio="xMidYMid meet" role="img">
+    {% for l in c.col_labels %}
+      <text class="axis-text" x="{{ l.x }}" y="20" text-anchor="middle">{{ l.text }}</text>
+    {% endfor %}
+    {% for l in c.row_labels %}
+      <text class="axis-text" x="{{ l.x }}" y="{{ l.y + 4 }}"
+            text-anchor="{{ l.anchor }}" style="fill: var(--ink)">{{ l.text }}</text>
+    {% endfor %}
+    {% for cell in c.cells %}
+      <rect class="heat-cell" x="{{ cell.x }}" y="{{ cell.y }}"
+            width="{{ cell.w }}" height="{{ cell.h }}" rx="3"
+            fill="{{ 'var(--c1)' if cell.intensity > 0 else '#eef0f3' }}"
+            fill-opacity="{{ cell.intensity if cell.intensity > 0 else 1 }}">
+        <title>{{ cell.row }} {{ cell.col }} — {{ t.money(cell.value) }}</title>
+      </rect>
+    {% endfor %}
+  </svg>
+  {% endif %}
+{% endmacro %}
+
+
+{# ------------------------------------------------- bars above and below zero #}
+{% macro diverging(c, t) %}
+  {% if c.empty %}
+    <div class="empty">{{ t('app.no_data') }}</div>
+  {% else %}
+  <svg class="chart" viewBox="0 0 {{ c.width }} {{ c.height }}"
+       preserveAspectRatio="xMidYMid meet" role="img">
+    {% for g in c.grid %}
+      <line class="grid-line" x1="{{ c.x0 }}" y1="{{ g.y }}" x2="{{ c.x1 }}" y2="{{ g.y }}"/>
+      <text class="axis-text" x="{{ c.value_axis_x }}" y="{{ g.y + 4 }}"
+            text-anchor="{{ c.value_anchor }}">{{ t.signed_percent(g.value / 100, 0) }}</text>
+    {% endfor %}
+    <line class="axis-line" x1="{{ c.x0 }}" y1="{{ c.zero_y }}" x2="{{ c.x1 }}" y2="{{ c.zero_y }}"/>
+    {% for b in c.bars %}
+      <rect class="{{ 'bar-pos' if b.positive else 'bar-neg' }}"
+            x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="2">
+        <title>{{ b.label }} — {{ t.signed_percent(b.value / 100) }}</title>
+      </rect>
+      <text class="value-text" x="{{ b.text_x }}" y="{{ b.text_y }}"
+            text-anchor="middle">{{ b.label }}</text>
+    {% endfor %}
+  </svg>
+  {% endif %}
+{% endmacro %}

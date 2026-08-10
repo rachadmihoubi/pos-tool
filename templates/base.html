@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="{{ lang }}" dir="{{ dir }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ t('app.title') }}{% endblock %} · {{ t('app.title') }}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📊</text></svg>">
+</head>
+<body class="{{ 'rtl' if is_rtl else 'ltr' }}">
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">📊</span>
+    <span>
+      <strong>{{ t('app.title') }}</strong>
+      <small>{{ cfg.get('business.name', '') }}</small>
+    </span>
+  </div>
+
+  <div class="topbar-actions">
+    <button type="button" class="btn" id="refresh-btn" title="{{ t('app.refresh') }}">
+      <span id="refresh-label">{{ t('app.refresh') }}</span>
+    </button>
+    <a class="btn" href="{{ url_for('do_export') }}?lang={{ lang }}">{{ t('app.export') }}</a>
+    <button type="button" class="btn btn-quiet" onclick="window.print()">{{ t('app.print') }}</button>
+
+    <div class="lang-switch" role="group" aria-label="{{ t('app.language') }}">
+      {% for l in languages %}
+        <a href="?lang={{ l.code }}"
+           class="lang {{ 'on' if l.code == lang else '' }}"
+           lang="{{ l.code }}">{{ l.name }}</a>
+      {% endfor %}
+    </div>
+  </div>
+</header>
+
+<nav class="tabs">
+  {% for key, href in pages %}
+    <a href="{{ href }}"
+       class="tab {{ 'on' if current_page == ('page_' ~ key) or (key == 'dataquality' and current_page == 'page_dataquality') else '' }}">
+      {{ t('nav.' ~ key) }}
+    </a>
+  {% endfor %}
+</nav>
+
+<main>
+{% block content %}{% endblock %}
+</main>
+
+<footer class="footer">
+  {% if cache and cache.parsed_at %}
+    <span>{{ t('app.last_refresh', when=t.datetime(cache.parsed_at)) }}</span>
+    <span class="sep">·</span>
+    <span>{{ t('dataquality.cache_modified') }}: {{ t.datetime(cache.source_modified) }}</span>
+    <span class="sep">·</span>
+    <span>{{ t('dataquality.cache_rows', rows=t.number(cache.row_counts.values()|sum),
+                tables=t.number(cache.row_counts|length)) }}</span>
+  {% endif %}
+</footer>
+
+<div id="toast" class="toast" hidden></div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ----- the refresh button -------------------------------------------
+  var btn = document.getElementById("refresh-btn");
+  var label = document.getElementById("refresh-label");
+  var toast = document.getElementById("toast");
+
+  function say(message, isError) {
+    toast.textContent = message;
+    toast.className = "toast" + (isError ? " toast-error" : "");
+    toast.hidden = false;
+    setTimeout(function () { toast.hidden = true; }, 5000);
+  }
+
+  if (btn) {
+    btn.addEventListener("click", function () {
+      btn.disabled = true;
+      label.textContent = {{ t('app.refreshing')|tojson }};
+      fetch("{{ url_for('api_refresh') }}", { method: "POST" })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.ok) { window.location.reload(); }
+          else { say(data.error || "error", true); btn.disabled = false;
+                 label.textContent = {{ t('app.refresh')|tojson }}; }
+        })
+        .catch(function (e) {
+          say(String(e), true);
+          btn.disabled = false;
+          label.textContent = {{ t('app.refresh')|tojson }};
+        });
+    });
+  }
+
+  // ----- quietly reload when new sales arrive --------------------------
+  // Only the Today screen needs this; it is the one left open all day.
+  {% block autorefresh %}{% endblock %}
+
+  // ----- sortable tables ----------------------------------------------
+  // Click a heading to sort. Numbers sort as numbers, names as names.
+  document.querySelectorAll("table.sortable").forEach(function (table) {
+    var headers = table.querySelectorAll("thead th");
+    headers.forEach(function (th, index) {
+      if (th.classList.contains("nosort")) { return; }
+      th.classList.add("sortable-th");
+      th.addEventListener("click", function () {
+        var body = table.tBodies[0];
+        var rows = Array.prototype.slice.call(body.rows);
+        var descending = th.getAttribute("data-sort") !== "desc";
+
+        rows.sort(function (a, b) {
+          var av = a.cells[index].getAttribute("data-value");
+          var bv = b.cells[index].getAttribute("data-value");
+          if (av !== null && bv !== null) {
+            var an = parseFloat(av), bn = parseFloat(bv);
+            if (!isNaN(an) && !isNaN(bn)) { return descending ? bn - an : an - bn; }
+            return descending ? String(bv).localeCompare(String(av))
+                              : String(av).localeCompare(String(bv));
+          }
+          var at = a.cells[index].textContent.trim();
+          var bt = b.cells[index].textContent.trim();
+          return descending ? bt.localeCompare(at) : at.localeCompare(bt);
+        });
+
+        headers.forEach(function (h) { h.removeAttribute("data-sort"); });
+        th.setAttribute("data-sort", descending ? "desc" : "asc");
+        rows.forEach(function (r) { body.appendChild(r); });
+      });
+    });
+  });
+
+  // ----- filter boxes over tables --------------------------------------
+  document.querySelectorAll("[data-filters]").forEach(function (input) {
+    input.addEventListener("input", function () {
+      var table = document.getElementById(input.getAttribute("data-filters"));
+      if (!table) { return; }
+      var needle = input.value.toLowerCase().trim();
+      var shown = 0;
+      Array.prototype.forEach.call(table.tBodies[0].rows, function (row) {
+        var hit = !needle || row.textContent.toLowerCase().indexOf(needle) !== -1;
+        row.hidden = !hit;
+        if (hit) { shown++; }
+      });
+      var note = document.getElementById(input.getAttribute("data-filters") + "-count");
+      if (note) { note.textContent = shown; }
+    });
+  });
+
+  // ----- show the arithmetic behind a finding --------------------------
+  document.querySelectorAll("[data-workings]").forEach(function (link) {
+    link.addEventListener("click", function (e) {
+      e.preventDefault();
+      var box = document.getElementById(link.getAttribute("data-workings"));
+      if (!box) { return; }
+      var open = box.hidden;
+      box.hidden = !open;
+      link.textContent = open ? {{ t('diagnostics.hide_workings')|tojson }}
+                              : {{ t('diagnostics.show_workings')|tojson }};
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

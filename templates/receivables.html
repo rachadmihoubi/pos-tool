@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% import "charts.html" as ch %}
+{% block title %}{{ t('receivables.title') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('receivables.title') }}</h1>
+  <p>{{ t('receivables.subtitle') }}</p>
+</div>
+
+{% if receivables %}
+
+{% if concentrated %}
+  <div class="banner banner-bad">
+    {{ t('receivables.concentration_warning',
+          name=summary.top_name, share=t.percent(summary.top_share),
+          amount=t.money(summary.top_balance)) }}
+  </div>
+{% else %}
+  <div class="banner banner-good">{{ t('receivables.concentration_ok') }}</div>
+{% endif %}
+
+<section class="tiles tiles-big">
+  <div class="tile">
+    <div class="label">{{ t('receivables.total_owed') }}</div>
+    <div class="value">{{ t.money(summary.total) }}</div>
+    <div class="sub">{{ t('receivables.customers_owing') }}: {{ t.number(summary.customers) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('receivables.at_risk') }}</div>
+    <div class="value" style="color: var(--bad)">{{ t.money(summary.at_risk_total) }}</div>
+    <div class="sub">{{ t.number(summary.at_risk_customers) }} {{ t('common.customer')|lower }} · {{ t.number(risk_days) }} {{ t('common.days')|lower }}+</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('receivables.biggest_holder') }}</div>
+    <div class="value">{{ t.percent(summary.top_share) }}</div>
+    <div class="sub name">{{ summary.top_name }}</div>
+  </div>
+</section>
+
+{% if summary.credit_customers %}
+  <div class="banner banner-info">
+    {{ t('receivables.credit_note', count=t.number(summary.credit_customers),
+          amount=t.money(summary.credit_balances|abs)) }}
+  </div>
+{% endif %}
+
+<section class="panel">
+  <h2>{{ t('receivables.chart_title') }}</h2>
+  {{ ch.hbar(chart, t) }}
+</section>
+
+<section class="panel page-break">
+  <h2>{{ t('receivables.title') }}</h2>
+  <p class="note">{{ t('receivables.months_trade_note') }}</p>
+  <div class="table-wrap">
+    <table class="sortable">
+      <thead>
+        <tr>
+          <th class="nosort">{{ t('common.rank') }}</th>
+          <th>{{ t('receivables.col_customer') }}</th>
+          <th>{{ t('common.phone') }}</th>
+          <th>{{ t('common.city') }}</th>
+          <th class="num">{{ t('receivables.col_balance') }}</th>
+          <th class="num">{{ t('receivables.col_share') }}</th>
+          <th class="num">{{ t('receivables.col_last') }}</th>
+          <th class="num">{{ t('receivables.col_days') }}</th>
+          <th class="num">{{ t('receivables.col_revenue_12m') }}</th>
+          <th class="num">{{ t('receivables.col_months_trade') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in receivables %}
+        <tr>
+          <td class="muted">{{ loop.index }}</td>
+          <td class="name strong">
+            {{ r.customer_name }}
+            {% if r.at_risk %}<span class="pill pill-bad">{{ t('receivables.risk_flag') }}</span>{% endif %}
+          </td>
+          <td class="num">{{ r.phone or '—' }}</td>
+          <td class="name">{{ r.city or '—' }}</td>
+          <td class="num strong" data-value="{{ r.balance }}">{{ t.money(r.balance) }}</td>
+          <td class="num" data-value="{{ r.share_of_receivables }}">{{ t.percent(r.share_of_receivables) }}</td>
+          <td class="num" data-value="{{ r.last_purchase }}">{{ t.date(r.last_purchase) }}</td>
+          <td class="num" data-value="{{ r.days_since_purchase or 9999 }}">{{ t.number(r.days_since_purchase) }}</td>
+          <td class="num" data-value="{{ r.revenue_12m }}">{{ t.money(r.revenue_12m) }}</td>
+          <td class="num" data-value="{{ r.months_of_their_trade or 999 }}">
+            {{ t.number(r.months_of_their_trade, 1) if r.months_of_their_trade is not none else '—' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% else %}
+  <div class="empty">{{ t('receivables.empty') }}</div>
+{% endif %}
+{% endblock %}

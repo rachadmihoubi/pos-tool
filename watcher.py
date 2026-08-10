@@ -1,0 +1,257 @@
+"""
+watcher.py - notices when the POS saves a sale and refreshes the tool.
+
+It watches the folder the database lives in. When the file changes it does
+NOT read it straight away: the POS may be half way through writing, and
+reading a half-written file gives nonsense. Instead it waits until the file
+has stopped changing for a few seconds, then rebuilds the cache.
+
+It also runs the daily digest at the hour set in config.yaml.
+
+Everything here is careful never to crash: if a rebuild fails the watcher
+logs it, waits, and tries again. It has to survive being left running for
+months.
+"""
+
+from __future__ import annotations
+
+import datetime
+import logging
+import threading
+import time
+from pathlib import Path
+
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.observers import Observer
+
+from poslib.config import Config, get_config, setup_logging
+from poslib.etl import ETL, ETLError
+
+log = logging.getLogger(__name__)
+
+
+class DatabaseChanged(FileSystemEventHandler):
+    """Notes that the database file was touched. Does not read it yet."""
+
+    def __init__(self, target: Path, on_change) -> None:
+        self.target_name = target.name.lower()
+        self.on_change = on_change
+
+    def _matches(self, path: str) -> bool:
+        name = Path(path).name.lower()
+        if name == self.target_name:
+            return True
+        # Access writes a lock file beside the database while saving. Seeing
+        # it appear or disappear is a good sign something happened.
+        return name.startswith(self.target_name.rsplit(".", 1)[0]) and \
+            name.endswith((".ldb", ".laccdb"))
+
+    def on_any_event(self, event: FileSystemEvent) -> None:
+        if event.is_directory:
+            return
+        if self._matches(event.src_path) or \
+                (getattr(event, "dest_path", None) and self._matches(event.dest_path)):
+            self.on_change()
+
+
+class Watcher:
+    """Keeps the cache in step with the POS database."""
+
+    def __init__(self, cfg: Config | None = None):
+        self.cfg = cfg or get_config()
+        self.etl = ETL(self.cfg)
+        self.source = self.cfg.source_db
+
+        self.quiet_seconds = float(self.cfg.get("watcher.quiet_seconds", 5))
+        self.min_gap = float(self.cfg.get("watcher.min_seconds_between_rebuilds", 60))
+        self.poll_seconds = float(self.cfg.get("watcher.poll_seconds", 120))
+
+        self._dirty = threading.Event()
+        self._stop = threading.Event()
+        self._last_rebuild = 0.0
+        self._last_digest_date: datetime.date | None = None
+
+    # -- being told something happened -------------------------------------
+
+    def mark_dirty(self) -> None:
+        self._dirty.set()
+
+    # -- waiting for the POS to finish writing -----------------------------
+
+    def _wait_until_settled(self) -> bool:
+        """
+        Wait until the file has stopped growing.
+
+        Returns True when it is safe to read. Gives up after a while so a
+        POS that writes continuously cannot block the tool forever.
+        """
+        deadline = time.time() + 120
+        last: tuple[int, float] | None = None
+        stable_since: float | None = None
+
+        while time.time() < deadline and not self._stop.is_set():
+            try:
+                stat = self.source.stat()
+                now = (stat.st_size, round(stat.st_mtime, 2))
+            except OSError:
+                # The file is momentarily locked or being replaced.
+                time.sleep(1.0)
+                last, stable_since = None, None
+                continue
+
+            if now == last:
+                if stable_since is None:
+                    stable_since = time.time()
+                elif time.time() - stable_since >= self.quiet_seconds:
+                    return True
+            else:
+                last, stable_since = now, None
+
+            time.sleep(1.0)
+
+        log.warning("The database kept changing for two minutes; reading it anyway.")
+        return True
+
+    # -- the work ----------------------------------------------------------
+
+    def rebuild(self, force: bool = False) -> None:
+        since = time.time() - self._last_rebuild
+        if not force and since < self.min_gap:
+            log.debug("Only %.0fs since the last read; leaving it.", since)
+            return
+
+        if not self._wait_until_settled():
+            return
+
+        try:
+            result = self.etl.refresh(force=force)
+        except ETLError as exc:
+            log.error("Could not read the database: %s", exc)
+            return
+        except Exception:                                # noqa: BLE001
+            log.exception("Unexpected problem while reading the database")
+            return
+
+        self._last_rebuild = time.time()
+        if result.rebuilt:
+            log.info("Read %s rows in %.1fs. %s",
+                     f"{result.total_rows:,}", result.duration_seconds, result.reason)
+            for warning in result.warnings:
+                log.warning("  %s", warning)
+        else:
+            log.debug("Nothing new. %s", result.reason)
+
+    # -- the daily digest --------------------------------------------------
+
+    def _digest_due(self) -> bool:
+        hour = int(self.cfg.get("digest.hour", 20))
+        minute = int(self.cfg.get("digest.minute", 0))
+        now = datetime.datetime.now()
+
+        if self._last_digest_date == now.date():
+            return False
+        return (now.hour, now.minute) >= (hour, minute)
+
+    def _run_digest(self) -> None:
+        today = datetime.date.today()
+        self._last_digest_date = today
+        log.info("Producing the daily digest.")
+        try:
+            from poslib.digest import send_digest
+            results = send_digest()
+            for r in results:
+                if r.ok:
+                    log.info("  digest -> %s: sent%s", r.channel,
+                             f" ({r.detail})" if r.detail else "")
+                else:
+                    log.warning("  digest -> %s: %s", r.channel, r.error)
+        except Exception:                                # noqa: BLE001
+            # A failed digest must never stop the watcher.
+            log.exception("The daily digest failed")
+
+    # -- the loop ----------------------------------------------------------
+
+    def run(self) -> None:
+        folder = self.source.parent
+        if not folder.is_dir():
+            log.error("The folder to watch does not exist: %s", folder)
+            log.error("Check 'database: path:' in config.yaml.")
+            return
+
+        log.info("Watching %s", self.source)
+        log.info("Digest at %02d:%02d each day.",
+                 int(self.cfg.get("digest.hour", 20)),
+                 int(self.cfg.get("digest.minute", 0)))
+
+        handler = DatabaseChanged(self.source, self.mark_dirty)
+        observer = Observer()
+        observer.schedule(handler, str(folder), recursive=False)
+        observer.start()
+
+        # Read once at startup so the dashboard is never empty.
+        self.rebuild(force=False)
+
+        last_poll = time.time()
+        try:
+            while not self._stop.is_set():
+                if self._dirty.wait(timeout=2.0):
+                    self._dirty.clear()
+                    # Let a burst of writes finish before reacting to them.
+                    time.sleep(1.0)
+                    self._dirty.clear()
+                    self.rebuild()
+                    last_poll = time.time()
+
+                # Safety net, in case a change was somehow missed.
+                if time.time() - last_poll >= self.poll_seconds:
+                    last_poll = time.time()
+                    self.rebuild()
+
+                if self._digest_due():
+                    self._run_digest()
+
+        except KeyboardInterrupt:
+            log.info("Stopping.")
+        finally:
+            observer.stop()
+            observer.join(timeout=5)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Watch the POS database and keep the dashboard up to date.")
+    parser.add_argument("--once", action="store_true",
+                        help="Read the database once and stop.")
+    parser.add_argument("--digest-now", action="store_true",
+                        help="Produce and send the daily digest immediately.")
+    args = parser.parse_args()
+
+    from poslib.config import ConfigError
+    try:
+        cfg = get_config()
+    except ConfigError as exc:
+        print(f"\nThere is a problem with config.yaml:\n\n{exc}\n")
+        return 1
+
+    setup_logging(cfg)
+    watcher = Watcher(cfg)
+
+    if args.digest_now:
+        watcher._run_digest()
+        return 0
+
+    if args.once:
+        watcher.rebuild(force=True)
+        return 0
+
+    watcher.run()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

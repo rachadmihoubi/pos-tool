@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% import "charts.html" as ch %}
+{% block title %}{{ t('products.title') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('products.title') }}</h1>
+  <p>{{ t('products.subtitle') }}</p>
+</div>
+
+{% if missing_cost.lines %}
+  <div class="banner banner-warn">
+    {{ t('products.cost_unknown_note', count=t.number(missing_cost.items)) }}
+    ({{ t.money(missing_cost.value) }}, {{ t.percent(missing_cost.share_of_revenue) }})
+  </div>
+{% endif %}
+
+<section class="panel">
+  <h2>{{ t('products.chart_family_title') }}</h2>
+  <div class="legend">
+    <span><i class="swatch" style="background: var(--c1)"></i>{{ t('common.revenue') }}</span>
+    <span><i class="swatch" style="background: var(--c3)"></i>{{ t('common.margin_pct') }}</span>
+  </div>
+  {{ ch.combo(fam_chart, t) }}
+</section>
+
+<section class="panel">
+  <h2>{{ t('products.family_title') }}</h2>
+  <div class="table-wrap">
+    <table class="sortable">
+      <thead>
+        <tr>
+          <th>{{ t('common.family') }}</th>
+          <th class="num">{{ t('products.col_revenue') }}</th>
+          <th class="num">{{ t('common.share') }}</th>
+          <th class="num">{{ t('products.col_profit') }}</th>
+          <th class="num">{{ t('products.col_margin') }}</th>
+          <th class="num">{{ t('products.col_units') }}</th>
+          <th class="num">{{ t('inventory.total_value') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in families %}
+        <tr>
+          <td class="name strong">{{ r.family_name }}</td>
+          <td class="num" data-value="{{ r.revenue }}">{{ t.money(r.revenue) }}</td>
+          <td class="num" data-value="{{ r.revenue_share }}">{{ t.percent(r.revenue_share) }}</td>
+          <td class="num" data-value="{{ r.gross_profit }}">{{ t.money(r.gross_profit) }}</td>
+          <td class="num" data-value="{{ r.margin_pct or -9 }}">
+            <span class="{{ 'delta down' if r.margin_pct is not none and r.margin_pct < healthy else '' }}">
+              {{ t.percent(r.margin_pct) }}
+            </span>
+          </td>
+          <td class="num" data-value="{{ r.units }}">{{ t.number(r.units) }}</td>
+          <td class="num" data-value="{{ r.stock_value }}">{{ t.money(r.stock_value) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{# ------------------------------------------------- sells a lot, earns little #}
+<section class="panel page-break">
+  <h2>{{ t('products.low_margin_title') }}</h2>
+  <p class="note">{{ t('products.low_margin_note', threshold=t.percent(healthy)) }}</p>
+  {% if low %}
+    <div class="table-wrap scroll-y">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th>{{ t('common.product') }}</th>
+            <th>{{ t('common.family') }}</th>
+            <th class="num">{{ t('products.col_revenue') }}</th>
+            <th class="num">{{ t('products.col_margin') }}</th>
+            <th class="num">{{ t('products.col_current_margin') }}</th>
+            <th class="num">{{ t('common.price') }}</th>
+            <th class="num">{{ t('common.cost') }}</th>
+            <th class="num">{{ t('products.col_uplift') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in low %}
+          <tr>
+            <td class="name">{{ r.item_name }}</td>
+            <td class="name muted">{{ r.family_name }}</td>
+            <td class="num strong" data-value="{{ r.revenue_all }}">{{ t.money(r.revenue_all) }}</td>
+            <td class="num" data-value="{{ r.margin_pct or -9 }}">
+              <span class="delta down">{{ t.percent(r.margin_pct) }}</span>
+            </td>
+            <td class="num" data-value="{{ r.current_margin_pct or -9 }}">{{ t.percent(r.current_margin_pct) }}</td>
+            <td class="num" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
+            <td class="num" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+            <td class="num" data-value="{{ r.uplift_2pts }}" style="color: var(--good)">{{ t.money(r.uplift_2pts) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('products.low_margin_empty') }}</div>
+  {% endif %}
+</section>
+
+{# --------------------------------------------------- cost up, price flat #}
+<section class="panel">
+  <h2>{{ t('products.drift_title') }}</h2>
+  <p class="note">{{ t('products.drift_note') }}</p>
+  {% if drift %}
+    <p class="note strong" style="color: var(--bad)">{{ t.money(drift_loss) }} / {{ t('common.last_12_months')|lower }}</p>
+    <div class="table-wrap">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th>{{ t('common.product') }}</th>
+            <th class="num">{{ t('products.col_cost_then') }}</th>
+            <th class="num">{{ t('products.col_cost_now') }}</th>
+            <th class="num">{{ t('products.col_price_then') }}</th>
+            <th class="num">{{ t('products.col_price_now') }}</th>
+            <th class="num">{{ t('products.col_margin_then') }}</th>
+            <th class="num">{{ t('products.col_margin_now') }}</th>
+            <th class="num">{{ t('products.col_annual_loss') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in drift %}
+          <tr>
+            <td class="name">{{ r.item_name }}</td>
+            <td class="num" data-value="{{ r.first_cost or 0 }}">{{ t.money(r.first_cost) }}</td>
+            <td class="num strong" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+            <td class="num" data-value="{{ r.first_price or 0 }}">{{ t.money(r.first_price) }}</td>
+            <td class="num" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
+            <td class="num" data-value="{{ r.margin_then or 0 }}">{{ t.percent(r.margin_then) }}</td>
+            <td class="num" data-value="{{ r.margin_now or 0 }}">
+              <span class="delta down">{{ t.percent(r.margin_now) }}</span>
+            </td>
+            <td class="num strong" data-value="{{ r.annual_margin_lost }}" style="color: var(--bad)">
+              {{ t.money(r.annual_margin_lost) }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('products.drift_empty') }}</div>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------ below cost #}
+<section class="panel page-break">
+  <h2>{{ t('products.below_cost_title') }}</h2>
+  <p class="note">{{ t('products.below_cost_note') }}</p>
+  {% if below %}
+    <p class="note strong" style="color: var(--bad)">{{ t.money(below_loss|abs) }} · {{ t.number(below_count) }}</p>
+    <div class="table-wrap scroll-y">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th>{{ t('common.product') }}</th>
+            <th class="num">{{ t('products.col_units') }}</th>
+            <th class="num">{{ t('products.col_loss') }}</th>
+            <th class="num">{{ t('products.col_loss_unit') }}</th>
+            <th class="num">{{ t('common.price') }}</th>
+            <th class="num">{{ t('common.cost') }}</th>
+            <th>{{ t('products.col_still_below') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in below %}
+          <tr>
+            <td class="name">{{ r.item_name }}</td>
+            <td class="num" data-value="{{ r.units }}">{{ t.number(r.units) }}</td>
+            <td class="num strong" data-value="{{ r.loss }}" style="color: var(--bad)">{{ t.money(r.loss|abs) }}</td>
+            <td class="num" data-value="{{ r.loss_per_unit }}">{{ t.money(r.loss_per_unit|abs) }}</td>
+            <td class="num" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
+            <td class="num" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+            <td data-value="{{ 1 if r.still_below_cost else 0 }}">
+              {% if r.still_below_cost %}<span class="pill pill-bad">{{ t('common.yes') }}</span>
+              {% else %}<span class="pill pill-flat">{{ t('common.no') }}</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('products.below_cost_empty') }}</div>
+  {% endif %}
+</section>
+
+{# ---------------------------------------------------------- all products #}
+<section class="panel">
+  <h2>{{ t('products.product_title') }}</h2>
+  <div class="filter-row">
+    <input type="search" placeholder="{{ t('common.search') }}" data-filters="product-table">
+    <span class="muted"><span id="product-table-count">{{ products|length }}</span> {{ t('common.of_total', total=t.number(product_count)) }}</span>
+  </div>
+  <div class="table-wrap scroll-y">
+    <table class="sortable" id="product-table">
+      <thead>
+        <tr>
+          <th>{{ t('common.product') }}</th>
+          <th>{{ t('common.family') }}</th>
+          <th class="num">{{ t('products.col_revenue') }}</th>
+          <th class="num">{{ t('products.col_profit') }}</th>
+          <th class="num">{{ t('products.col_margin') }}</th>
+          <th class="num">{{ t('products.col_units') }}</th>
+          <th class="num">{{ t('common.price') }}</th>
+          <th class="num">{{ t('common.cost') }}</th>
+          <th class="num">{{ t('products.col_stock') }}</th>
+          <th class="num">{{ t('common.days') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in products %}
+        <tr>
+          <td class="name">{{ r.item_name }}</td>
+          <td class="name muted">{{ r.family_name }}</td>
+          <td class="num strong" data-value="{{ r.revenue_all }}">{{ t.money(r.revenue_all) }}</td>
+          <td class="num" data-value="{{ r.gross_profit_all }}">{{ t.money(r.gross_profit_all) }}</td>
+          <td class="num" data-value="{{ r.margin_pct or -9 }}">
+            {% if r.margin_pct is none %}<span class="muted">{{ t('common.not_measurable') }}</span>
+            {% else %}<span class="{{ 'delta down' if r.margin_pct < healthy else '' }}">{{ t.percent(r.margin_pct) }}</span>{% endif %}
+          </td>
+          <td class="num" data-value="{{ r.qty_all }}">{{ t.number(r.qty_all) }}</td>
+          <td class="num" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
+          <td class="num" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+          <td class="num" data-value="{{ r.stock or 0 }}">
+            {% if r.stock is not none and r.stock < 0 %}<span class="pill pill-bad">{{ t.number(r.stock) }}</span>
+            {% else %}{{ t.number(r.stock) }}{% endif %}
+          </td>
+          <td class="num" data-value="{{ r.days_since_sale or 99999 }}">
+            {{ t.number(r.days_since_sale) if r.days_since_sale is not none else '—' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

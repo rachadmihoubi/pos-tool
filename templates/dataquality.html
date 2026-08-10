@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}{{ t('dataquality.title') }}{% endblock %}
+
+{% macro issue(title, body, handled) %}
+  <div class="dq-item">
+    <h3>{{ title }}</h3>
+    <p>{{ body }}</p>
+    <div class="handled"><strong>{{ t('dataquality.handled') }}:</strong> {{ handled }}</div>
+  </div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('dataquality.title') }}</h1>
+  <p>{{ t('dataquality.subtitle') }}</p>
+</div>
+
+<div class="banner banner-info">{{ t('dataquality.intro') }}</div>
+
+{# ------------------------------------------------------------- coverage #}
+<section class="panel">
+  <h2>{{ t('dataquality.coverage_title') }}</h2>
+  <div class="tiles" style="margin-top: 12px;">
+    <div class="tile">
+      <div class="label">{{ t('dataquality.coverage_range', first=t.date(dq.coverage.first_sale), last=t.date(dq.coverage.last_sale)) }}</div>
+      <div class="value" style="font-size: 24px">{{ t.number(dq.coverage.days) }}</div>
+      <div class="sub">{{ t('dataquality.coverage_days', days=t.number(dq.coverage.days)) }}</div>
+    </div>
+    <div class="tile">
+      <div class="label">{{ t('dataquality.coverage_age') }}</div>
+      <div class="value" style="font-size: 24px">{{ t.relative_hours(dq.coverage.age_hours) }}</div>
+    </div>
+    <div class="tile">
+      <div class="label">{{ t('common.total') }}</div>
+      <div class="value" style="font-size: 24px">{{ t.number(dq.total_lines) }}</div>
+      <div class="sub">{{ t('dataquality.coverage_lines', lines=t.number(dq.total_lines), tickets=t.number(dq.walkin.tickets + (dq.header_cost.tickets_total - dq.walkin.tickets))) }}</div>
+    </div>
+  </div>
+</section>
+
+{# ------------------------------------------------------------ the quirks #}
+<section class="panel">
+  <h2>{{ t('dataquality.title') }}</h2>
+
+  {{ issue(
+      t('dataquality.collections_title'),
+      t('dataquality.collections_body',
+        lines=t.number(dq.collections.lines), value=t.money(dq.collections.value),
+        share=t.percent(dq.collections.share_if_counted)),
+      t('dataquality.collections_handled')) }}
+
+  {% if dq.collections.other_lines %}
+    <div class="dq-item">
+      <p class="muted">{{ t('dataquality.collections_other',
+            count=t.number(dq.collections.other_lines),
+            names=dq.collections.other_names|join(' · ')) }}</p>
+    </div>
+  {% endif %}
+
+  {{ issue(
+      t('dataquality.header_cost_title'),
+      t('dataquality.header_cost_body',
+        wrong=t.number(dq.header_cost.tickets_wrong), total=t.number(dq.header_cost.tickets_total),
+        zero=t.number(dq.header_cost.tickets_zero), value=t.money(dq.header_cost.understated_by)),
+      t('dataquality.header_cost_handled', tickets=dq.header_cost.affected_ticket_nos|join(', '))) }}
+
+  {{ issue(
+      t('dataquality.missing_cost_title'),
+      t('dataquality.missing_cost_body',
+        lines=t.number(dq.missing_cost.lines), value=t.money(dq.missing_cost.value)),
+      t('dataquality.missing_cost_handled', value=t.money(dq.missing_cost.value))) }}
+
+  {{ issue(
+      t('dataquality.returns_title'),
+      t('dataquality.returns_body',
+        lines=t.number(dq.returns.lines), value=t.money(dq.returns.value),
+        share=t.percent(dq.returns.share_of_revenue)),
+      t('dataquality.returns_handled')) }}
+
+  {{ issue(
+      t('dataquality.negative_stock_title'),
+      t('dataquality.negative_stock_body',
+        items=t.number(dq.negative_stock.items), units=t.number(dq.negative_stock.units|abs)),
+      t('dataquality.negative_stock_handled')) }}
+
+  {{ issue(
+      t('dataquality.stale_last_sold_title'),
+      t('dataquality.stale_last_sold_body',
+        items=t.number(dq.stale_last_sold.items), worst=t.number(dq.stale_last_sold.worst_days)),
+      t('dataquality.stale_last_sold_handled',
+        value=t.money(dq.stale_last_sold.wrongly_dead_value),
+        wrongly=t.number(dq.stale_last_sold.wrongly_dead_items))) }}
+
+  {{ issue(
+      t('dataquality.purchases_title'),
+      t('dataquality.purchases_body',
+        share=t.percent(dq.purchases.supplier_share, 0),
+        date_share=t.percent(dq.purchases.date_share, 0)),
+      t('dataquality.purchases_handled')) }}
+
+  {% if not dq.purchases.value_reconciles %}
+    {{ issue(
+        t('dataquality.purchases_totals_title'),
+        t('dataquality.purchases_totals_body',
+          value=t.money(dq.purchases.value), expected=t.money(dq.purchases.expected_value),
+          ratio=t.number(dq.purchases.value_ratio, 1)),
+        t('dataquality.purchases_totals_handled')) }}
+  {% endif %}
+
+  {% if dq.credit_balances.customers %}
+    {{ issue(
+        t('dataquality.credit_title'),
+        t('dataquality.credit_body',
+          count=t.number(dq.credit_balances.customers), value=t.money(dq.credit_balances.value|abs)),
+        t('dataquality.credit_handled')) }}
+  {% endif %}
+
+  {{ issue(
+      t('dataquality.walkin_title'),
+      t('dataquality.walkin_body',
+        tickets=t.number(dq.walkin.tickets), value=t.money(dq.walkin.revenue),
+        share=t.percent(dq.walkin.share)),
+      t('dataquality.walkin_handled')) }}
+
+  {{ issue(
+      t('dataquality.margin_check_title'),
+      t('dataquality.margin_check_body',
+        value=t.money(dq.reported_vs_calculated_margin.difference),
+        share=t.percent(dq.reported_vs_calculated_margin.share, 3)),
+      t('dataquality.margin_check_handled')) }}
+</section>
+
+{# --------------------------------------------------------- verification #}
+<section class="panel page-break">
+  <h2>{{ t('dataquality.verification_title') }}</h2>
+  <p class="note">{{ t('dataquality.verification_note') }}</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t('dataquality.verification_check') }}</th>
+          <th class="num">{{ t('dataquality.verification_computed') }}</th>
+          <th class="num">{{ t('dataquality.verification_expected') }}</th>
+          <th class="num">{{ t('dataquality.verification_delta') }}</th>
+          <th>{{ t('dataquality.verification_status') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in checks %}
+        <tr>
+          <td>{{ c.key.replace('_', ' ') }}</td>
+          <td class="num strong">
+            {{ t.money(c.value) if c.kind == 'money' else t.number(c.value) }}
+          </td>
+          <td class="num muted">
+            {{ t.money(c.expected) if c.kind == 'money' else t.number(c.expected) }}
+          </td>
+          <td class="num">
+            {% if c.delta is none %}—
+            {% else %}{{ t.money(c.delta) if c.kind == 'money' else t.number(c.delta) }}{% endif %}
+          </td>
+          <td>
+            <span class="pill pill-{{ 'good' if c.status in ('verification_ok', 'verification_grown')
+                                      else ('bad' if c.status == 'verification_bad' else 'info') }}">
+              {{ t('dataquality.' ~ c.status) }}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{# ---------------------------------------------------------------- cache #}
+<section class="panel">
+  <h2>{{ t('dataquality.cache_title') }}</h2>
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        <tr>
+          <td>{{ t('dataquality.cache_source') }}</td>
+          <td class="strong" style="word-break: break-all">{{ cache.source_path }}</td>
+        </tr>
+        <tr>
+          <td>{{ t('dataquality.cache_modified') }}</td>
+          <td>{{ t.datetime(cache.source_modified) }}</td>
+        </tr>
+        <tr>
+          <td>{{ t('dataquality.cache_parsed') }}</td>
+          <td>{{ t.datetime(cache.parsed_at) }} — {{ t('dataquality.cache_duration', seconds=t.number(cache.duration, 1)) }}</td>
+        </tr>
+        <tr>
+          <td>{{ t('common.total') }}</td>
+          <td>{{ t('dataquality.cache_rows', rows=t.number(cache.row_counts.values()|sum), tables=t.number(cache.row_counts|length)) }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  {% if cache.warnings %}
+    <h3 style="font-size: 15px; margin: 18px 0 8px;">{{ t('dataquality.cache_warnings') }}</h3>
+    <ul style="margin: 0; padding-inline-start: 20px; color: var(--warn); font-size: 14px;">
+      {% for w in cache.warnings %}<li>{{ w }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+</section>
+{% endblock %}

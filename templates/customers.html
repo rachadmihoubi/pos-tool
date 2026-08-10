@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% import "charts.html" as ch %}
+{% block title %}{{ t('customers.title') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('customers.title') }}</h1>
+  <p>{{ t('customers.subtitle') }}</p>
+</div>
+
+<section class="tiles">
+  <div class="tile">
+    <div class="label">{{ t('customers.total_customers') }}</div>
+    <div class="value">{{ t.number(customer_count) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('customers.call_list_title') }}</div>
+    <div class="value">{{ t.number(call_count) }}</div>
+    <div class="sub">{{ t.money(call_revenue) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('customers.pareto_title') }}</div>
+    <div class="value">{{ t.number(n80) }}</div>
+    <div class="sub">{{ t('customers.pareto_callout', count=t.number(n80), share=t.percent(n80_share)) }}</div>
+  </div>
+</section>
+
+{# --------------------------------------------------------------- segments #}
+<section class="panel">
+  <h2>{{ t('customers.segments_title') }}</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t('customers.col_segment') }}</th>
+          <th class="num">{{ t('common.count') }}</th>
+          <th class="num">{{ t('customers.col_revenue') }}</th>
+          <th class="num">{{ t('customers.col_revenue_12m') }}</th>
+          <th class="num">{{ t('common.share') }}</th>
+          <th class="num">{{ t('customers.col_balance') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in segments %}
+        <tr>
+          <td>
+            <span class="pill seg-{{ s.segment }}">{{ t('segments.' ~ s.segment) }}</span>
+            <div class="muted" style="font-size: 12.5px; margin-top: 3px;">{{ t('segments.' ~ s.segment ~ '_desc') }}</div>
+          </td>
+          <td class="num strong">{{ t.number(s.customers) }}</td>
+          <td class="num">{{ t.money(s.revenue) }}</td>
+          <td class="num">{{ t.money(s.revenue_12m) }}</td>
+          <td class="num">{{ t.percent(s.revenue_share) }}</td>
+          <td class="num">{{ t.money(s.balance) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{# ------------------------------------------------------------- call list #}
+<section class="panel page-break">
+  <h2>{{ t('customers.call_list_title') }}</h2>
+  <p class="note">{{ t('customers.call_list_note') }}</p>
+  {% if calls %}
+    <p class="note strong">{{ t('customers.call_list_count', count=t.number(call_count), revenue=t.money(call_revenue)) }}</p>
+    <div class="table-wrap scroll-y">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th class="nosort">{{ t('common.rank') }}</th>
+            <th>{{ t('common.name') }}</th>
+            <th>{{ t('common.phone') }}</th>
+            <th>{{ t('common.city') }}</th>
+            <th class="num">{{ t('customers.col_revenue') }}</th>
+            <th class="num">{{ t('customers.col_visits') }}</th>
+            <th class="num">{{ t('customers.col_last') }}</th>
+            <th class="num">{{ t('customers.col_recency') }}</th>
+            <th class="num">{{ t('customers.col_was_worth') }}</th>
+            <th class="num">{{ t('customers.col_balance') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in calls %}
+          <tr>
+            <td class="muted">{{ loop.index }}</td>
+            <td class="name strong">{{ c.customer_name }}</td>
+            <td class="num">{{ c.phone or '—' }}</td>
+            <td class="name">{{ c.city or '—' }}</td>
+            <td class="num" data-value="{{ c.revenue }}">{{ t.money(c.revenue) }}</td>
+            <td class="num" data-value="{{ c.visits }}">{{ t.number(c.visits) }}</td>
+            <td class="num" data-value="{{ c.last_purchase }}">{{ t.date(c.last_purchase) }}</td>
+            <td class="num" data-value="{{ c.recency_days }}">{{ t.number(c.recency_days) }}</td>
+            <td class="num" data-value="{{ c.monthly_when_active }}">{{ t.money(c.monthly_when_active) }}</td>
+            <td class="num" data-value="{{ c.balance }}">
+              {% if c.balance %}<span class="pill pill-warn">{{ t.money(c.balance) }}</span>{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('customers.call_list_empty') }}</div>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------ the curves #}
+<section class="split-2">
+  <div class="panel">
+    <h2>{{ t('customers.pareto_title') }}</h2>
+    <p class="note">{{ t('customers.pareto_note') }}</p>
+    {{ ch.line(pareto_chart, t) }}
+  </div>
+  <div class="panel">
+    <h2>{{ t('customers.churn_title') }}</h2>
+    <div class="legend">
+      <span><i class="swatch" style="background: var(--c1)"></i>{{ t('customers.churn_new') }}</span>
+      <span><i class="swatch" style="background: var(--c2)"></i>{{ t('customers.churn_lost') }}</span>
+      <span><i class="swatch" style="background: var(--c3)"></i>{{ t('customers.active_12m') }}</span>
+    </div>
+    {{ ch.combo(churn_chart, t, money=False) }}
+  </div>
+</section>
+
+{# ------------------------------------------------------------- everybody #}
+<section class="panel">
+  <h2>{{ t('customers.list_title') }}</h2>
+  <p class="note">{{ t('customers.walkin_note', share=t.percent(walkin.share), tickets=t.number(walkin.tickets)) }}</p>
+  <div class="filter-row">
+    <input type="search" placeholder="{{ t('common.search') }}" data-filters="customer-table">
+    <span class="muted"><span id="customer-table-count">{{ customers|length }}</span> {{ t('common.of_total', total=t.number(customer_count)) }}</span>
+  </div>
+  <div class="table-wrap scroll-y">
+    <table class="sortable" id="customer-table">
+      <thead>
+        <tr>
+          <th>{{ t('customers.col_customer') }}</th>
+          <th>{{ t('common.phone') }}</th>
+          <th class="num">{{ t('customers.col_revenue') }}</th>
+          <th class="num">{{ t('customers.col_revenue_12m') }}</th>
+          <th class="num">{{ t('customers.col_profit') }}</th>
+          <th class="num">{{ t('customers.col_margin') }}</th>
+          <th class="num">{{ t('customers.col_visits') }}</th>
+          <th class="num">{{ t('customers.col_basket') }}</th>
+          <th class="num">{{ t('customers.col_recency') }}</th>
+          <th class="num">{{ t('customers.col_balance') }}</th>
+          <th>{{ t('customers.col_segment') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in customers %}
+        <tr>
+          <td class="name">{{ c.customer_name }}</td>
+          <td class="num">{{ c.phone or '—' }}</td>
+          <td class="num strong" data-value="{{ c.revenue }}">{{ t.money(c.revenue) }}</td>
+          <td class="num" data-value="{{ c.revenue_12m }}">{{ t.money(c.revenue_12m) }}</td>
+          <td class="num" data-value="{{ c.gross_profit }}">{{ t.money(c.gross_profit) }}</td>
+          <td class="num" data-value="{{ c.margin_pct or -9 }}">
+            {% if c.margin_pct is none %}<span class="muted">—</span>
+            {% else %}<span class="{{ 'delta down' if c.margin_pct < 0.02 else '' }}">{{ t.percent(c.margin_pct) }}</span>{% endif %}
+          </td>
+          <td class="num" data-value="{{ c.visits }}">{{ t.number(c.visits) }}</td>
+          <td class="num" data-value="{{ c.avg_basket }}">{{ t.money(c.avg_basket) }}</td>
+          <td class="num" data-value="{{ c.recency_days or 9999 }}">{{ t.number(c.recency_days) }}</td>
+          <td class="num" data-value="{{ c.balance }}">{{ t.money(c.balance) if c.balance else '—' }}</td>
+          <td data-value="{{ c.segment }}"><span class="pill seg-{{ c.segment }}">{{ t('segments.' ~ c.segment) }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

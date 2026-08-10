@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% import "charts.html" as ch %}
+{% block title %}{{ t('suppliers.title') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('suppliers.title') }}</h1>
+  <p>{{ t('suppliers.subtitle') }}</p>
+</div>
+
+<div class="banner banner-warn">
+  {{ t('suppliers.coverage_warning',
+        share=t.percent(coverage.supplier_share, 0),
+        date_share=t.percent(coverage.date_share, 0)) }}
+</div>
+
+<section class="tiles">
+  <div class="tile">
+    <div class="label">{{ t('suppliers.count') }}</div>
+    <div class="value">{{ t.number(suppliers|length) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('suppliers.concentration_title') }}</div>
+    <div class="value">{{ t.percent(top5_share) }}</div>
+    <div class="sub">{{ t('suppliers.top_share', count=5, share=t.percent(top5_share)) }}</div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>{{ t('suppliers.chart_concentration_title') }}</h2>
+  <p class="note">{{ t('suppliers.concentration_note') }}</p>
+  {{ ch.hbar(chart, t) }}
+</section>
+
+<section class="panel">
+  <h2>{{ t('suppliers.title') }}</h2>
+  <div class="table-wrap">
+    <table class="sortable">
+      <thead>
+        <tr>
+          <th>{{ t('suppliers.col_supplier') }}</th>
+          <th>{{ t('common.phone') }}</th>
+          <th class="num">{{ t('suppliers.col_item_revenue') }}</th>
+          <th class="num">{{ t('suppliers.col_revenue_share') }}</th>
+          <th class="num">{{ t('suppliers.col_margin') }}</th>
+          <th class="num">{{ t('suppliers.col_stock_value') }}</th>
+          <th class="num">{{ t('suppliers.col_purchase_value') }}</th>
+          <th class="num">{{ t('suppliers.col_balance') }}</th>
+          <th class="num">{{ t('suppliers.col_last') }}</th>
+          <th class="num">{{ t('suppliers.col_days_since') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in suppliers %}
+        <tr>
+          <td class="name strong">{{ s.supplier_name }}</td>
+          <td class="num">{{ s.phone or '—' }}</td>
+          <td class="num" data-value="{{ s.item_revenue or 0 }}">{{ t.money(s.item_revenue) }}</td>
+          <td class="num" data-value="{{ s.revenue_share or 0 }}">{{ t.percent(s.revenue_share) }}</td>
+          <td class="num" data-value="{{ s.margin_pct or -9 }}">{{ t.percent(s.margin_pct) }}</td>
+          <td class="num" data-value="{{ s.item_stock_value or 0 }}">{{ t.money(s.item_stock_value) }}</td>
+          <td class="num muted" data-value="{{ s.purchase_value or 0 }}">{{ t.money(s.purchase_value) }}</td>
+          <td class="num" data-value="{{ s.balance or 0 }}">{{ t.money(s.balance) if s.balance else '—' }}</td>
+          <td class="num" data-value="{{ s.last_purchase }}">{{ t.date(s.last_purchase) }}</td>
+          <td class="num" data-value="{{ s.days_since_purchase or 99999 }}">
+            {{ t.number(s.days_since_purchase) if s.days_since_purchase is not none else '—' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="split-2">
+  <div class="panel">
+    <h2>{{ t('suppliers.gaps_title') }}</h2>
+    <p class="note">{{ t('suppliers.gaps_note') }} {{ t('suppliers.overdue_note') }}</p>
+    {% if gaps %}
+      <div class="table-wrap scroll-y">
+        <table class="sortable">
+          <thead>
+            <tr>
+              <th>{{ t('suppliers.col_supplier') }}</th>
+              <th class="num">{{ t('suppliers.col_orders') }}</th>
+              <th class="num">{{ t('suppliers.col_gap') }}</th>
+              <th class="num">{{ t('suppliers.col_days_since') }}</th>
+              <th>{{ t('suppliers.col_overdue') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for g in gaps %}
+            <tr>
+              <td class="name">{{ g.supplier_name }}</td>
+              <td class="num" data-value="{{ g.orders }}">{{ t.number(g.orders) }}</td>
+              <td class="num" data-value="{{ g.median_gap_days or 0 }}">{{ t.number(g.median_gap_days) }}</td>
+              <td class="num" data-value="{{ g.days_since_last or 0 }}">{{ t.number(g.days_since_last) }}</td>
+              <td data-value="{{ 1 if g.overdue else 0 }}">
+                {% if g.overdue %}<span class="pill pill-warn">{{ t('common.yes') }}</span>
+                {% else %}<span class="pill pill-flat">{{ t('common.no') }}</span>{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty">{{ t('suppliers.gaps_empty') }}</div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>{{ t('suppliers.cost_trend_title') }}</h2>
+    <p class="note">{{ t('suppliers.cost_trend_note') }}</p>
+    {% if trend %}
+      <div class="legend">
+        <span><i class="swatch" style="background: var(--c1)"></i>{{ t('suppliers.col_spend') }}</span>
+        <span><i class="swatch" style="background: var(--c3)"></i>{{ t('suppliers.col_avg_cost') }}</span>
+      </div>
+      {{ ch.combo(trend_chart, t) }}
+    {% else %}
+      <div class="empty">{{ t('suppliers.cost_trend_empty') }}</div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

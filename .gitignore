@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+.cache
+cache.db
+
+# Virtual environment
+.venv/
+venv/
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+*.code-workspace
+
+# Secrets. Never commit this - it holds passwords and API tokens.
+.env
+
+# The local copy of your data, rebuilt automatically from the POS database.
+cache.db
+cache.db-journal
+cache.building
+
+# The POS database itself and any working copy of it. Never commit business data.
+*.dblx
+*.mdb
+*.accdb
+*.ldb
+*.laccdb
+
+# Generated output
+digests/
+logs/
+*.xlsx

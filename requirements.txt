@@ -1,0 +1,12 @@
+# Everything the tool needs. Installed automatically by setup.bat.
+#
+# Note what is NOT here: nothing to read Microsoft Access. The database
+# reader is written from scratch in poslib/jet4.py, so this tool does not
+# need Access, ODBC drivers or mdbtools installed on the machine.
+
+PyYAML==6.0.2          # reads config.yaml
+pandas==2.2.3          # tables of numbers, used by every metric
+Flask==3.0.3           # the local dashboard web server
+watchdog==6.0.0        # notices when the POS saves new sales
+XlsxWriter==3.2.0      # writes the formatted Excel report
+requests==2.32.3       # Telegram and WhatsApp delivery
