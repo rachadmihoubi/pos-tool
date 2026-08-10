@@ -109,6 +109,27 @@ ones (stock value, receivables — these genuinely drift as trade happens).
   `poslib/diagnostics.py` respectively — see the "How it is put together" /
   architecture rules at the bottom of `README.md`.
 
+## Cross-machine sync is automated
+
+`.claude/settings.json` (committed, travels with `git clone`) has a `SessionStart`
+hook: every time Claude Code opens in this folder, it runs `git pull --ff-only`
+before doing anything else — silently, no-op if that fails (no upstream, offline,
+non-fast-forward) so it never surprises you with a merge or overwrites local
+work. That's the mechanism that makes "switch PCs mid-project" actually work:
+whichever machine has the latest push, the other one picks it up automatically
+on next session start. The same hook is also mirrored in the user's global
+`~/.claude/settings.json` so it applies to every future project on a given
+machine, not just this one — but the project-level copy here is what makes it
+work with **zero setup** after a fresh `git clone` on a brand new PC.
+
+`.claude/settings.local.json` is gitignored on purpose — it holds
+machine-specific permission allowlists, not meant to travel.
+
+**What this does NOT sync:** the raw conversation/session transcript. That's
+local per machine by design. This file (`CLAUDE.md`) plus the git history are
+the actual continuity mechanism — keep it current at natural stopping points
+rather than relying on transcript memory.
+
 ## Environment note
 
 This machine had neither Python nor Git on PATH at session start — both are

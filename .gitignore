@@ -19,6 +19,11 @@ Desktop.ini
 .vscode/
 *.code-workspace
 
+# Claude Code: personal/machine-local overrides, never shared.
+# .claude/settings.json (the SessionStart sync hook) IS committed on purpose -
+# only settings.local.json is machine-specific and excluded here.
+.claude/settings.local.json
+
 # Secrets. Never commit this - it holds passwords and API tokens.
 .env
 

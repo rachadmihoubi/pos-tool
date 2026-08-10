@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "statusMessage": "Checking for updates from another PC...",
+            "command": "$gitExe = (Get-Command git -ErrorAction SilentlyContinue).Source; if (-not $gitExe) { $gitExe = 'C:\\Program Files\\Git\\cmd\\git.exe' }; if (Test-Path $gitExe) { $inGit = & $gitExe rev-parse --is-inside-work-tree 2>$null; if ($inGit -eq 'true') { & $gitExe pull --ff-only *>$null } }; exit 0",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}
