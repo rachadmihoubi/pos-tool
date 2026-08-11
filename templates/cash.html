@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% import "charts.html" as ch %}
+{% block title %}{{ t('cash.title') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('cash.title') }}</h1>
+  <p>{{ t('cash.subtitle') }}</p>
+</div>
+
+{% include "_daterange.html" %}
+
+<section class="tiles tiles-big">
+  <div class="tile">
+    <div class="label">{{ t('cash.revenue') }}</div>
+    <div class="value">{{ t.money(inc.revenue) }}</div>
+    <div class="sub">
+      {% if request.args.get('start') or request.args.get('end') %}
+        {{ request.args.get('start', '…') }} → {{ request.args.get('end', '…') }}
+      {% else %}
+        {{ t('common.all_time') }}
+      {% endif %}
+    </div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('cash.cogs') }}</div>
+    <div class="value">{{ t.money(inc.cogs) }}</div>
+    <div class="sub">{{ t('cash.cogs_note') }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('cash.gross_profit') }}</div>
+    <div class="value">{{ t.money(inc.gross_profit) }}</div>
+    <div class="sub">
+      {{ t('common.margin_pct') }}:
+      <strong>{{ t.percent(inc.margin_pct) if inc.margin_pct is not none else t('common.not_measurable') }}</strong>
+    </div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('cash.working_capital') }}</div>
+    <div class="value" style="{{ 'color: var(--warn)' if wc.ratio and wc.ratio > wc.threshold else '' }}">
+      {{ t.number(wc.ratio, decimals=1) + 'x' if wc.ratio is not none else '—' }}
+    </div>
+    <div class="sub">{{ t('cash.working_capital_note') }}</div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>{{ t('cash.income_statement_title') }}</h2>
+  <div class="legend">
+    <span><i class="swatch" style="background: var(--c1)"></i>{{ t('common.revenue') }}</span>
+    <span><i class="swatch" style="background: var(--c2)"></i>{{ t('common.gross_profit') }}</span>
+    <span><i class="swatch" style="background: var(--c3)"></i>{{ t('common.margin_pct') }}</span>
+  </div>
+  {{ ch.combo(money_chart, t) }}
+</section>
+
+<section class="panel">
+  <h2>{{ t('cash.income_statement_table') }}</h2>
+  <div class="table-wrap scroll-y">
+    <table class="sortable">
+      <thead>
+        <tr>
+          <th>{{ t('trend.col_month') }}</th>
+          <th class="num">{{ t('common.revenue') }}</th>
+          <th class="num">{{ t('cash.cogs') }}</th>
+          <th class="num">{{ t('common.gross_profit') }}</th>
+          <th class="num">{{ t('common.margin_pct') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in by_month %}
+        <tr>
+          <td data-value="{{ r.month_label }}">{{ t.month_label(r.month) }}</td>
+          <td class="num" data-value="{{ r.revenue }}">{{ t.money(r.revenue) }}</td>
+          <td class="num" data-value="{{ r.cogs }}">{{ t.money(r.cogs) }}</td>
+          <td class="num" data-value="{{ r.gross_profit }}">{{ t.money(r.gross_profit) }}</td>
+          <td class="num" data-value="{{ r.margin_pct or 0 }}">{{ t.percent(r.margin_pct) if r.margin_pct is not none else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>{{ t('cash.position_title') }}</h2>
+  <p class="note">{{ t('cash.position_note') }}</p>
+  {% if cash.total %}
+    <div class="legend">
+      <span><i class="swatch" style="background: var(--c1)"></i>{{ t('cash.tender_cash') }}</span>
+      <span><i class="swatch" style="background: var(--c2)"></i>{{ t('cash.tender_cheque') }}</span>
+      <span><i class="swatch" style="background: var(--c3)"></i>{{ t('cash.tender_transfer') }}</span>
+      <span><i class="swatch" style="background: var(--c4)"></i>{{ t('cash.tender_credit') }}</span>
+    </div>
+    {{ ch.stack(tender_split, t) }}
+  {% else %}
+    <div class="empty">{{ t('app.no_data') }}</div>
+  {% endif %}
+</section>
+
+{% if cash_by_month %}
+<section class="panel">
+  <h2>{{ t('cash.position_table') }}</h2>
+  <div class="table-wrap scroll-y">
+    <table class="sortable">
+      <thead>
+        <tr>
+          <th>{{ t('trend.col_month') }}</th>
+          <th class="num">{{ t('cash.tender_cash') }}</th>
+          <th class="num">{{ t('cash.tender_cheque') }}</th>
+          <th class="num">{{ t('cash.tender_transfer') }}</th>
+          <th class="num">{{ t('cash.tender_credit') }}</th>
+          <th class="num">{{ t('common.total') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in cash_by_month %}
+        <tr>
+          <td data-value="{{ r.month_label }}">{{ t.month_label(r.month) }}</td>
+          <td class="num" data-value="{{ r.cash }}">{{ t.money(r.cash) }}</td>
+          <td class="num" data-value="{{ r.cheque }}">{{ t.money(r.cheque) }}</td>
+          <td class="num" data-value="{{ r.transfer }}">{{ t.money(r.transfer) }}</td>
+          <td class="num" data-value="{{ r.credit }}">{{ t.money(r.credit) }}</td>
+          <td class="num strong" data-value="{{ r.total }}">{{ t.money(r.total) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{% if till %}
+<section class="panel">
+  <h2>{{ t('cash.till_title') }}</h2>
+  <p class="note">{{ t('cash.till_note') }}</p>
+  <div class="table-wrap">
+    <table class="sortable">
+      <thead>
+        <tr>
+          <th>{{ t('cash.till_col_register') }}</th>
+          <th class="num">{{ t('cash.till_col_opened') }}</th>
+          <th>{{ t('cash.till_col_status') }}</th>
+          <th class="num">{{ t('cash.till_col_expected') }}</th>
+          <th class="num">{{ t('cash.till_col_recorded') }}</th>
+          <th class="num">{{ t('cash.till_col_variance') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in till %}
+        <tr>
+          <td class="name">{{ r.register_name }} — {{ r.batch_no }}</td>
+          <td class="num" data-value="{{ r.opening_time }}">{{ t.datetime(r.opening_time) }}</td>
+          <td>
+            {% if r.is_open %}<span class="pill">{{ t('cash.till_open') }}</span>
+            {% else %}<span class="pill pill-good">{{ t('cash.till_closed') }}</span>{% endif %}
+          </td>
+          <td class="num strong" data-value="{{ r.expected_total }}">{{ t.money(r.expected_total) }}</td>
+          <td class="num" data-value="{{ r.recorded_total or 0 }}">
+            {% if r.has_recorded_close %}{{ t.money(r.recorded_total) }}
+            {% else %}<span class="muted">{{ t('cash.till_no_recorded_close') }}</span>{% endif %}
+          </td>
+          <td class="num" data-value="{{ r.total_variance or 0 }}">
+            {% if r.has_recorded_close %}
+              <span class="{{ 'delta down' if r.total_variance and r.total_variance < 0 else ('delta up' if r.total_variance and r.total_variance > 0 else '') }}">
+                {{ t.money(r.total_variance) }}
+              </span>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>{{ t('cash.working_capital_title') }}</h2>
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        <tr>
+          <td>{{ t('cash.stock_value') }}</td>
+          <td class="num strong">{{ t.money(wc.stock_value) }}</td>
+        </tr>
+        <tr>
+          <td>{{ t('common.balance') }} ({{ t('cash.receivables') }})</td>
+          <td class="num strong">{{ t.money(wc.receivables) }}</td>
+        </tr>
+        <tr class="strong">
+          <td>{{ t('cash.tied_up') }}</td>
+          <td class="num">{{ t.money(wc.tied_up) }}</td>
+        </tr>
+        <tr>
+          <td>{{ t('cash.gross_profit_12m') }}</td>
+          <td class="num">{{ t.money(wc.gross_profit_12m) }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note" style="margin-top: 12px;">{{ t('cash.working_capital_explain') }}</p>
+</section>
+{% endblock %}

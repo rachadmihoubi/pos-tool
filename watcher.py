@@ -70,6 +70,8 @@ class Watcher:
         self._stop = threading.Event()
         self._last_rebuild = 0.0
         self._last_digest_date: datetime.date | None = None
+        self._last_backup_date: datetime.date | None = None
+        self._last_remote_push = 0.0
 
     # -- being told something happened -------------------------------------
 
@@ -141,6 +143,9 @@ class Watcher:
         else:
             log.debug("Nothing new. %s", result.reason)
 
+        if self._remote_push_due():
+            self._run_remote_push()
+
     # -- the daily digest --------------------------------------------------
 
     def _digest_due(self) -> bool:
@@ -168,6 +173,60 @@ class Watcher:
         except Exception:                                # noqa: BLE001
             # A failed digest must never stop the watcher.
             log.exception("The daily digest failed")
+
+    # -- the daily backup ----------------------------------------------------
+
+    def _backup_due(self) -> bool:
+        if not self.cfg.get("backup.enabled", True):
+            return False
+        hour = int(self.cfg.get("backup.hour", 3))
+        minute = int(self.cfg.get("backup.minute", 0))
+        now = datetime.datetime.now()
+
+        if self._last_backup_date == now.date():
+            return False
+        return (now.hour, now.minute) >= (hour, minute)
+
+    def _run_backup(self) -> None:
+        today = datetime.date.today()
+        self._last_backup_date = today
+        log.info("Running the daily backup.")
+        try:
+            from poslib.backup import run_backup
+            result = run_backup(self.cfg)
+            if result.ran:
+                log.info("  backup -> %s (%s)", result.folder, result.reason)
+                if result.removed_folders:
+                    log.info("  removed old backups: %s", ", ".join(result.removed_folders))
+            else:
+                log.debug("  backup -> %s", result.reason)
+        except Exception:                                # noqa: BLE001
+            # A failed backup must never stop the watcher.
+            log.exception("The daily backup failed")
+
+    # -- remote viewing -------------------------------------------------------
+
+    def _remote_push_due(self) -> bool:
+        if not bool(self.cfg.get("remote.enabled", False)):
+            return False
+        interval = float(self.cfg.get("remote.push_interval_seconds", 90))
+        return (time.time() - self._last_remote_push) >= interval
+
+    def _run_remote_push(self) -> None:
+        # Set first, like the digest/backup markers - a slow or failing
+        # push must not be retried in a tight loop before its own interval
+        # is up again.
+        self._last_remote_push = time.time()
+        try:
+            from export_static import export
+            from poslib.remote import push_remote
+            export(self.cfg)
+            if not push_remote(self.cfg):
+                log.debug("  remote push did not succeed this cycle - will retry next time.")
+        except Exception:                                # noqa: BLE001
+            # A failed export/push must never stop the watcher - the real
+            # database and cache stay local either way.
+            log.exception("The remote export/push failed")
 
     # -- the loop ----------------------------------------------------------
 
@@ -210,6 +269,9 @@ class Watcher:
                 if self._digest_due():
                     self._run_digest()
 
+                if self._backup_due():
+                    self._run_backup()
+
         except KeyboardInterrupt:
             log.info("Stopping.")
         finally:
@@ -229,6 +291,8 @@ def main() -> int:
                         help="Read the database once and stop.")
     parser.add_argument("--digest-now", action="store_true",
                         help="Produce and send the daily digest immediately.")
+    parser.add_argument("--backup-now", action="store_true",
+                        help="Run the daily backup immediately.")
     args = parser.parse_args()
 
     from poslib.config import ConfigError
@@ -243,6 +307,10 @@ def main() -> int:
 
     if args.digest_now:
         watcher._run_digest()
+        return 0
+
+    if args.backup_now:
+        watcher._run_backup()
         return 0
 
     if args.once:

@@ -19,21 +19,39 @@
   </div>
 
   <div class="topbar-actions">
-    <button type="button" class="btn" id="refresh-btn" title="{{ t('app.refresh') }}">
-      <span id="refresh-label">{{ t('app.refresh') }}</span>
-    </button>
-    <a class="btn" href="{{ url_for('do_export') }}?lang={{ lang }}">{{ t('app.export') }}</a>
+    {% if not is_static_export %}
+      <button type="button" class="btn" id="refresh-btn" title="{{ t('app.refresh') }}">
+        <span id="refresh-label">{{ t('app.refresh') }}</span>
+      </button>
+      <a class="btn" href="{{ url_for('do_export') }}?lang={{ lang }}">{{ t('app.export') }}</a>
+    {% endif %}
     <button type="button" class="btn btn-quiet" onclick="window.print()">{{ t('app.print') }}</button>
 
     <div class="lang-switch" role="group" aria-label="{{ t('app.language') }}">
       {% for l in languages %}
-        <a href="?lang={{ l.code }}"
-           class="lang {{ 'on' if l.code == lang else '' }}"
-           lang="{{ l.code }}">{{ l.name }}</a>
+        {% if is_static_export %}
+          <a href="/{{ l.code }}/{{ page_slug }}"
+             class="lang {{ 'on' if l.code == lang else '' }}"
+             lang="{{ l.code }}">{{ l.name }}</a>
+        {% else %}
+          <a href="?lang={{ l.code }}"
+             class="lang {{ 'on' if l.code == lang else '' }}"
+             lang="{{ l.code }}">{{ l.name }}</a>
+        {% endif %}
       {% endfor %}
     </div>
   </div>
 </header>
+
+{% if is_static_export %}
+  <div class="banner banner-info" style="margin: 12px 24px 0;">
+    {% if cache and cache.parsed_at %}
+      {{ t('remote.generated_note', when=t.datetime(cache.parsed_at)) }}
+    {% else %}
+      {{ t('app.no_data') }}
+    {% endif %}
+  </div>
+{% endif %}
 
 <nav class="tabs">
   {% for key, href in pages %}
@@ -43,6 +61,8 @@
     </a>
   {% endfor %}
 </nav>
+
+{% block breadcrumb %}{% endblock %}
 
 <main>
 {% block content %}{% endblock %}
@@ -98,7 +118,8 @@
 
   // ----- quietly reload when new sales arrive --------------------------
   // Only the Today screen needs this; it is the one left open all day.
-  {% block autorefresh %}{% endblock %}
+  // Never on the static export - there is no /api/status to poll there.
+  {% if not is_static_export %}{% block autorefresh %}{% endblock %}{% endif %}
 
   // ----- sortable tables ----------------------------------------------
   // Click a heading to sort. Numbers sort as numbers, names as names.
@@ -147,6 +168,25 @@
       });
       var note = document.getElementById(input.getAttribute("data-filters") + "-count");
       if (note) { note.textContent = shown; }
+    });
+  });
+
+  // ----- copy-to-clipboard buttons --------------------------------------
+  document.querySelectorAll("[data-copy-target]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var el = document.getElementById(btn.getAttribute("data-copy-target"));
+      if (!el) { return; }
+      el.select();
+      var done = function () { say({{ t('products.copied')|tojson }}); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(el.value).then(done).catch(function () {
+          document.execCommand("copy");
+          done();
+        });
+      } else {
+        document.execCommand("copy");
+        done();
+      }
     });
   });
 

@@ -176,7 +176,7 @@ class TestDashboard:
         return app.test_client()
 
     PAGES = ["/today", "/trend", "/customers", "/receivables", "/inventory",
-             "/products", "/suppliers", "/diagnostics", "/data-quality"]
+             "/products", "/suppliers", "/cash", "/diagnostics", "/data-quality"]
 
     @pytest.mark.parametrize("lang", LANGUAGES)
     def test_every_page_loads_in_every_language(self, client, lang):
@@ -189,7 +189,7 @@ class TestDashboard:
     def test_no_untranslated_keys_leak_onto_a_page(self, client, lang):
         pattern = re.compile(
             r"\b(?:app|nav|common|today|trend|customers|segments|receivables|"
-            r"inventory|products|suppliers|diagnostics|findings|dataquality)"
+            r"inventory|products|suppliers|cash|diagnostics|findings|dataquality)"
             r"\.[a-z_][a-z_0-9.]*")
         for path in self.PAGES:
             body = client.get(f"{path}?lang={lang}").get_data(as_text=True)
@@ -206,6 +206,51 @@ class TestDashboard:
         cookies = response.headers.getlist("Set-Cookie")
         assert any("pos_lang=ar" in c for c in cookies)
 
+    @pytest.mark.parametrize("lang", LANGUAGES)
+    @pytest.mark.parametrize("path", ["/trend", "/cash"])
+    def test_date_range_picker_loads_in_every_language(self, client, lang, path):
+        response = client.get(f"{path}?lang={lang}&start=2025-01-01&end=2025-06-30")
+        assert response.status_code == 200, \
+            f"{path} with a date range failed in {lang} with {response.status_code}"
+
+    @pytest.mark.parametrize("path", ["/trend", "/cash"])
+    def test_malformed_date_range_falls_back_gracefully(self, client, path):
+        # A bad URL must never 500 - it should just fall back to the
+        # page's usual default window.
+        for query in ("start=not-a-date", "start=9999-01-01", "end=2025-13-40"):
+            response = client.get(f"{path}?{query}")
+            assert response.status_code == 200, \
+                f"{path}?{query} returned {response.status_code}, not 200"
+
+    @pytest.mark.parametrize("lang", LANGUAGES)
+    def test_customer_drilldown_loads_in_every_language(self, client, metrics, lang):
+        cs = metrics.customer_summary()
+        if cs.empty:
+            pytest.skip("no customers with measurable purchases in this database")
+        customer_id = int(cs.iloc[0]["customer_id"])
+        response = client.get(f"/customers/{customer_id}?lang={lang}")
+        assert response.status_code == 200
+
+    @pytest.mark.parametrize("lang", LANGUAGES)
+    def test_product_drilldown_loads_in_every_language(self, client, metrics, lang):
+        pm = metrics.product_margin()
+        if pm.empty:
+            pytest.skip("no products with sales in this database")
+        item_id = int(pm.iloc[0]["item_id"])
+        response = client.get(f"/products/{item_id}?lang={lang}")
+        assert response.status_code == 200
+
+    def test_customer_drilldown_404_for_unknown_id(self, client):
+        assert client.get("/customers/999999999").status_code == 404
+
+    def test_customer_drilldown_404_for_walkin(self, client):
+        # The anonymous walk-in till is not a real customer - it has no
+        # profile page, even though customer_id=1 exists in the database.
+        assert client.get("/customers/1").status_code == 404
+
+    def test_product_drilldown_404_for_unknown_id(self, client):
+        assert client.get("/products/999999999").status_code == 404
+
     def test_home_redirects_to_the_default_page(self, client):
         response = client.get("/")
         assert response.status_code == 302
@@ -214,6 +259,109 @@ class TestDashboard:
     def test_status_endpoint(self, client):
         data = client.get("/api/status").get_json()
         assert "parsed_at" in data and data["rows"] > 0
+
+    def test_normal_requests_still_show_the_refresh_button(self, client):
+        """
+        is_static_export must default to False for every real request - a
+        normal local page load must look exactly as it always did.
+        """
+        body = client.get("/today").get_data(as_text=True)
+        assert 'id="refresh-btn"' in body
+        assert 'href="?lang=en"' in body or 'href="?lang=fr"' in body
+
+    def test_static_marker_hides_the_refresh_button(self, client):
+        body = client.get("/today?__static__=1").get_data(as_text=True)
+        assert 'id="refresh-btn"' not in body
+
+
+class TestCompetitorPriceRoutes:
+    """
+    The competitor-price log is the first write path in the app. These
+    exercise the full route (validation, redirect-with-error convention,
+    round trip through the page) against an isolated owner.db, never the
+    real one.
+    """
+
+    @pytest.fixture
+    def client(self):
+        from app import app
+        app.config["TESTING"] = True
+        return app.test_client()
+
+    @pytest.fixture(autouse=True)
+    def _isolated_owner_db(self, monkeypatch, tmp_path):
+        from poslib.config import Config, get_config
+        cfg = get_config()
+        db_path = tmp_path / "owner.db"
+        original = Config.path
+
+        def patched(self, key, default=""):
+            if key == "catalog.owner_data_db":
+                return db_path
+            return original(self, key, default)
+
+        monkeypatch.setattr(cfg, "path", patched.__get__(cfg))
+        yield db_path
+
+    @pytest.fixture
+    def item_id(self, metrics) -> int:
+        return int(metrics.product_margin().iloc[0]["item_id"])
+
+    def test_add_then_shows_on_product_page(self, client, item_id):
+        response = client.post(f"/products/{item_id}/competitor-price", data={
+            "competitor_name": "Test Rival", "price": "199.99",
+            "observed_date": "2026-08-01", "note": "seen in store",
+        })
+        assert response.status_code == 302
+        assert "form_error" not in response.headers["Location"]
+
+        page = client.get(f"/products/{item_id}").get_data(as_text=True)
+        assert "Test Rival" in page
+
+    def test_missing_name_redirects_with_error(self, client, item_id):
+        response = client.post(f"/products/{item_id}/competitor-price", data={
+            "competitor_name": "", "price": "100", "observed_date": "2026-08-01",
+        })
+        assert response.status_code == 302
+        assert "form_error=missing_name" in response.headers["Location"]
+
+    def test_invalid_price_redirects_with_error(self, client, item_id):
+        response = client.post(f"/products/{item_id}/competitor-price", data={
+            "competitor_name": "Rival", "price": "not-a-number",
+            "observed_date": "2026-08-01",
+        })
+        assert response.status_code == 302
+        assert "form_error=invalid_price" in response.headers["Location"]
+
+    def test_negative_price_redirects_with_error(self, client, item_id):
+        response = client.post(f"/products/{item_id}/competitor-price", data={
+            "competitor_name": "Rival", "price": "-5", "observed_date": "2026-08-01",
+        })
+        assert response.status_code == 302
+        assert "form_error=invalid_price" in response.headers["Location"]
+
+    def test_invalid_date_redirects_with_error(self, client, item_id):
+        response = client.post(f"/products/{item_id}/competitor-price", data={
+            "competitor_name": "Rival", "price": "100", "observed_date": "not-a-date",
+        })
+        assert response.status_code == 302
+        assert "form_error=invalid_date" in response.headers["Location"]
+
+    def test_add_then_delete_round_trip(self, client, item_id):
+        from poslib import ownerdata
+        from poslib.config import get_config
+
+        client.post(f"/products/{item_id}/competitor-price", data={
+            "competitor_name": "ToDelete", "price": "50", "observed_date": "2026-08-01",
+        })
+        prices = ownerdata.competitor_prices_for_item(get_config(), item_id)
+        price_id = int(prices.iloc[0]["id"])
+
+        response = client.post(f"/products/{item_id}/competitor-price/{price_id}/delete")
+        assert response.status_code == 302
+
+        page = client.get(f"/products/{item_id}").get_data(as_text=True)
+        assert "ToDelete" not in page
 
 
 class TestDigest:

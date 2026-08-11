@@ -185,7 +185,7 @@ class Metrics:
                    TotalCost AS header_cost, Margin AS header_margin,
                    Cash AS cash, Cheque AS cheque, Transfer AS transfer,
                    CreditAccount AS credit_account, AccountPayment AS account_payment,
-                   Discount AS discount, TotalQty AS total_qty
+                   Discount AS discount, TotalQty AS total_qty, BatchID AS batch_id
             FROM Receipt
         """)
         df["ticket_time"] = pd.to_datetime(df["ticket_time"], errors="coerce")
@@ -194,6 +194,7 @@ class Metrics:
                     "total_qty"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df["customer_id"] = pd.to_numeric(df["customer_id"], errors="coerce").fillna(0).astype(int)
+        df["batch_id"] = pd.to_numeric(df["batch_id"], errors="coerce")
 
         # Attach the truth from the lines.
         agg = self.sales.groupby("receipt_id").agg(
@@ -226,6 +227,7 @@ class Metrics:
                    i.StockAlert AS stock_alert, i.Cost AS cost, i.Price AS price,
                    i.LastSold AS last_sold, i.LastPurchased AS last_purchased,
                    i.Inactive AS inactive, i.QtyPerParcel AS qty_per_parcel,
+                   i.DateCreated AS date_created,
                    f.FamilyName AS family_name
             FROM Item i
             LEFT JOIN ItemFamily f ON f.ID = i.ItemFamilyID
@@ -234,6 +236,7 @@ class Metrics:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df["last_sold"] = pd.to_datetime(df["last_sold"], errors="coerce")
         df["last_purchased"] = pd.to_datetime(df["last_purchased"], errors="coerce")
+        df["date_created"] = pd.to_datetime(df["date_created"], errors="coerce")
         df["inactive"] = df["inactive"].fillna(0).astype(int).astype(bool)
         df["family_name"] = df["family_name"].fillna("—")
 
@@ -410,6 +413,22 @@ class Metrics:
         cutoff = self.now - datetime.timedelta(days=days)
         return df[df[col] >= cutoff]
 
+    def _window_range(self, df: pd.DataFrame, start: datetime.date | None,
+                       end: datetime.date | None,
+                       col: str = "ticket_time") -> pd.DataFrame:
+        """
+        Narrow a dataframe to a whole-day date range. Either end can be left
+        out to mean "no limit that side". Used by the date-range picker,
+        which works in whole days - unlike `_window()`, which cuts off at
+        the exact moment `days` ago.
+        """
+        if start is not None:
+            df = df[df[col] >= pd.Timestamp(start)]
+        if end is not None:
+            # `end` is inclusive, so the cutoff is the start of the next day.
+            df = df[df[col] < pd.Timestamp(end) + pd.DateOffset(days=1)]
+        return df
+
     # =====================================================================
     #  HEADLINE TOTALS
     # =====================================================================
@@ -575,12 +594,24 @@ class Metrics:
     #  PAGE 2 - TREND
     # =====================================================================
 
-    def monthly(self) -> pd.DataFrame:
+    def monthly(self, start: datetime.date | None = None,
+                end: datetime.date | None = None) -> pd.DataFrame:
         """
         One row per month: revenue, profit, margin, tickets, basket size and
         how many different customers bought.
+
+        `start`/`end` narrow the data to a whole-day range before grouping -
+        used by the date-range picker on the Trend and Cash pages. Left as
+        None (the default), this is all-time, exactly as before.
         """
         s = self.sales
+        tk_df = self.tickets
+        coll_df = self.collections
+        if start is not None or end is not None:
+            s = self._window_range(s, start, end)
+            tk_df = self._window_range(tk_df, start, end)
+            coll_df = self._window_range(coll_df, start, end)
+
         if s.empty:
             return pd.DataFrame()
 
@@ -592,10 +623,10 @@ class Metrics:
         gp_k = known.groupby("month")["gross_profit"].sum().rename("gross_profit_measurable")
         units = s.groupby("month")["qty"].sum().rename("units")
 
-        tk = self.tickets.groupby("month")["receipt_id"].nunique().rename("tickets")
+        tk = tk_df.groupby("month")["receipt_id"].nunique().rename("tickets")
         cust = (s[s["customer_id"] != self.walkin_id]
                 .groupby("month")["customer_id"].nunique().rename("active_customers"))
-        coll = self.collections.groupby("month")["amount"].sum().rename("collections")
+        coll = coll_df.groupby("month")["amount"].sum().rename("collections")
 
         df = pd.concat([rev, gp, rev_k, gp_k, units, tk, cust, coll], axis=1).fillna(0.0)
         df = df.sort_index().reset_index()
@@ -660,6 +691,54 @@ class Metrics:
     #  PAGE 3 - CUSTOMERS
     # =====================================================================
 
+    def _days_since_last_payment(self) -> pd.Series:
+        """
+        Days since each customer last paid down their account balance,
+        indexed by customer_id. Built from `collections` - the `ItemID<=0`
+        definition used everywhere else in this file for an account
+        payment - never the `"glement"` substring match, which exists only
+        for the reporting breakdown inside `data_quality()`.
+        """
+        coll = self.collections
+        if coll.empty:
+            return pd.Series(dtype=float)
+        last_payment = coll.groupby("customer_id")["ticket_time"].max()
+        return (self.now - last_payment).dt.days
+
+    def _credit_risk_tier_series(self, balance: pd.Series, customer_id: pd.Series,
+                                  days_since_sale: pd.Series) -> pd.Series:
+        """
+        low/medium/high credit-risk tier for customers who currently owe
+        money, combining how big the balance is, how long since they last
+        paid anything off, and how long since they last bought at all.
+
+        Customers with no positive balance get no tier (None) - this is
+        about deciding whether to extend more credit to someone who
+        already owes money, not a general customer-health score (that's
+        what the RFM segment in `_add_rfm` is for).
+        """
+        floor = float(self.t("customers.credit_risk_balance_floor", 100000))
+        medium_days = float(self.t("customers.credit_risk_medium_days", 30))
+        high_days = float(self.t("customers.credit_risk_high_days", 90))
+
+        days_since_payment = customer_id.map(self._days_since_last_payment())
+
+        def tier(bal: float, d_pay: float, d_sale: float) -> str | None:
+            if bal is None or pd.isna(bal) or bal <= 0:
+                return None
+            candidates = [d for d in (d_pay, d_sale) if d is not None and pd.notna(d)]
+            worst = max(candidates) if candidates else None
+            if worst is not None and worst >= high_days:
+                return "high"
+            if bal >= floor or (worst is not None and worst >= medium_days):
+                return "medium"
+            return "low"
+
+        return pd.Series(
+            [tier(b, dp, ds) for b, dp, ds in
+             zip(balance, days_since_payment, days_since_sale)],
+            index=balance.index)
+
     def customer_summary(self) -> pd.DataFrame:
         """
         One row per real customer: what they have bought, what they earn you,
@@ -714,6 +793,8 @@ class Metrics:
         g["revenue_share"] = g["revenue"] / g["revenue"].sum() if g["revenue"].sum() else 0.0
 
         g = self._add_rfm(g)
+        g["credit_risk"] = self._credit_risk_tier_series(
+            g["balance"], g["customer_id"], g["recency_days"])
         return g.sort_values("revenue", ascending=False).reset_index(drop=True)
 
     def _add_rfm(self, g: pd.DataFrame) -> pd.DataFrame:
@@ -867,6 +948,64 @@ class Metrics:
             })
         return pd.DataFrame(rows)
 
+    def customer_profile(self, customer_id: int) -> dict[str, Any] | None:
+        """
+        Everything about one customer, for the drill-down page: their row
+        from `customer_summary()` (zero-filled if they have never bought
+        anything measurable), their row from `receivables()` if they owe
+        money, and their purchase and payment history.
+
+        Built entirely from what already exists elsewhere in this file -
+        filtered to one ID, not a new aggregation. Returns None if the ID
+        does not exist or is the anonymous walk-in till (customer_id=1),
+        which is not a real customer and has no profile of its own.
+        """
+        if customer_id == self.walkin_id:
+            return None
+        cust = self.customers[self.customers["customer_id"] == customer_id]
+        if cust.empty:
+            return None
+
+        summary = self.customer_summary()
+        row = summary[summary["customer_id"] == customer_id] if not summary.empty else summary
+        if not row.empty:
+            summary_row = row.iloc[0].to_dict()
+        else:
+            # A real customer with no measurable purchase history yet.
+            # They can still owe money (e.g. an opening balance), so credit
+            # risk is still worked out, just with no purchase-recency signal.
+            base = cust.iloc[0].to_dict()
+            balance = pd.Series([base.get("balance", 0.0)])
+            cid = pd.Series([customer_id])
+            risk = self._credit_risk_tier_series(balance, cid, pd.Series([None])).iloc[0]
+            summary_row = {
+                **base, "revenue": 0.0, "gross_profit": 0.0, "units": 0.0,
+                "lines": 0, "visits": 0, "revenue_12m": 0.0,
+                "gross_profit_12m": 0.0, "margin_pct": None,
+                "recency_days": None, "avg_basket": 0.0, "segment": None,
+                "credit_risk": risk,
+            }
+
+        receivable_row = None
+        rec = self.receivables()
+        if not rec.empty:
+            r = rec[rec["customer_id"] == customer_id]
+            if not r.empty:
+                receivable_row = r.iloc[0].to_dict()
+
+        s = (self.sales[self.sales["customer_id"] == customer_id]
+             .sort_values("ticket_time", ascending=False))
+        coll = (self.collections[self.collections["customer_id"] == customer_id]
+                .sort_values("ticket_time", ascending=False))
+
+        return {
+            "summary": summary_row,
+            "receivable": receivable_row,
+            "purchases": s[["ticket_time", "receipt_id", "item_name", "qty",
+                            "amount", "gross_profit"]],
+            "payments": coll[["ticket_time", "receipt_id", "amount"]],
+        }
+
     # =====================================================================
     #  PAGE 4 - MONEY OWED
     # =====================================================================
@@ -909,11 +1048,13 @@ class Metrics:
 
         risk_days = float(self.t("customers.collection_risk_days", 60))
         owed["at_risk"] = (owed["days_since_purchase"].fillna(9999) > risk_days)
+        owed["credit_risk"] = self._credit_risk_tier_series(
+            owed["balance"], owed["customer_id"], owed["days_since_purchase"])
 
         cols = ["customer_id", "customer_no", "customer_name", "phone", "city",
                 "balance", "share_of_receivables", "last_purchase",
                 "days_since_purchase", "revenue", "revenue_12m",
-                "months_of_their_trade", "at_risk"]
+                "months_of_their_trade", "at_risk", "credit_risk"]
         return owed[cols].sort_values("balance", ascending=False).reset_index(drop=True)
 
     def receivables_summary(self) -> dict[str, Any]:
@@ -1157,6 +1298,52 @@ class Metrics:
                   gross_profit=("gross_profit_all", "sum")))
         return g.sort_values("stock_value", ascending=False).reset_index(drop=True)
 
+    def shrinkage_events(self) -> pd.DataFrame:
+        """
+        Stock that went missing, one row per physical stocktake ("StockTake")
+        event - net cost variance, and units over/under, for the whole
+        count.
+
+        This is deliberately event-level, not per-product. R.Lynx's
+        `StockTake` table only stores aggregate over/under totals for the
+        whole count; there is no per-line detail table (`StockTakeEntry`)
+        in this database to say which specific products drove the
+        variance - confirmed absent even at the schema-definition level,
+        not just "no rows yet". Don't try to join this to individual
+        products; the data to do so honestly does not exist here.
+
+        This is a different thing from dead stock (`dead_stock()`): dead
+        stock is unsold but still physically present; shrinkage is stock
+        that a physical count found to be missing (or, when the sign is
+        positive, present but not in the books - "count over").
+        """
+        if not self._has_table("StockTake"):
+            return pd.DataFrame()
+
+        st = self._read("""
+            SELECT ID AS stocktake_id, StockTakeNo AS stocktake_no,
+                   Status AS status, DateOpened AS date_opened,
+                   DateClosed AS date_closed, DateCalculated AS date_calculated,
+                   TotalCountOver AS units_over, TotalCountUnder AS units_under,
+                   TotalCountCounted AS units_counted,
+                   TotalCostOver AS cost_over, TotalCostUnder AS cost_under,
+                   TotalCostNet AS cost_net
+            FROM StockTake
+        """)
+        if st.empty:
+            return st
+
+        for col in ("units_over", "units_under", "units_counted",
+                    "cost_over", "cost_under", "cost_net"):
+            st[col] = pd.to_numeric(st[col], errors="coerce")
+        for col in ("date_opened", "date_closed", "date_calculated"):
+            st[col] = pd.to_datetime(st[col], errors="coerce")
+
+        # Sort by whichever date the event actually has - most stocktakes
+        # will have a close date, but fall back gracefully if not.
+        st["event_date"] = st["date_closed"].fillna(st["date_calculated"]).fillna(st["date_opened"])
+        return st.sort_values("event_date", ascending=False).reset_index(drop=True)
+
     # =====================================================================
     #  PAGE 6 - PRODUCTS AND MARGIN
     # =====================================================================
@@ -1209,6 +1396,52 @@ class Metrics:
         g = g.merge(stock, on="family_name", how="left")
         g["stock_value"] = g["stock_value"].fillna(0.0)
         return g.sort_values("revenue", ascending=False).reset_index(drop=True)
+
+    def family_margin_outliers(self, threshold_pp: float | None = None) -> pd.DataFrame:
+        """
+        Products that look fine in isolation but are outliers next to their
+        own brand/category: their margin trails their family's average by
+        more than `threshold_pp` percentage points.
+
+        This catches mispriced items a plain "below X% margin" rule would
+        miss - a family that mostly runs at 40% margin with one product at
+        30% is a real outlier even though 30% would look healthy on its own.
+        """
+        pp = (threshold_pp if threshold_pp is not None
+              else float(self.t("margin.family_benchmark_pp", 15)))
+
+        p = self.product_margin()
+        fam = self.family_margin()
+        if p.empty or fam.empty:
+            return pd.DataFrame()
+
+        merged = p.merge(
+            fam[["family_name", "margin_pct"]].rename(
+                columns={"margin_pct": "family_margin_pct"}),
+            on="family_name", how="left")
+        merged = merged[merged["margin_pct"].notna() & merged["family_margin_pct"].notna()]
+        merged["gap_pp"] = (merged["family_margin_pct"] - merged["margin_pct"]) * 100
+
+        out = merged[merged["gap_pp"] >= pp].copy()
+        if out.empty:
+            return out
+        cols = ["item_id", "item_no", "item_name", "family_name",
+                "margin_pct", "family_margin_pct", "gap_pp",
+                "revenue_all", "price", "cost"]
+        return out[cols].sort_values("gap_pp", ascending=False).reset_index(drop=True)
+
+    def new_arrivals(self, days: int | None = None) -> pd.DataFrame:
+        """
+        Products added to the catalogue in a recent window - newest first.
+        For a "new arrivals" social-media post, not a sales metric.
+        """
+        window = days if days is not None else int(self.cfg.get("catalog.new_arrivals_days", 7))
+        it = self.items[self.items["date_created"].notna()]
+        cutoff = self.now - datetime.timedelta(days=window)
+        recent = it[it["date_created"] >= cutoff]
+        cols = ["item_id", "item_no", "item_name", "family_name", "price",
+                "date_created"]
+        return recent[cols].sort_values("date_created", ascending=False).reset_index(drop=True)
 
     def high_revenue_low_margin(self, top_n: int = 40) -> pd.DataFrame:
         """
@@ -1343,6 +1576,37 @@ class Metrics:
               (d["price_change_pct"].fillna(0).abs() < 0.01) &
               (d["annual_units"] > 0)].copy()
         return r.sort_values("annual_margin_lost", ascending=False).reset_index(drop=True)
+
+    def product_profile(self, item_id: int) -> dict[str, Any] | None:
+        """
+        Everything about one product, for the drill-down page: its row from
+        `item_movement` (stock, movement, margin), how its family is doing
+        for comparison, and its sales history. Filtered to one ID, not a
+        new aggregation. Returns None if the item does not exist.
+        """
+        it = self.item_movement
+        row = it[it["item_id"] == item_id]
+        if row.empty:
+            return None
+        summary_row = row.iloc[0].to_dict()
+
+        family_row = None
+        fam_name = summary_row.get("family_name")
+        if fam_name:
+            fam = self.family_margin()
+            f = fam[fam["family_name"] == fam_name]
+            if not f.empty:
+                family_row = f.iloc[0].to_dict()
+
+        s = (self.sales[self.sales["item_id"] == item_id]
+             .sort_values("ticket_time", ascending=False))
+
+        return {
+            "summary": summary_row,
+            "family": family_row,
+            "sales_history": s[["ticket_time", "receipt_id", "qty", "price",
+                                "amount", "gross_profit"]],
+        }
 
     # =====================================================================
     #  PAGE 7 - SUPPLIERS
@@ -1493,8 +1757,183 @@ class Metrics:
         return g.sort_values("orders", ascending=False).reset_index(drop=True)
 
     # =====================================================================
-    #  WORKING CAPITAL
+    #  PAGE 8 - CASH / P&L
     # =====================================================================
+
+    def income_statement(self, days: int | None = None,
+                          start: datetime.date | None = None,
+                          end: datetime.date | None = None) -> dict[str, Any]:
+        """
+        Revenue, cost of goods sold and gross profit, month by month - the
+        shape of a simple income statement.
+
+        `days` uses the same precise cutoff as `headline()`, so
+        `income_statement(days=365)["revenue"]` matches
+        `headline(days=365)["revenue"]` exactly. `start`/`end` are whole-day
+        boundaries instead, for the date-range picker. Give at most one of
+        the two; with neither, this is all-time.
+        """
+        if days is not None:
+            s = self._window(self.sales, days)
+        elif start is not None or end is not None:
+            s = self._window_range(self.sales, start, end)
+        else:
+            s = self.sales
+
+        if s.empty:
+            return {"by_month": pd.DataFrame(), "revenue": 0.0, "cogs": 0.0,
+                    "gross_profit": 0.0, "margin_pct": None}
+
+        known = s[s["cost_known"]]
+        rev = s.groupby("month")["amount"].sum().rename("revenue")
+        gp = s.groupby("month")["gross_profit"].sum().rename("gross_profit")
+        rev_k = known.groupby("month")["amount"].sum().rename("revenue_measurable")
+        gp_k = known.groupby("month")["gross_profit"].sum().rename("gross_profit_measurable")
+
+        by_month = pd.concat([rev, gp, rev_k, gp_k], axis=1).fillna(0.0)
+        by_month = by_month.sort_index().reset_index()
+        by_month["cogs"] = by_month["revenue"] - by_month["gross_profit"]
+        by_month["margin_pct"] = np.where(
+            by_month["revenue_measurable"] > 0,
+            by_month["gross_profit_measurable"] / by_month["revenue_measurable"],
+            np.nan)
+        by_month["month_label"] = by_month["month"].dt.strftime("%Y-%m")
+
+        revenue = float(by_month["revenue"].sum())
+        gross_profit = float(by_month["gross_profit"].sum())
+        rev_known_total = float(by_month["revenue_measurable"].sum())
+        gp_known_total = float(by_month["gross_profit_measurable"].sum())
+
+        return {
+            "by_month": by_month,
+            "revenue": revenue,
+            "cogs": revenue - gross_profit,
+            "gross_profit": gross_profit,
+            "margin_pct": (gp_known_total / rev_known_total) if rev_known_total else None,
+        }
+
+    def cash_position(self, days: int | None = None,
+                       start: datetime.date | None = None,
+                       end: datetime.date | None = None) -> dict[str, Any]:
+        """
+        How the money that came in was actually paid - cash, cheque,
+        transfer or put on the customer's account - both as one total split
+        for the window and trended month by month.
+        """
+        if days is not None:
+            tk = self._window(self.tickets, days)
+        elif start is not None or end is not None:
+            tk = self._window_range(self.tickets, start, end)
+        else:
+            tk = self.tickets
+
+        totals = {
+            "cash": float(tk["cash"].sum()),
+            "cheque": float(tk["cheque"].sum()),
+            "transfer": float(tk["transfer"].sum()),
+            "credit": float(tk["credit_account"].sum()),
+        }
+
+        if tk.empty:
+            by_month = pd.DataFrame()
+        else:
+            by_month = (tk.groupby("month", as_index=False)
+                        .agg(cash=("cash", "sum"), cheque=("cheque", "sum"),
+                             transfer=("transfer", "sum"),
+                             credit=("credit_account", "sum"))
+                        .sort_values("month"))
+            by_month["month_label"] = by_month["month"].dt.strftime("%Y-%m")
+            by_month["total"] = (by_month["cash"] + by_month["cheque"]
+                                  + by_month["transfer"] + by_month["credit"])
+
+        return {"totals": totals, "total": sum(totals.values()), "by_month": by_month}
+
+    def till_reconciliation(self) -> pd.DataFrame:
+        """
+        For each cash-register session ("batch"), the expected position
+        (opening float + actual sales recorded against that session, per
+        tender type) against whatever closing figure R.Lynx itself
+        recorded.
+
+        The "expected" side is recomputed from the real tickets
+        (`Receipt.BatchID`), never trusted from `Batch`'s own `*Shift`
+        columns - verified against the live data that those sit frozen at
+        their opening value (0) on a session that has stayed open a long
+        time, against ~39 million DZD of real cash sales that happened
+        under it. Same reason the rest of this file never trusts a
+        POS-computed header total over the underlying rows.
+
+        Two honesty notes, deliberately not smoothed over:
+        - `Batch`'s `*Close` columns are populated by the POS when a
+          session is closed, not entered by a cashier counting a drawer by
+          hand - there is no independently-counted figure anywhere in this
+          database. This can only ever show a computed-vs-computed
+          comparison, never a real physical-count reconciliation.
+        - "Cash paid out" (bank drops, change float top-ups) is not
+          detected here - R.Lynx's own `StoreSafeIn`/`StoreSafeOut` tables
+          exist for this but are empty in this database. If the shop
+          starts using that feature, extend this to include them.
+
+        The "recorded close" side is only shown once a session actually
+        has one - a session with `ClosingTime` still empty is rendered as
+        "still open", never as a zero or an error.
+        """
+        if not self._has_table("Batch"):
+            return pd.DataFrame()
+
+        b = self._read("""
+            SELECT ID AS batch_id, BatchNo AS batch_no, RegisterID AS register_id,
+                   OpeningTime AS opening_time, ClosingTime AS closing_time,
+                   CashOpen AS cash_open, ChequeOpen AS cheque_open,
+                   TransferOpen AS transfer_open, CreditAccountOpen AS credit_open,
+                   CashClose AS cash_close, ChequeClose AS cheque_close,
+                   TransferClose AS transfer_close, CreditAccountClose AS credit_close
+            FROM Batch
+        """)
+        if b.empty:
+            return pd.DataFrame()
+
+        for col in ("cash_open", "cheque_open", "transfer_open", "credit_open",
+                    "cash_close", "cheque_close", "transfer_close", "credit_close"):
+            b[col] = pd.to_numeric(b[col], errors="coerce")
+        b["opening_time"] = pd.to_datetime(b["opening_time"], errors="coerce")
+        b["closing_time"] = pd.to_datetime(b["closing_time"], errors="coerce")
+        b["is_open"] = b["closing_time"].isna()
+
+        if self._has_table("Register"):
+            reg = self._read("SELECT ID AS register_id, RegisterName AS register_name FROM Register")
+            b = b.merge(reg, on="register_id", how="left")
+        else:
+            b["register_name"] = None
+        b["register_name"] = b["register_name"].fillna(b["register_id"].astype(str))
+
+        tk = self.tickets
+        sold = (tk.groupby("batch_id").agg(
+            cash_sold=("cash", "sum"), cheque_sold=("cheque", "sum"),
+            transfer_sold=("transfer", "sum"), credit_sold=("credit_account", "sum"))
+            if not tk.empty else pd.DataFrame())
+        b = b.merge(sold, left_on="batch_id", right_index=True, how="left")
+        for col in ("cash_sold", "cheque_sold", "transfer_sold", "credit_sold"):
+            b[col] = b[col].fillna(0.0)
+
+        close_cols = ["cash_close", "cheque_close", "transfer_close", "credit_close"]
+        b["has_recorded_close"] = b[close_cols].notna().any(axis=1)
+
+        for tender in ("cash", "cheque", "transfer", "credit"):
+            b[f"{tender}_expected"] = b[f"{tender}_open"].fillna(0) + b[f"{tender}_sold"]
+
+        expected_cols = ["cash_expected", "cheque_expected", "transfer_expected", "credit_expected"]
+        b["expected_total"] = b[expected_cols].sum(axis=1)
+        b["recorded_total"] = np.where(b["has_recorded_close"],
+                                       b[close_cols].fillna(0).sum(axis=1), np.nan)
+        b["total_variance"] = np.where(b["has_recorded_close"],
+                                       b["recorded_total"] - b["expected_total"], np.nan)
+
+        cols = ["batch_id", "batch_no", "register_id", "register_name",
+                "opening_time", "closing_time", "is_open", "has_recorded_close"] + \
+               expected_cols + ["expected_total"] + close_cols + \
+               ["recorded_total", "total_variance"]
+        return b[cols].sort_values("opening_time", ascending=False).reset_index(drop=True)
 
     def working_capital(self) -> dict[str, Any]:
         """

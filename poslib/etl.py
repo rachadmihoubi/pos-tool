@@ -72,6 +72,7 @@ INDEX_PLAN: dict[str, list[list[str]]] = {
     "SupplierItem": [["SupplierID"], ["ItemID"]],
     "PricingUpdateEntry": [["ItemID"], ["PricingUpdateID"]],
     "ItemAdjustment": [["ItemID"]],
+    "Batch": [["RegisterID"]],
 }
 
 

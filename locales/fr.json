@@ -26,6 +26,7 @@
     "inventory": "Stock",
     "products": "Produits et marge",
     "suppliers": "Fournisseurs",
+    "cash": "Trésorerie",
     "diagnostics": "À corriger",
     "dataquality": "Qualité des données"
   },
@@ -87,7 +88,11 @@
     "last_purchase": "Dernier achat",
     "last_sale": "Dernière vente",
     "yes": "Oui",
-    "no": "Non"
+    "no": "Non",
+    "date_from": "Du",
+    "date_to": "Au",
+    "apply_range": "Appliquer",
+    "clear_range": "Effacer"
   },
 
   "today": {
@@ -152,6 +157,47 @@
     "seasonality_below": "en dessous de la moyenne"
   },
 
+  "cash": {
+    "title": "Trésorerie & résultat",
+    "subtitle": "Ce que le commerce a gagné, et comment il a été payé",
+    "revenue": "Chiffre d'affaires",
+    "cogs": "Coût des marchandises vendues",
+    "cogs_note": "Ce que les marchandises vendues ont réellement coûté",
+    "gross_profit": "Marge brute",
+    "working_capital": "Fonds de roulement immobilisé",
+    "working_capital_note": "Années de marge brute immobilisées dans le stock et les créances",
+    "income_statement_title": "Chiffre d'affaires, coût et marge brute par mois",
+    "income_statement_table": "Mois par mois",
+    "position_title": "Comment l'argent est arrivé",
+    "position_note": "Depuis le début, selon le mode de paiement du client.",
+    "position_table": "Mois par mois",
+    "tender_cash": "Espèces",
+    "tender_cheque": "Chèque",
+    "tender_transfer": "Virement",
+    "tender_credit": "Sur compte",
+    "working_capital_title": "Fonds de roulement",
+    "stock_value": "Stock au coût",
+    "receivables": "Ce que les clients doivent",
+    "tied_up": "Total immobilisé",
+    "gross_profit_12m": "Marge brute (12 derniers mois)",
+    "working_capital_explain": "Le stock plus ce que les clients doivent est de l'argent déjà dépensé qui ne peut pas être utilisé ailleurs. Le comparer à une année de marge brute répond à : combien d'années de bénéfices sont immobilisées dans le commerce en ce moment ?",
+    "till_title": "Sessions de caisse",
+    "till_note": "« Attendu » est recalculé à partir des tickets réels, pas du cumul du logiciel de caisse. « Enregistré » est ce que R.Lynx lui-même a calculé à la clôture d'une session, pas un comptage manuel — un écart ici ne prouve donc pas une caisse manquante, seulement une différence caisse-vs-tickets. L'argent sorti du tiroir (dépôts en banque, appoint de fonds) n'est pas suivi dans cette base de données.",
+    "till_col_register": "Caisse — session",
+    "till_col_opened": "Ouverte",
+    "till_col_status": "Statut",
+    "till_col_expected": "Attendu",
+    "till_col_recorded": "Clôture enregistrée",
+    "till_col_variance": "Écart",
+    "till_open": "Encore ouverte",
+    "till_closed": "Fermée",
+    "till_no_recorded_close": "Non enregistrée"
+  },
+
+  "remote": {
+    "generated_note": "Cet instantané a été généré {when}. Si le PC du magasin est éteint, cette page continue d'afficher cet instantané jusqu'à son retour."
+  },
+
   "customers": {
     "title": "Clients",
     "subtitle": "Qui vaut la peine d'être relancé, et qui s'en va discrètement",
@@ -186,7 +232,19 @@
     "churn_retained": "Revenus",
     "churn_lost": "Non revenus",
     "churn_rate": "Taux de perte",
-    "walkin_note": "La caisse « client de passage » n'est pas comptée comme un client. Elle représente {share} du chiffre d'affaires sur {tickets} tickets."
+    "walkin_note": "La caisse « client de passage » n'est pas comptée comme un client. Elle représente {share} du chiffre d'affaires sur {tickets} tickets.",
+    "detail_back": "← Retour aux clients",
+    "detail_never_bought": "N'a encore rien acheté de mesurable.",
+    "detail_purchases_title": "Historique des achats",
+    "detail_no_purchases": "Aucun achat enregistré.",
+    "detail_payments_title": "Paiements sur compte",
+    "detail_no_payments": "Aucun paiement sur compte enregistré.",
+    "detail_col_ticket": "Ticket",
+    "detail_owes_note": "Doit {amount}, {days} jours depuis le dernier achat.",
+    "detail_no_balance": "Ne doit rien actuellement.",
+    "credit_risk_low": "Risque faible",
+    "credit_risk_medium": "Risque moyen",
+    "credit_risk_high": "Risque élevé"
   },
 
   "segments": {
@@ -222,6 +280,7 @@
     "col_days": "Jours depuis",
     "col_revenue_12m": "A acheté (12 mois)",
     "col_months_trade": "Mois de son propre commerce",
+    "col_credit_risk": "Risque de crédit",
     "months_trade_note": "Combien de mois d'achats de ce client la dette représente. Un chiffre élevé signifie une dette importante par rapport à la taille du client.",
     "risk_flag": "Devenu silencieux",
     "credit_note": "{count} clients sont créditeurs de {amount} au total : ils ont payé plus qu'ils n'ont pris. Ce n'est pas de l'argent que vous pouvez dépenser.",
@@ -265,7 +324,15 @@
     "abc_c": "C - la longue traîne",
     "col_abc": "Classe",
     "family_title": "Valeur du stock par marque",
-    "chart_split_title": "Qui tourne, lent et mort"
+    "chart_split_title": "Qui tourne, lent et mort",
+    "shrinkage_title": "Démarque (inventaires)",
+    "shrinkage_note": "Totaux par inventaire physique, pas par produit - cette base de données n'a pas de détail ligne par ligne pour dire quels produits ont causé l'écart. Différent du stock mort : le stock mort est invendu mais présent ; la démarque est du stock qu'un comptage physique a trouvé manquant (ou, si positif, présent mais pas dans les comptes).",
+    "shrinkage_empty": "Aucun inventaire n'a encore été enregistré.",
+    "shrinkage_col_no": "Inventaire",
+    "shrinkage_col_date": "Date",
+    "shrinkage_col_units_over": "Unités en trop",
+    "shrinkage_col_units_under": "Unités manquantes",
+    "shrinkage_col_cost_net": "Impact net"
   },
 
   "products": {
@@ -301,7 +368,35 @@
     "col_margin_now": "Marge aujourd'hui",
     "col_annual_loss": "Vous coûte par an",
     "cost_unknown_note": "{count} produits n'ont aucun coût enregistré, leur marge est donc incalculable. Ils sont exclus de tous les pourcentages de marge.",
-    "chart_family_title": "Chiffre d'affaires par marque"
+    "chart_family_title": "Chiffre d'affaires par marque",
+    "outliers_title": "Prix décalés par rapport à leur propre marque",
+    "outliers_note": "Produits dont la marge est inférieure d'au moins {pp} points de pourcentage à la moyenne de leur propre marque/catégorie - pas seulement « en dessous d'une marge saine », mais un cas isolé parmi leurs pairs.",
+    "outliers_col_family_margin": "Marge moyenne de la marque",
+    "outliers_col_gap": "Écart (points)",
+    "outliers_empty": "Aucun produit n'est un cas isolé significatif par rapport à sa propre marque en ce moment.",
+    "detail_back": "← Retour aux produits & marge",
+    "detail_never_sold": "Ce produit n'a jamais été vendu.",
+    "detail_history_title": "Historique des ventes",
+    "detail_no_history": "Aucune vente enregistrée.",
+    "detail_col_ticket": "Ticket",
+    "detail_family_compare": "Ce produit vs. la moyenne de sa marque",
+    "detail_family_note": "Comment la marge de ce produit se compare à celle de chaque autre produit de {family}.",
+    "competitor_title": "Prix de la concurrence",
+    "competitor_note": "Saisi à la main - rien n'est collecté automatiquement. Notez ce que vous voyez en consultant le rayon ou le tarif d'un concurrent.",
+    "competitor_col_name": "Concurrent",
+    "competitor_col_price": "Son prix",
+    "competitor_col_note": "Note",
+    "competitor_add": "Ajouter",
+    "competitor_delete": "Retirer",
+    "competitor_empty": "Aucun prix concurrent enregistré pour ce produit pour le moment.",
+    "competitor_error_missing_name": "Indiquez le nom du concurrent.",
+    "competitor_error_invalid_price": "Indiquez un prix supérieur à zéro.",
+    "competitor_error_invalid_date": "Indiquez une date valide.",
+    "new_arrivals_title": "Nouveautés (derniers {days} jours)",
+    "new_arrivals_note": "Prêt à coller dans une publication sur les réseaux sociaux.",
+    "new_arrivals_empty": "Rien de nouveau ajouté au catalogue ces {days} derniers jours.",
+    "copy_text": "Copier",
+    "copied": "Copié."
   },
 
   "suppliers": {
@@ -478,6 +573,13 @@
       "action": "Corrigez le prix de ceux qui sont encore sous leur coût aujourd'hui. Pour les autres, vérifiez si le coût a été mal saisi ou si quelqu'un remise trop.",
       "fix": "Simplement ne plus perdre d'argent sur ces produits vaut {loss_abs}.",
       "workings": "Somme de (prix de vente − coût) × unités, quand c'est négatif = {loss}"
+    },
+    "family_margin_below_average": {
+      "title": "Produits en dessous de la marge moyenne de leur propre marque : {count}",
+      "statement": "Ils semblent corrects pris isolément, mais leur marque/catégorie tourne globalement à une marge plus saine. Le pire est {top_name} : marge de {top_margin} contre une moyenne de {top_family_margin} pour {top_family} - un écart de {gap}.",
+      "action": "Vérifiez si ces produits ont été tarifés sur un ancien coût, ou simplement jamais révisés depuis que le reste de la famille a évolué. La liste est sur l'écran Produits.",
+      "fix": "Ramener ces produits à la marge moyenne de leur famille vaut {gain} par an au rythme de vente actuel.",
+      "workings": "Somme de (marge % de la famille − marge % du produit) × chiffre d'affaires = {gain}"
     },
     "overstock_capital": {
       "title": "Produits avec plus d'un an de stock : {items}",

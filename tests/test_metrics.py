@@ -146,6 +146,22 @@ class TestStock:
         assert (risk["monthly_rate"] > 0).all()
         assert (risk["cover_months"] < 1).all()
 
+    def test_shrinkage_events_does_not_raise(self, metrics: Metrics):
+        events = metrics.shrinkage_events()
+        assert not events.empty, "expected at least the one live stocktake"
+        assert "cost_net" in events.columns
+
+    def test_shrinkage_events_handles_missing_table(self, metrics: Metrics, monkeypatch):
+        """
+        Must degrade to an empty frame, never raise, if a database somehow
+        has no StockTake table at all.
+        """
+        original = Metrics._has_table
+        monkeypatch.setattr(
+            Metrics, "_has_table",
+            lambda self, name: False if name == "StockTake" else original(self, name))
+        assert metrics.shrinkage_events().empty
+
 
 class TestCustomers:
 
@@ -175,6 +191,33 @@ class TestCustomers:
     def test_receivable_shares_add_up(self, metrics: Metrics):
         r = metrics.receivables()
         assert abs(r["share_of_receivables"].sum() - 1.0) < 0.001
+
+    def test_every_debtor_gets_exactly_one_credit_risk_tier(self, metrics: Metrics):
+        r = metrics.receivables()
+        assert (r["balance"] > 0).all(), "receivables() should only ever list debtors"
+        assert r["credit_risk"].isin(["low", "medium", "high"]).all()
+
+    def test_non_debtors_get_no_credit_risk_tier(self, metrics: Metrics):
+        cs = metrics.customer_summary()
+        non_debtors = cs[cs["balance"] <= 0]
+        if non_debtors.empty:
+            pytest.skip("every customer currently owes something")
+        assert non_debtors["credit_risk"].isna().all()
+
+    def test_credit_risk_survives_a_customer_who_never_paid(self, metrics: Metrics):
+        """
+        A debtor with zero rows in `collections` (never made an account
+        payment) must still get a tier - the days-since-last-payment
+        lookup must fall back to "never", not raise or produce NaN-poisoned
+        comparisons.
+        """
+        r = metrics.receivables()
+        never_paid_ids = set(r["customer_id"]) - set(metrics.collections["customer_id"])
+        if not never_paid_ids:
+            pytest.skip("every current debtor has made at least one payment")
+        some_id = next(iter(never_paid_ids))
+        row = r[r["customer_id"] == some_id].iloc[0]
+        assert row["credit_risk"] in ("low", "medium", "high")
 
     def test_call_list_only_has_lapsed_regulars(self, metrics: Metrics):
         calls = metrics.call_list()
@@ -240,6 +283,131 @@ class TestConsistency:
             else:
                 assert approximately(value, expected, 0.20), (
                     f"{check['key']} is {value:,.0f} against {expected:,.0f}.")
+
+
+class TestCash:
+
+    def test_income_statement_matches_headline(self, metrics: Metrics):
+        """
+        `income_statement(days=...)` uses the same precise cutoff as
+        `headline(days=...)`, so its revenue total must match exactly - a
+        cheap regression net against the two ever drifting apart.
+        """
+        inc = metrics.income_statement(days=365)
+        headline = metrics.headline(days=365)
+        assert abs(inc["revenue"] - headline["revenue"]) < 0.01
+        assert abs(inc["gross_profit"] - headline["gross_profit"]) < 0.01
+
+    def test_income_statement_all_time(self, metrics: Metrics):
+        inc = metrics.income_statement()
+        headline = metrics.headline()
+        assert abs(inc["revenue"] - headline["revenue"]) < 0.01
+        assert abs(inc["cogs"] - (inc["revenue"] - inc["gross_profit"])) < 0.01
+
+    def test_cash_position_totals_match_tickets(self, metrics: Metrics):
+        cash = metrics.cash_position()
+        tk = metrics.tickets
+        assert abs(cash["totals"]["cash"] - float(tk["cash"].sum())) < 0.01
+        assert abs(cash["total"] - (float(tk["cash"].sum()) + float(tk["cheque"].sum())
+                                     + float(tk["transfer"].sum())
+                                     + float(tk["credit_account"].sum()))) < 0.01
+
+    def test_till_reconciliation_does_not_raise(self, metrics: Metrics):
+        till = metrics.till_reconciliation()
+        assert not till.empty, "expected at least the one live batch"
+
+    def test_till_reconciliation_expected_always_populated(self, metrics: Metrics):
+        """
+        The "expected" side must always be computable, even for a session
+        that has never closed - it's built from real tickets, not from the
+        POS's own (possibly-stale) running total.
+        """
+        till = metrics.till_reconciliation()
+        assert till["expected_total"].notna().all()
+
+    def test_till_reconciliation_open_batch_has_no_recorded_close(self, metrics: Metrics):
+        """
+        The one live batch has never been closed - its recorded-close
+        fields must be None, not a fabricated zero, and it must be
+        flagged as still open.
+        """
+        till = metrics.till_reconciliation()
+        open_batches = till[till["is_open"]]
+        assert not open_batches.empty
+        assert (~open_batches["has_recorded_close"]).all()
+        assert open_batches["recorded_total"].isna().all()
+
+    def test_till_reconciliation_expected_matches_real_sales(self, metrics: Metrics):
+        """
+        Cross-check: the expected total (opening float + real ticket sums)
+        should be in the same ballpark as revenue + collections all-time -
+        proof this reads real tickets, not the frozen Batch.*Shift columns
+        (which sit at 0 on the live database despite real sales).
+        """
+        till = metrics.till_reconciliation()
+        headline = metrics.headline()
+        expected_total = float(till["expected_total"].sum())
+        real_scale = headline["revenue"] + headline["collections"]
+        assert expected_total > real_scale * 0.5, (
+            "till expected_total looks too small next to real revenue+collections - "
+            "may be reading a stale POS field instead of the actual tickets")
+
+    def test_cash_position_handles_no_data(self, metrics: Metrics):
+        # A window with nothing in it must degrade cleanly, not raise.
+        far_future = datetime.date(2099, 1, 1)
+        cash = metrics.cash_position(start=far_future, end=far_future)
+        assert cash["total"] == 0.0
+        assert cash["by_month"].empty
+
+
+class TestCatalog:
+
+    def test_new_arrivals_upper_bound(self, metrics: Metrics):
+        """
+        A huge window should return (at most) every item that has a
+        DateCreated at all - the sanity ceiling that proves the filter
+        isn't accidentally inclusive of items with no date.
+        """
+        wide = metrics.new_arrivals(days=99999)
+        with_date = metrics.items["date_created"].notna().sum()
+        assert len(wide) <= with_date
+        assert len(wide) > 0, "expected at least one item with a creation date"
+
+    def test_new_arrivals_zero_days_is_empty_or_tiny(self, metrics: Metrics):
+        # days=0 means "created since this exact moment" - never raises,
+        # never returns anything created before right now.
+        today = metrics.new_arrivals(days=0)
+        assert today.empty or (today["date_created"] >= metrics.now.replace(
+            hour=0, minute=0, second=0, microsecond=0)).all()
+
+    def test_new_arrivals_sorted_newest_first(self, metrics: Metrics):
+        recent = metrics.new_arrivals(days=730)
+        if len(recent) < 2:
+            pytest.skip("not enough recent items to check ordering")
+        dates = recent["date_created"].tolist()
+        assert dates == sorted(dates, reverse=True)
+
+
+class TestFamilyMarginOutliers:
+
+    def test_every_outlier_trails_its_family_by_the_threshold(self, metrics: Metrics):
+        threshold = float(metrics.t("margin.family_benchmark_pp", 15))
+        out = metrics.family_margin_outliers()
+        if out.empty:
+            pytest.skip("no outliers in this database at the default threshold")
+        assert (out["gap_pp"] >= threshold - 0.001).all()
+        # The family really does out-earn the product on every flagged row.
+        assert (out["family_margin_pct"] > out["margin_pct"]).all()
+
+    def test_a_tighter_threshold_never_finds_more_than_a_looser_one(self, metrics: Metrics):
+        loose = metrics.family_margin_outliers(threshold_pp=5)
+        tight = metrics.family_margin_outliers(threshold_pp=30)
+        assert len(tight) <= len(loose)
+
+    def test_zero_threshold_does_not_raise(self, metrics: Metrics):
+        # Every product with any gap at all would qualify - just checking
+        # this edge case degrades cleanly, not that it's a sensible setting.
+        metrics.family_margin_outliers(threshold_pp=0.0001)
 
 
 class TestDataQuality:

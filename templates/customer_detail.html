@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}{{ summary.customer_name }}{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb" style="padding: 10px 24px 0;">
+  <a href="{{ url_for('page_customers') }}">{{ t('customers.detail_back') }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ summary.customer_name }}</h1>
+  <p>
+    {{ summary.customer_no or '—' }}
+    {% if summary.phone %} · {{ summary.phone }}{% endif %}
+    {% if summary.city %} · {{ summary.city }}{% endif %}
+    {% if summary.segment %} · <span class="pill seg-{{ summary.segment }}">{{ t('segments.' ~ summary.segment) }}</span>{% endif %}
+  </p>
+</div>
+
+<section class="tiles tiles-big">
+  <div class="tile">
+    <div class="label">{{ t('customers.col_revenue') }}</div>
+    <div class="value">{{ t.money(summary.revenue) }}</div>
+    <div class="sub">{{ t('customers.col_revenue_12m') }}: {{ t.money(summary.revenue_12m) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('customers.col_profit') }}</div>
+    <div class="value">{{ t.money(summary.gross_profit) }}</div>
+    <div class="sub">
+      {{ t('common.margin_pct') }}:
+      <strong>{{ t.percent(summary.margin_pct) if summary.margin_pct is not none else t('common.not_measurable') }}</strong>
+    </div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('customers.col_visits') }}</div>
+    <div class="value">{{ t.number(summary.visits) }}</div>
+    <div class="sub">{{ t('customers.col_basket') }}: {{ t.money(summary.avg_basket) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('common.balance') }}</div>
+    <div class="value" style="{{ 'color: var(--bad)' if summary.balance and summary.balance > 0 else '' }}">
+      {{ t.money(summary.balance) if summary.balance else '—' }}
+      {% if summary.credit_risk %}
+        <span class="pill pill-{{ 'bad' if summary.credit_risk == 'high' else ('warn' if summary.credit_risk == 'medium' else 'good') }}"
+              style="font-size:12px; vertical-align:middle;">
+          {{ t('customers.credit_risk_' ~ summary.credit_risk) }}
+        </span>
+      {% endif %}
+    </div>
+    <div class="sub">
+      {% if receivable %}
+        {{ t('customers.detail_owes_note', amount=t.money(receivable.balance),
+              days=t.number(receivable.days_since_purchase)) }}
+      {% else %}
+        {{ t('customers.detail_no_balance') }}
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+{% if receivable and receivable.at_risk %}
+  <div class="banner banner-bad">{{ t('receivables.risk_flag') }} — {{ t('receivables.col_days') }}: {{ t.number(receivable.days_since_purchase) }}</div>
+{% endif %}
+
+{% if not summary.visits %}
+  <div class="banner banner-info">{{ t('customers.detail_never_bought') }}</div>
+{% endif %}
+
+<section class="panel">
+  <h2>{{ t('customers.detail_purchases_title') }}</h2>
+  {% if purchases %}
+    <div class="table-wrap scroll-y">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th class="num">{{ t('common.date') }}</th>
+            <th class="num">{{ t('customers.detail_col_ticket') }}</th>
+            <th>{{ t('common.product') }}</th>
+            <th class="num">{{ t('common.quantity') }}</th>
+            <th class="num">{{ t('common.revenue') }}</th>
+            <th class="num">{{ t('common.gross_profit') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in purchases %}
+          <tr>
+            <td class="num" data-value="{{ r.ticket_time }}">{{ t.datetime(r.ticket_time) }}</td>
+            <td class="num muted">{{ r.receipt_id }}</td>
+            <td class="name">{{ r.item_name }}</td>
+            <td class="num">{{ t.number(r.qty) }}</td>
+            <td class="num strong" data-value="{{ r.amount }}">{{ t.money(r.amount) }}</td>
+            <td class="num" data-value="{{ r.gross_profit }}">{{ t.money(r.gross_profit) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('customers.detail_no_purchases') }}</div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>{{ t('customers.detail_payments_title') }}</h2>
+  {% if payments %}
+    <div class="table-wrap">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th class="num">{{ t('common.date') }}</th>
+            <th class="num">{{ t('customers.detail_col_ticket') }}</th>
+            <th class="num">{{ t('common.revenue') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in payments %}
+          <tr>
+            <td class="num" data-value="{{ r.ticket_time }}">{{ t.datetime(r.ticket_time) }}</td>
+            <td class="num muted">{{ r.receipt_id }}</td>
+            <td class="num strong" data-value="{{ r.amount }}">{{ t.money(r.amount) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('customers.detail_no_payments') }}</div>
+  {% endif %}
+</section>
+{% endblock %}

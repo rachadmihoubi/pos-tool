@@ -1,0 +1,17 @@
+{# Date-range picker: a plain GET form, full page reload - the same idiom #}
+{# the app already uses for the language switcher (?lang=). #}
+<form method="get" style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:18px;">
+  <input type="hidden" name="lang" value="{{ lang }}">
+  <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
+    {{ t('common.date_from') }}
+    <input type="date" name="start" value="{{ request.args.get('start', '') }}">
+  </label>
+  <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
+    {{ t('common.date_to') }}
+    <input type="date" name="end" value="{{ request.args.get('end', '') }}">
+  </label>
+  <button type="submit" class="btn">{{ t('common.apply_range') }}</button>
+  {% if request.args.get('start') or request.args.get('end') %}
+    <a class="btn btn-quiet" href="?lang={{ lang }}">{{ t('common.clear_range') }}</a>
+  {% endif %}
+</form>

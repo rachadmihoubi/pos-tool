@@ -67,6 +67,7 @@
           <th class="num">{{ t('receivables.col_days') }}</th>
           <th class="num">{{ t('receivables.col_revenue_12m') }}</th>
           <th class="num">{{ t('receivables.col_months_trade') }}</th>
+          <th>{{ t('receivables.col_credit_risk') }}</th>
         </tr>
       </thead>
       <tbody>
@@ -74,7 +75,7 @@
         <tr>
           <td class="muted">{{ loop.index }}</td>
           <td class="name strong">
-            {{ r.customer_name }}
+            <a href="{{ url_for('page_customer', customer_id=r.customer_id) }}">{{ r.customer_name }}</a>
             {% if r.at_risk %}<span class="pill pill-bad">{{ t('receivables.risk_flag') }}</span>{% endif %}
           </td>
           <td class="num">{{ r.phone or '—' }}</td>
@@ -86,6 +87,13 @@
           <td class="num" data-value="{{ r.revenue_12m }}">{{ t.money(r.revenue_12m) }}</td>
           <td class="num" data-value="{{ r.months_of_their_trade or 999 }}">
             {{ t.number(r.months_of_their_trade, 1) if r.months_of_their_trade is not none else '—' }}
+          </td>
+          <td data-value="{{ r.credit_risk or '' }}">
+            {% if r.credit_risk %}
+              <span class="pill pill-{{ 'bad' if r.credit_risk == 'high' else ('warn' if r.credit_risk == 'medium' else 'good') }}">
+                {{ t('customers.credit_risk_' ~ r.credit_risk) }}
+              </span>
+            {% else %}—{% endif %}
           </td>
         </tr>
         {% endfor %}

@@ -28,10 +28,11 @@ import pandas as pd
 from flask import (Flask, Response, abort, jsonify, make_response, redirect,
                    render_template, request, send_file, url_for)
 
-from poslib import charts
+from poslib import charts, ownerdata
 from poslib.config import ConfigError, get_config, setup_logging
 from poslib.diagnostics import Diagnostics
 from poslib.etl import ETL, ETLError
+from poslib.photos import get_item_photo
 from poslib.i18n import available_languages, get_translator, normalise
 from poslib.metrics import Metrics
 
@@ -74,6 +75,28 @@ def open_metrics() -> tuple[Metrics, ETL, sqlite3.Connection]:
     return Metrics(conn, cfg), etl, conn
 
 
+def date_range_from_request() -> tuple[datetime.date | None, datetime.date | None]:
+    """
+    The date-range picker's `?start=`/`?end=` query params, parsed
+    defensively - anything missing, malformed, or an unreasonable year is
+    treated as "not given" rather than ever raising, so a bad URL just
+    falls back to the page's usual default window instead of a 500.
+    """
+    def parse(name: str) -> datetime.date | None:
+        raw = request.args.get(name)
+        if not raw:
+            return None
+        try:
+            d = datetime.date.fromisoformat(raw)
+        except ValueError:
+            return None
+        # Keeps pandas' Timestamp range (roughly 1677-2262) comfortably.
+        if not (2000 <= d.year <= 2200):
+            return None
+        return d
+    return parse("start"), parse("end")
+
+
 @app.context_processor
 def inject_globals() -> dict[str, Any]:
     """Things every page needs: the translator, the menu, the language list."""
@@ -89,6 +112,7 @@ def inject_globals() -> dict[str, Any]:
         ("inventory", url_for("page_inventory")),
         ("products", url_for("page_products")),
         ("suppliers", url_for("page_suppliers")),
+        ("cash", url_for("page_cash")),
         ("diagnostics", url_for("page_diagnostics")),
         ("dataquality", url_for("page_dataquality")),
     ]
@@ -104,6 +128,12 @@ def inject_globals() -> dict[str, Any]:
         "cfg": cfg,
         "refresh_seconds": int(cfg.get("interface.auto_refresh_seconds", 30)),
         "now": datetime.datetime.now(),
+        # Set only by export_static.py's rendering pass (a "?__static__=1"
+        # marker on the request) - every other request (the real local
+        # server) never sets this, so is_static_export is False by default
+        # and every page behaves exactly as it always has.
+        "is_static_export": request.args.get("__static__") == "1",
+        "page_slug": request.path.strip("/") or "today",
     }
 
 
@@ -151,6 +181,14 @@ def rows(df: pd.DataFrame, limit: int | None = None) -> list[dict[str, Any]]:
                 clean[k] = v
         out.append(clean)
     return out
+
+
+def row_dict(d: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Clean a single dict of numpy/pandas values, the same way rows() does -
+    used for the one-row summaries the drill-down pages build."""
+    if d is None:
+        return None
+    return rows(pd.DataFrame([d]))[0]
 
 
 def series_to_list(s: Any) -> list[Any]:
@@ -202,7 +240,8 @@ def home() -> Response:
     target = {"today": "page_today", "trend": "page_trend",
               "customers": "page_customers", "receivables": "page_receivables",
               "inventory": "page_inventory", "products": "page_products",
-              "suppliers": "page_suppliers", "diagnostics": "page_diagnostics",
+              "suppliers": "page_suppliers", "cash": "page_cash",
+              "diagnostics": "page_diagnostics",
               "dataquality": "page_dataquality"}.get(default, "page_today")
     return redirect(url_for(target))
 
@@ -245,7 +284,8 @@ def page_trend() -> str:
     m, etl, conn = open_metrics()
     try:
         t = get_translator(current_language())
-        monthly = m.monthly()
+        start, end = date_range_from_request()
+        monthly = m.monthly(start=start, end=end)
         complete = m.complete_months()
 
         labels = [t.month_label(x) for x in monthly["month"]] if not monthly.empty else []
@@ -349,6 +389,25 @@ def page_customers() -> str:
         conn.close()
 
 
+@app.route("/customers/<int:customer_id>")
+def page_customer(customer_id: int) -> str:
+    m, etl, conn = open_metrics()
+    try:
+        profile = m.customer_profile(customer_id)
+        if profile is None:
+            abort(404)
+        return render_template(
+            "customer_detail.html",
+            summary=row_dict(profile["summary"]),
+            receivable=row_dict(profile["receivable"]),
+            purchases=rows(profile["purchases"], limit=200),
+            payments=rows(profile["payments"], limit=100),
+            cache=etl.cache_info(),
+        )
+    finally:
+        conn.close()
+
+
 @app.route("/receivables")
 def page_receivables() -> str:
     m, etl, conn = open_metrics()
@@ -386,6 +445,7 @@ def page_inventory() -> str:
         neg = m.negative_stock()
         abc = m.abc_summary()
         fam = m.stock_by_family().head(14)
+        shrinkage = m.shrinkage_events()
         t = get_translator(current_language())
 
         split = charts.stacked_bar([
@@ -419,6 +479,7 @@ def page_inventory() -> str:
             slow_days=int(m.t("inventory.slow_stock_days", 60)),
             cover_months=float(m.t("inventory.stockout_cover_months", 0.75)),
             over_months=float(m.t("inventory.overstock_cover_months", 12.0)),
+            shrinkage=rows(shrinkage),
             cache=etl.cache_info(),
         )
     finally:
@@ -434,9 +495,18 @@ def page_products() -> str:
         low = m.high_revenue_low_margin()
         below = m.selling_below_cost()
         drift = m.silent_margin_erosion()
+        outliers = m.family_margin_outliers()
         dq = m.data_quality()
         t = get_translator(current_language())
         fam_top = fam.head(14)
+
+        arrivals_days = int(get_config().get("catalog.new_arrivals_days", 7))
+        arrivals = m.new_arrivals(days=arrivals_days)
+        arrivals_text = "\n".join(
+            f"{r['item_name']} — {t.money(r['price'])}"
+            f"{' · ' + r['family_name'] if r['family_name'] and r['family_name'] != '—' else ''}"
+            for r in arrivals.to_dict("records")
+        )
 
         return render_template(
             "products.html",
@@ -449,6 +519,8 @@ def page_products() -> str:
             below_loss=float(below["loss"].sum()) if not below.empty else 0.0,
             drift=rows(drift),
             drift_loss=float(drift["annual_margin_lost"].sum()) if not drift.empty else 0.0,
+            outliers=rows(outliers),
+            benchmark_pp=float(m.t("margin.family_benchmark_pp", 15)),
             fam_chart=charts.combo_chart(
                 labels=[str(x) for x in fam_top["family_name"]] if not fam_top.empty else [],
                 bars=series_to_list(fam_top["revenue"]) if not fam_top.empty else [],
@@ -456,10 +528,86 @@ def page_products() -> str:
                 line_is_percent=True, rtl=t.is_rtl, max_labels=14),
             healthy=float(m.t("margin.healthy_gross_margin", 0.10)),
             missing_cost=dq["missing_cost"],
+            arrivals=rows(arrivals),
+            arrivals_days=arrivals_days,
+            arrivals_text=arrivals_text,
             cache=etl.cache_info(),
         )
     finally:
         conn.close()
+
+
+@app.route("/products/<int:item_id>")
+def page_product(item_id: int) -> str:
+    m, etl, conn = open_metrics()
+    try:
+        profile = m.product_profile(item_id)
+        if profile is None:
+            abort(404)
+        competitor_prices = ownerdata.competitor_prices_for_item(get_config(), item_id)
+        return render_template(
+            "product_detail.html",
+            summary=row_dict(profile["summary"]),
+            family=row_dict(profile["family"]),
+            sales_history=rows(profile["sales_history"], limit=200),
+            competitor_prices=rows(competitor_prices),
+            form_error=request.args.get("form_error"),
+            cache=etl.cache_info(),
+        )
+    finally:
+        conn.close()
+
+
+@app.route("/products/<int:item_id>/competitor-price", methods=["POST"])
+def product_competitor_price_add(item_id: int) -> Response:
+    """
+    Log what a competitor was charging - the owner's own manual entry, not
+    anything read from the POS. Validated here before it ever reaches
+    poslib/ownerdata.py; on any problem, redirect back with a locale key
+    naming what was wrong rather than a raw error page or a 500.
+    """
+    lang = current_language()
+    competitor_name = request.form.get("competitor_name", "").strip()
+    price_raw = request.form.get("price", "")
+    date_raw = request.form.get("observed_date", "")
+    note = request.form.get("note", "")
+
+    error_key: str | None = None
+    price: float | None = None
+    observed_date: datetime.date | None = None
+
+    if not competitor_name:
+        error_key = "missing_name"
+    if error_key is None:
+        try:
+            price = float(price_raw)
+            if price <= 0:
+                error_key = "invalid_price"
+        except (TypeError, ValueError):
+            error_key = "invalid_price"
+    if error_key is None:
+        try:
+            observed_date = datetime.date.fromisoformat(date_raw)
+        except (TypeError, ValueError):
+            error_key = "invalid_date"
+
+    if error_key is None:
+        try:
+            ownerdata.add_competitor_price(
+                get_config(), item_id, competitor_name, price, observed_date, note)
+        except ownerdata.OwnerDataError:
+            error_key = "invalid_price"
+
+    target = url_for("page_product", item_id=item_id, lang=lang)
+    if error_key:
+        target += f"&form_error={error_key}"
+    return redirect(target)
+
+
+@app.route("/products/<int:item_id>/competitor-price/<int:price_id>/delete", methods=["POST"])
+def product_competitor_price_delete(item_id: int, price_id: int) -> Response:
+    ownerdata.delete_competitor_price(get_config(), price_id)
+    return redirect(url_for("page_product", item_id=item_id, lang=current_language()))
 
 
 @app.route("/suppliers")
@@ -493,6 +641,54 @@ def page_suppliers() -> str:
                 bars=series_to_list(trend["purchase_value"]) if not trend.empty else [],
                 line=series_to_list(trend["avg_unit_cost"]) if not trend.empty else None,
                 rtl=t.is_rtl),
+            cache=etl.cache_info(),
+        )
+    finally:
+        conn.close()
+
+
+@app.route("/cash")
+def page_cash() -> str:
+    m, etl, conn = open_metrics()
+    try:
+        t = get_translator(current_language())
+        start, end = date_range_from_request()
+        inc = m.income_statement(start=start, end=end)
+        cash = m.cash_position(start=start, end=end)
+        wc = m.working_capital()
+
+        by_month = inc["by_month"]
+        labels = [t.month_label(x) for x in by_month["month"]] if not by_month.empty else []
+        empty = by_month.empty
+
+        tender_labels = [
+            ("cash", t.get("cash.tender_cash"), "var(--c1)"),
+            ("cheque", t.get("cash.tender_cheque"), "var(--c2)"),
+            ("transfer", t.get("cash.tender_transfer"), "var(--c3)"),
+            ("credit", t.get("cash.tender_credit"), "var(--c4)"),
+        ]
+        tender_split = charts.stacked_bar(
+            [{"label": label, "value": cash["totals"][key], "colour": colour}
+             for key, label, colour in tender_labels if cash["totals"][key]],
+            rtl=t.is_rtl)
+
+        till = m.till_reconciliation()
+
+        return render_template(
+            "cash.html",
+            inc=inc,
+            by_month=rows(by_month.iloc[::-1]) if not empty else [],
+            money_chart=charts.combo_chart(
+                labels=labels,
+                bars=series_to_list(by_month["revenue"]) if not empty else [],
+                bars2=series_to_list(by_month["gross_profit"]) if not empty else [],
+                line=series_to_list(by_month["margin_pct"] * 100) if not empty else None,
+                line_is_percent=True, rtl=t.is_rtl),
+            cash=cash,
+            cash_by_month=rows(cash["by_month"].iloc[::-1]) if not cash["by_month"].empty else [],
+            tender_split=tender_split,
+            wc=wc,
+            till=rows(till),
             cache=etl.cache_info(),
         )
     finally:
@@ -588,6 +784,27 @@ def api_refresh() -> Response:
         return jsonify({"ok": False, "error": str(exc)}), 500
     finally:
         _refresh_lock.release()
+
+
+_PHOTO_MIMETYPES = {"jpg": "image/jpeg", "png": "image/png",
+                    "bmp": "image/bmp", "gif": "image/gif"}
+
+
+@app.route("/api/item-photo/<int:item_id>")
+def api_item_photo(item_id: int) -> Response:
+    """
+    An item's photo, read on demand straight from the source database (the
+    cached copy never keeps this column - see poslib/photos.py). 404 when
+    there is none; the product page's <img onerror> hides it quietly.
+    """
+    found = get_item_photo(get_config(), item_id)
+    if found is None:
+        abort(404)
+    data, ext = found
+    response = make_response(data)
+    response.headers["Content-Type"] = _PHOTO_MIMETYPES.get(ext, "application/octet-stream")
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
 
 
 @app.route("/export")

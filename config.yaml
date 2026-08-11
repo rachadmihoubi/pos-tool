@@ -14,7 +14,7 @@ database:
   # IMPORTANT: point this at the file your POS software actually writes to.
   # The tool NEVER writes to this file - it copies it somewhere temporary
   # first and reads the copy. Your live data cannot be touched.
-  path: "E:/Base de données4.dblx"
+  path: "C:/Users/RACHAD/Desktop/Base de données4.dblx"
 
   # Where the fast local copy of your data is kept. You can delete this file
   # any time; the tool simply rebuilds it.
@@ -101,6 +101,17 @@ thresholds:
     # Serving a big customer below this margin means working for nothing.
     low_margin_warn: 0.04            # 4%
 
+    # Credit-risk tier for customers who currently owe money (shown on the
+    # customer profile and the receivables report). A balance at or above
+    # this is "big enough to matter on its own", regardless of how recently
+    # they paid or bought.
+    credit_risk_balance_floor: 100000     # DZD
+
+    # Days since their last payment or last purchase (whichever is worse)
+    # before a debtor moves from low to medium risk, and medium to high.
+    credit_risk_medium_days: 30
+    credit_risk_high_days: 90
+
   margin:
     # A healthy gross margin for wholesale cosmetics. Below this we flag it.
     healthy_gross_margin: 0.10       # 10%
@@ -115,6 +126,11 @@ thresholds:
     # while gross profit grows less than the second number.
     revenue_growth_floor: 0.05       # revenue +5%
     profit_growth_ceiling: 0.0       # but profit 0% or worse
+
+    # A product priced fine "in isolation" can still be an outlier next to
+    # its own brand/category. Flag it once its margin trails its family's
+    # average by at least this many percentage points.
+    family_benchmark_pp: 15
 
   working_capital:
     # (stock value + money owed) divided by last year's gross profit.
@@ -145,6 +161,25 @@ data_rules:
   # The catch-all product used for one-off manual lines with a typed-in price.
   # These have no cost recorded, so their margin is unknowable.
   misc_item_id: 1
+
+
+# -----------------------------------------------------------------------------
+#  THE CATALOGUE - display defaults, not diagnostics thresholds.
+# -----------------------------------------------------------------------------
+catalog:
+  # The "new arrivals" panel on the Products page shows items added to the
+  # catalogue in the last this-many days.
+  new_arrivals_days: 7
+
+  # Where item photos are cached after being read from the source database.
+  # Safe to delete any time - it rebuilds itself as products are viewed.
+  photo_cache_dir: "static/photo-cache"
+
+  # Data typed in by the owner (competitor prices, and anything similar
+  # added later) - never overwritten by an ETL cache rebuild, unlike
+  # everything else the tool reads. Back this up; it cannot be rebuilt from
+  # the POS database.
+  owner_data_db: "data/owner.db"
 
 
 # -----------------------------------------------------------------------------
@@ -231,6 +266,45 @@ digest:
       template_language: "ar"
       retry_attempts: 2
       retry_delay_seconds: 30
+
+
+# -----------------------------------------------------------------------------
+#  DAILY BACKUP - cheap insurance against this computer's disk failing.
+#  Copies the source database, the local cache and your competitor-price
+#  log into backups/YYYY-MM-DD/ once a day, and deletes old copies.
+# -----------------------------------------------------------------------------
+backup:
+  enabled: true
+
+  # Time of day to run it, 24-hour clock, this computer's local time.
+  hour: 3
+  minute: 0
+
+  # Where the dated backup folders go.
+  output_dir: "backups"
+
+  # How many days of backups to keep.
+  keep_days: 30
+
+
+# -----------------------------------------------------------------------------
+#  REMOTE VIEWING - a lean, read-only snapshot pushed to Cloudflare Pages so
+#  you can check the shop from your phone. Off by default - turning it on
+#  needs a one-time Cloudflare account and `wrangler login` (see SETUP.md).
+#  Only summaries leave this computer; the real database never does.
+# -----------------------------------------------------------------------------
+remote:
+  enabled: true
+
+  # The Cloudflare Pages project name you created (see SETUP.md).
+  cloudflare_project_name: "promakeupmihoubipos"
+
+  # Don't push more often than this, even if the cache refreshes faster -
+  # keeps uploads small and infrequent on a home connection.
+  push_interval_seconds: 90
+
+  # Where the exported static files are written before being uploaded.
+  export_dir: "remote-site"
 
 
 # -----------------------------------------------------------------------------

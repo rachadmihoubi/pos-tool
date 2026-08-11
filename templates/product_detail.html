@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block title %}{{ summary.item_name }}{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb" style="padding: 10px 24px 0;">
+  <a href="{{ url_for('page_products') }}">{{ t('products.detail_back') }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-head" style="display:flex; align-items:flex-start; gap:16px;">
+  <img src="{{ url_for('api_item_photo', item_id=summary.item_id) }}"
+       alt="" width="72" height="72"
+       style="object-fit:cover; border-radius:8px; border:1px solid var(--line);"
+       onerror="this.hidden=true">
+  <div>
+    <h1>{{ summary.item_name }}</h1>
+    <p>
+      {{ summary.item_no or '—' }}
+      {% if summary.family_name %} · {{ summary.family_name }}{% endif %}
+    </p>
+  </div>
+</div>
+
+<section class="tiles tiles-big">
+  <div class="tile">
+    <div class="label">{{ t('products.col_revenue') }}</div>
+    <div class="value">{{ t.money(summary.revenue_all) }}</div>
+    <div class="sub">{{ t('products.col_units') }}: {{ t.number(summary.qty_all) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('products.col_profit') }}</div>
+    <div class="value">{{ t.money(summary.gross_profit_all) }}</div>
+    <div class="sub">
+      {{ t('common.margin_pct') }}:
+      <strong>{{ t.percent(summary.margin_pct) if summary.margin_pct is not none else t('common.not_measurable') }}</strong>
+    </div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('common.price') }} / {{ t('common.cost') }}</div>
+    <div class="value">{{ t.money(summary.price) }}</div>
+    <div class="sub">{{ t('common.cost') }}: {{ t.money(summary.cost) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('products.col_stock') }}</div>
+    <div class="value" style="{{ 'color: var(--bad)' if summary.stock and summary.stock < 0 else '' }}">
+      {{ t.number(summary.stock) }}
+    </div>
+    <div class="sub">{{ t('inventory.total_value') }}: {{ t.money(summary.stock_value) }}</div>
+  </div>
+</section>
+
+{% if summary.days_since_sale is none %}
+  <div class="banner banner-info">{{ t('products.detail_never_sold') }}</div>
+{% endif %}
+
+{% if family %}
+<section class="panel">
+  <h2>{{ t('products.detail_family_compare') }}</h2>
+  <p class="note">{{ t('products.detail_family_note', family=summary.family_name) }}</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th class="num">{{ t('common.margin_pct') }}</th>
+          <th class="num">{{ t('customers.col_revenue') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="strong">
+          <td>{{ summary.item_name }}</td>
+          <td class="num">
+            {% if summary.margin_pct is none %}<span class="muted">—</span>
+            {% else %}<span class="{{ 'delta down' if family.margin_pct is not none and summary.margin_pct < family.margin_pct else 'delta up' }}">{{ t.percent(summary.margin_pct) }}</span>{% endif %}
+          </td>
+          <td class="num">{{ t.money(summary.revenue_all) }}</td>
+        </tr>
+        <tr>
+          <td>{{ summary.family_name }} ({{ t('common.average')|lower }})</td>
+          <td class="num">{{ t.percent(family.margin_pct) if family.margin_pct is not none else '—' }}</td>
+          <td class="num">{{ t.money(family.revenue) }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>{{ t('products.competitor_title') }}</h2>
+  <p class="note">{{ t('products.competitor_note') }}</p>
+
+  {% if form_error %}
+    <div class="banner banner-bad">{{ t('products.competitor_error_' ~ form_error) }}</div>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('product_competitor_price_add', item_id=summary.item_id) }}?lang={{ lang }}"
+        style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:16px;">
+    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
+      {{ t('products.competitor_col_name') }}
+      <input type="text" name="competitor_name" required maxlength="120">
+    </label>
+    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
+      {{ t('products.competitor_col_price') }}
+      <input type="number" name="price" step="0.01" min="0.01" required>
+    </label>
+    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
+      {{ t('common.date') }}
+      <input type="date" name="observed_date" required>
+    </label>
+    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft); flex:1; min-width:160px;">
+      {{ t('products.competitor_col_note') }}
+      <input type="text" name="note" maxlength="200">
+    </label>
+    <button type="submit" class="btn">{{ t('products.competitor_add') }}</button>
+  </form>
+
+  {% if competitor_prices %}
+    <div class="table-wrap">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th>{{ t('products.competitor_col_name') }}</th>
+            <th class="num">{{ t('products.competitor_col_price') }}</th>
+            <th class="num">{{ t('common.date') }}</th>
+            <th>{{ t('products.competitor_col_note') }}</th>
+            <th class="nosort"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in competitor_prices %}
+          <tr>
+            <td class="name">{{ r.competitor_name }}</td>
+            <td class="num" data-value="{{ r.price }}">
+              {{ t.money(r.price) }}
+              {% if summary.price %}
+                <span class="{{ 'delta down' if r.price < summary.price else 'delta up' }}" style="font-size:12px;">
+                  {{ t.signed_percent((summary.price - r.price) / r.price) }}
+                </span>
+              {% endif %}
+            </td>
+            <td class="num" data-value="{{ r.observed_date }}">{{ t.date(r.observed_date) }}</td>
+            <td class="muted">{{ r.note or '—' }}</td>
+            <td>
+              <form method="post" style="margin:0;"
+                    action="{{ url_for('product_competitor_price_delete', item_id=summary.item_id, price_id=r.id) }}?lang={{ lang }}">
+                <button type="submit" class="btn btn-quiet">{{ t('products.competitor_delete') }}</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('products.competitor_empty') }}</div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>{{ t('products.detail_history_title') }}</h2>
+  {% if sales_history %}
+    <div class="table-wrap scroll-y">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th class="num">{{ t('common.date') }}</th>
+            <th class="num">{{ t('products.detail_col_ticket') }}</th>
+            <th class="num">{{ t('common.quantity') }}</th>
+            <th class="num">{{ t('common.price') }}</th>
+            <th class="num">{{ t('common.revenue') }}</th>
+            <th class="num">{{ t('common.gross_profit') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in sales_history %}
+          <tr>
+            <td class="num" data-value="{{ r.ticket_time }}">{{ t.datetime(r.ticket_time) }}</td>
+            <td class="num muted">{{ r.receipt_id }}</td>
+            <td class="num">{{ t.number(r.qty) }}</td>
+            <td class="num">{{ t.money(r.price) }}</td>
+            <td class="num strong" data-value="{{ r.amount }}">{{ t.money(r.amount) }}</td>
+            <td class="num" data-value="{{ r.gross_profit }}">{{ t.money(r.gross_profit) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('products.detail_no_history') }}</div>
+  {% endif %}
+</section>
+{% endblock %}

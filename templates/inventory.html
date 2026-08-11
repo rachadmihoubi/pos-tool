@@ -229,4 +229,41 @@
     {{ ch.hbar(fam_chart, t) }}
   </div>
 </section>
+
+{# --------------------------------------------------------- shrinkage #}
+<section class="panel page-break">
+  <h2>{{ t('inventory.shrinkage_title') }}</h2>
+  <p class="note">{{ t('inventory.shrinkage_note') }}</p>
+  {% if shrinkage %}
+    <div class="table-wrap">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th>{{ t('inventory.shrinkage_col_no') }}</th>
+            <th class="num">{{ t('inventory.shrinkage_col_date') }}</th>
+            <th class="num">{{ t('inventory.shrinkage_col_units_over') }}</th>
+            <th class="num">{{ t('inventory.shrinkage_col_units_under') }}</th>
+            <th class="num">{{ t('inventory.shrinkage_col_cost_net') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in shrinkage %}
+          <tr>
+            <td class="name">{{ r.stocktake_no }}</td>
+            <td class="num" data-value="{{ r.event_date }}">{{ t.date(r.event_date) if r.event_date else '—' }}</td>
+            <td class="num">{{ t.number(r.units_over) }}</td>
+            <td class="num">{{ t.number(r.units_under) }}</td>
+            <td class="num strong" data-value="{{ r.cost_net }}"
+                style="{{ 'color: var(--bad)' if r.cost_net and r.cost_net < 0 else '' }}">
+              {{ t.money(r.cost_net) }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('inventory.shrinkage_empty') }}</div>
+  {% endif %}
+</section>
 {% endblock %}

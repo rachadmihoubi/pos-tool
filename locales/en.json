@@ -26,6 +26,7 @@
     "inventory": "Stock",
     "products": "Products & margin",
     "suppliers": "Suppliers",
+    "cash": "Cash & P&L",
     "diagnostics": "What to fix",
     "dataquality": "Data quality"
   },
@@ -87,7 +88,11 @@
     "last_purchase": "Last purchase",
     "last_sale": "Last sale",
     "yes": "Yes",
-    "no": "No"
+    "no": "No",
+    "date_from": "From",
+    "date_to": "To",
+    "apply_range": "Apply",
+    "clear_range": "Clear"
   },
 
   "today": {
@@ -152,6 +157,47 @@
     "seasonality_below": "below average"
   },
 
+  "cash": {
+    "title": "Cash & P&L",
+    "subtitle": "What the business earned, and how it was paid",
+    "revenue": "Revenue",
+    "cogs": "Cost of goods sold",
+    "cogs_note": "What the goods sold actually cost",
+    "gross_profit": "Gross profit",
+    "working_capital": "Working capital tied up",
+    "working_capital_note": "Years of gross profit tied up in stock and receivables",
+    "income_statement_title": "Revenue, cost and gross profit by month",
+    "income_statement_table": "Month by month",
+    "position_title": "How the money came in",
+    "position_note": "All time, split by how the customer paid.",
+    "position_table": "Month by month",
+    "tender_cash": "Cash",
+    "tender_cheque": "Cheque",
+    "tender_transfer": "Transfer",
+    "tender_credit": "On account",
+    "working_capital_title": "Working capital",
+    "stock_value": "Stock at cost",
+    "receivables": "Money customers owe",
+    "tied_up": "Total tied up",
+    "gross_profit_12m": "Gross profit (last 12 months)",
+    "working_capital_explain": "Stock plus what customers owe is money already spent that cannot be used elsewhere. Comparing it with a year of gross profit answers: how many years of earnings are tied up in the business right now?",
+    "till_title": "Till sessions",
+    "till_note": "\"Expected\" is recomputed from actual tickets, not the POS's own running total. \"Recorded\" is whatever R.Lynx itself computed when a session closed, not a hand count - so a difference here is not proof of missing cash, only a POS-vs-tickets check. Cash paid out of the drawer (bank drops, float top-ups) is not tracked in this database.",
+    "till_col_register": "Register — session",
+    "till_col_opened": "Opened",
+    "till_col_status": "Status",
+    "till_col_expected": "Expected",
+    "till_col_recorded": "Recorded close",
+    "till_col_variance": "Variance",
+    "till_open": "Still open",
+    "till_closed": "Closed",
+    "till_no_recorded_close": "Not recorded"
+  },
+
+  "remote": {
+    "generated_note": "This snapshot was generated {when}. If the store PC is off, this page keeps showing this snapshot until it comes back."
+  },
+
   "customers": {
     "title": "Customers",
     "subtitle": "Who is worth chasing, and who is quietly leaving",
@@ -186,7 +232,19 @@
     "churn_retained": "Came back",
     "churn_lost": "Did not return",
     "churn_rate": "Churn rate",
-    "walkin_note": "The anonymous walk-in till is not counted as a customer. It is {share} of revenue across {tickets} tickets."
+    "walkin_note": "The anonymous walk-in till is not counted as a customer. It is {share} of revenue across {tickets} tickets.",
+    "detail_back": "← Back to Customers",
+    "detail_never_bought": "Has not bought anything measurable yet.",
+    "detail_purchases_title": "Purchase history",
+    "detail_no_purchases": "No purchases recorded.",
+    "detail_payments_title": "Payments on account",
+    "detail_no_payments": "No account payments recorded.",
+    "detail_col_ticket": "Ticket",
+    "detail_owes_note": "Owes {amount}, {days} days since last purchase.",
+    "detail_no_balance": "Does not currently owe anything.",
+    "credit_risk_low": "Low risk",
+    "credit_risk_medium": "Medium risk",
+    "credit_risk_high": "High risk"
   },
 
   "segments": {
@@ -222,6 +280,7 @@
     "col_days": "Days since",
     "col_revenue_12m": "Bought (12 months)",
     "col_months_trade": "Months of their own trade",
+    "col_credit_risk": "Credit risk",
     "months_trade_note": "How many months of that customer's own buying the debt is worth. A high number means the debt is large for the size of the customer.",
     "risk_flag": "Gone quiet",
     "credit_note": "{count} customers are in credit by {amount} in total - they have paid more than they have taken. That is not money you can spend.",
@@ -265,7 +324,15 @@
     "abc_c": "C - the long tail",
     "col_abc": "Class",
     "family_title": "Stock value by brand",
-    "chart_split_title": "Selling, slow and dead"
+    "chart_split_title": "Selling, slow and dead",
+    "shrinkage_title": "Shrinkage (stocktakes)",
+    "shrinkage_note": "Totals per physical stocktake, not per product - this database has no line-by-line detail to say which products drove the variance. Different from dead stock: dead stock is unsold but present; shrinkage is stock a physical count found missing (or, when positive, present but not in the books).",
+    "shrinkage_empty": "No stocktake has been recorded yet.",
+    "shrinkage_col_no": "Stocktake",
+    "shrinkage_col_date": "Date",
+    "shrinkage_col_units_over": "Units over",
+    "shrinkage_col_units_under": "Units under",
+    "shrinkage_col_cost_net": "Net cost impact"
   },
 
   "products": {
@@ -301,7 +368,35 @@
     "col_margin_now": "Margin now",
     "col_annual_loss": "Costs you per year",
     "cost_unknown_note": "{count} products have no cost recorded, so their margin cannot be worked out. They are left out of every margin percentage.",
-    "chart_family_title": "Revenue by brand"
+    "chart_family_title": "Revenue by brand",
+    "outliers_title": "Priced out of line with their own brand",
+    "outliers_note": "Products whose margin trails their own brand/category average by {pp} percentage points or more - not just \"below a healthy margin\", but an outlier next to their peers.",
+    "outliers_col_family_margin": "Brand average margin",
+    "outliers_col_gap": "Gap (points)",
+    "outliers_empty": "No product is a meaningful outlier next to its own brand right now.",
+    "detail_back": "← Back to Products & margin",
+    "detail_never_sold": "This product has never sold.",
+    "detail_history_title": "Sales history",
+    "detail_no_history": "No sales recorded.",
+    "detail_col_ticket": "Ticket",
+    "detail_family_compare": "This product vs. its brand average",
+    "detail_family_note": "How this one product's margin compares to every other product in {family}.",
+    "competitor_title": "Competitor prices",
+    "competitor_note": "Entered by hand - nothing is scraped automatically. Log what you see when you check a competitor's shelf or price list.",
+    "competitor_col_name": "Competitor",
+    "competitor_col_price": "Their price",
+    "competitor_col_note": "Note",
+    "competitor_add": "Add",
+    "competitor_delete": "Remove",
+    "competitor_empty": "No competitor prices logged for this product yet.",
+    "competitor_error_missing_name": "Enter the competitor's name.",
+    "competitor_error_invalid_price": "Enter a price greater than zero.",
+    "competitor_error_invalid_date": "Enter a valid date.",
+    "new_arrivals_title": "New arrivals (last {days} days)",
+    "new_arrivals_note": "Ready to paste into a social media post.",
+    "new_arrivals_empty": "Nothing new added to the catalogue in the last {days} days.",
+    "copy_text": "Copy",
+    "copied": "Copied."
   },
 
   "suppliers": {
@@ -478,6 +573,13 @@
       "action": "Fix the price on the ones still below cost today. For the rest, check whether the cost was recorded wrongly or whether somebody is discounting too far.",
       "fix": "Simply not losing money on these is worth {loss_abs}.",
       "workings": "Sum of (selling price − cost) × units, where negative = {loss}"
+    },
+    "family_margin_below_average": {
+      "title": "Products priced below their own brand's average margin: {count}",
+      "statement": "These look fine on their own, but their brand/category as a whole runs at a healthier margin. The worst is {top_name}: {top_margin} margin against a {top_family} average of {top_family_margin} - a gap of {gap}.",
+      "action": "Check whether these were priced against an old cost, or simply never reviewed since the rest of the family moved. The list is on the Products screen.",
+      "fix": "Bringing these up to their family's average margin is worth {gain} a year at the current rate of sale.",
+      "workings": "Sum of (family margin % − product margin %) × revenue = {gain}"
     },
     "overstock_capital": {
       "title": "Products with more than a year of stock: {items}",

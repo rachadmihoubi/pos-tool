@@ -1,18 +1,21 @@
 # Shop Analysis — project brief for Claude
 
 Read this before touching anything. It captures decisions and discoveries from
-the build session that are not obvious from the code alone.
+the build sessions that are not obvious from the code alone.
 
 ## What this is
 
 A local analysis tool for a wholesale cosmetics distributor in Algiers. Reads
 their POS's Access (Jet 4) database directly — no ODBC, no mdbtools, nothing
-installed but Python — and produces a dashboard, an Excel report, and a daily
-digest in English/French/Arabic. Full spec is in `claude-code-prompt.md`.
+installed but Python — and produces a dashboard, an Excel report, a daily
+digest in English/French/Arabic, automatic daily backups, and an optional
+password-gated remote view on Cloudflare Pages.
 
-**Status: feature-complete per the original spec.** All stages built, 84 tests
-passing, verified against the live database. See "What's left" below for the
-only things not yet done.
+**Status: feature-complete through Patch #3** (2026-08-10). Original build +
+the cash/P&L, drill-down and date-range foundation ("Patch #2") + seven new
+Patch #3 features + silent background launch + remote viewing are all built,
+tested (169 tests) and — for the background launch and remote viewing —
+actually deployed and verified live on this machine. See "What's left" below.
 
 ## The one rule that overrides everything else
 
@@ -25,56 +28,60 @@ directly for anything other than a read-only copy, stop.
 
 `config.yaml` → `database.path` is currently:
 ```
-E:/Base de données4.dblx
+C:/Users/RACHAD/Desktop/Base de données4.dblx
 ```
-This is **this machine's** path to the live POS database. On a different PC the
-POS database will be at a different location (different drive letter, different
-folder — possibly not present at all if this is a dev machine rather than the
-shop's actual till computer). **Check this path is correct before running
-anything** — `poslib/etl.py` will raise a clear `ETLError` naming the missing
-file if it's wrong, so this fails loudly, not silently.
+This is **this machine's** path — this is a dev PC, not the shop's actual till
+computer (no E: drive here). On a different PC the POS database will be at a
+different location. **Check this path is correct before running anything** —
+`poslib/etl.py` will raise a clear `ETLError` naming the missing file if it's
+wrong, so this fails loudly, not silently.
 
-## Three non-obvious discoveries — do not "fix" these back
-
-These look like they could be bugs if you're not aware of the history. They are
-deliberate, each verified against the real data:
+## Three original discoveries — do not "fix" these back
 
 1. **Boolean columns: a SET bit means TRUE.** (`poslib/jet4.py`, the
-   `TYPE_BOOL` branch in `_parse_row`.) The original spec said the opposite
-   ("clear bit = TRUE"). I verified empirically: under "set = true", all 42
-   customers carrying a balance have `AllowAccount=True` (0 contradictions),
-   and items sold today show `Inactive=False`. Under the spec's rule, all
-   1,570 products come out inactive and the anonymous walk-in account is the
-   only one with credit — both nonsensical. If you ever see products
-   appearing inactive that shouldn't be, this is the first place to check,
-   but the current code is correct — verified, not guessed.
+   `TYPE_BOOL` branch in `_parse_row`.) Verified empirically — see full
+   reasoning in git history if needed; the short version is the opposite
+   reading makes 1,570 products inactive and only the walk-in account has
+   credit, both nonsensical.
+2. **`Item.LastSold` is stale on ~60 products.** `metrics.py`'s
+   `item_movement` uses the most recent *ticket* date (`last_sale_effective`)
+   instead of the POS's own field.
+3. **Purchase line totals don't reconcile** — every supplier money figure is
+   built from cost-of-goods/stock-value instead of summed purchase lines.
 
-2. **`Item.LastSold` is stale on ~60 products** (worst case: 370 days stale on
-   a product that sold last week with 432 units in stock). `metrics.py`'s
-   `item_movement` property uses the most recent *ticket* date
-   (`last_sale_effective`) instead of the POS's own field, falling back to the
-   field only when there's no ticket history at all. Trusting the raw field
-   wrongly condemns ~584,340 DZD of live stock as dead. This is quantified on
-   the Data Quality page (`stale_last_sold` in `data_quality()`).
+Also: `Receipt.TotalCost` is zero on `ReceiptType=1` ("DV") tickets — cost of
+goods is always computed from `ReceiptEntry` lines, never the header.
 
-3. **Purchase line totals don't reconcile** — they sum to roughly 2x the cost
-   of goods sold plus current stock value, which can't be right (likely a POS
-   export quirk, not investigated further). `purchase_coverage()` in
-   `metrics.py` flags this (`value_reconciles: False`) and every supplier
-   money figure is built from cost-of-goods/stock-value instead, never from
-   summed purchase lines. Don't wire supplier "amount spent" back to raw
-   purchase-line sums without re-checking this.
+## Patch #3 session discoveries (2026-08-10) — same spirit, new instances
 
-Also worth knowing: `Receipt.TotalCost` is zero on exactly the 9 `ReceiptType=1`
-("DV") tickets — cost of goods is always computed from `ReceiptEntry` lines,
-never trusted from the ticket header.
+4. **`Batch`'s `*Shift` columns don't track live sales.** The one till
+   session in this database has stayed open since 2024-08-12, and its
+   `CashShift`/`ChequeShift`/etc. sit frozen at 0 despite ~39M DZD of real
+   cash sales having happened under it — R.Lynx apparently only updates
+   those columns on session close/reopen, not per-sale. `till_reconciliation()`
+   in `metrics.py` recomputes "expected" cash from actual `Receipt.BatchID`-
+   joined tickets instead, the same "recompute from source rows, don't trust
+   a POS-computed aggregate" rule as discovery #2/#3 above.
+5. **No per-product stocktake detail exists.** `StockTake` has aggregate
+   over/under/net-cost totals per physical count; there is no
+   `StockTakeEntry`-style line table in this database (confirmed absent even
+   at the schema-definition level, not just "no rows yet" — it exists in
+   R.Lynx's own newer demo template but not here). `shrinkage_events()` is
+   therefore event-level only, clearly labeled as such — don't try to join it
+   to individual products, the data to do so honestly isn't here.
+6. **Expiry-date tracking was investigated and dropped.** R.Lynx's "Dates
+   péremptions" UI section doesn't correspond to any table/column in this
+   database (checked exhaustively, schema-level, both the real DB and
+   R.Lynx's own demo template) — the feature apparently doesn't persist in
+   this edition, or this database predates it. Not built. Revisit only if a
+   fresh copy from the actual till PC someday shows otherwise.
+7. **`Item.Picture` (OLE) is stripped by the ETL cache** (`SKIPPED_COLUMN_TYPES`
+   in `etl.py`) but the low-level reader can still read it directly —
+   `poslib/photos.py` opens a fresh copy for this on demand. Empirically, 0 of
+   1,570 real items currently have a photo, so this path is deliberately
+   lightweight (best-effort OLE-wrapper sniffing, not a full parser).
 
-## Verified numbers (as of the last full check, 2026-08-10)
-
-These are floors for all-time totals (they only grow with new sales) and were
-confirmed to reconcile exactly against three new receipts written during the
-build session. Full table and tolerances: `tests/conftest.py` fixtures
-`expected_counts` / `expected_totals`, exercised by `tests/test_metrics.py`.
+## Verified numbers (as of 2026-08-10, re-verify with `pytest tests -q`)
 
 | Check | Value |
 |---|---|
@@ -83,31 +90,83 @@ build session. Full table and tolerances: `tests/conftest.py` fixtures
 | Account payments ("Paiement de règlement") | 30,420,753 DZD |
 | Stock at cost | 59,168,540 DZD |
 | Receivables (positive balances only) | 18,035,898 DZD |
-| `Receipt` / `ReceiptEntry` / `Item` / `Customer` rows | 7,858 / 39,736 / 1,570 / 662 |
+| `Receipt` / `ReceiptEntry` / `Item` / `Customer` rows | 7,858+ / 39,736+ / 1,570 / 662 |
 
-Run `python -m pytest tests -q` to re-verify against whatever the database says
-now — it should never fail on the "grows" checks (that would mean rows or
-money are being lost) and should stay within tolerance on the point-in-time
-ones (stock value, receivables — these genuinely drift as trade happens).
+`tests/conftest.py`'s `expected_counts`/`expected_totals` gate every change —
+"grows" values must never fall, point-in-time values (stock, receivables) are
+checked within tolerance since they drift as trade happens.
 
-## What's left (optional, not blocking)
+## What was built this session (Patch #2 foundation + Patch #3)
 
-- **`.env` is empty on every machine** (gitignored, by design). Email and
-  Telegram digest channels are wired up but need real credentials pasted in
-  before they'll send. WhatsApp additionally needs Meta template approval —
-  see the long comment in `poslib/channels/whatsapp_channel.py` before anyone
-  asks to "just turn it on."
-- **Arabic web font not fetched.** `tools/get_fonts.py` downloads Cairo from
-  Google Fonts; it wasn't run in this session (`static/fonts/` is empty in the
-  repo). Harmless — the CSS falls back to Windows' own Arabic font — but run
-  it if you want the branded look. `setup.bat` runs it automatically anyway.
-- **Task Scheduler entries not installed on this machine.** `install-startup.bat`
-  exists and works but hasn't been run — the tool currently only starts via
-  manual `start.bat`.
-- Nothing else from the original spec is outstanding. If asked to add a new
-  metric or diagnostic rule, it belongs in `poslib/metrics.py` /
-  `poslib/diagnostics.py` respectively — see the "How it is put together" /
-  architecture rules at the bottom of `README.md`.
+- **Cash/P&L page** (`/cash`) — income statement by month, cash/cheque/
+  transfer/credit split, till-session reconciliation, working capital.
+- **Date-range picker** on `/trend` and `/cash` (`?start=&end=`, whole-day
+  boundaries, degrades gracefully on bad input — never a 500).
+- **Customer & product drill-down pages** (`/customers/<id>`, `/products/<id>`)
+  — linked from the list pages; 404 for unknown IDs and for the walk-in
+  customer (not a real customer).
+- **New arrivals feed** — copyable plain-text list on `/products`, config
+  `catalog.new_arrivals_days` (default 7).
+- **Item photos** — best-effort, see discovery #7 above.
+- **Till/session reconciliation** — see discovery #4, surfaced on `/cash`.
+- **Inventory shrinkage** — event-level, see discovery #5, surfaced on
+  `/inventory`.
+- **Customer credit-risk tiers** (low/medium/high) — `thresholds.customers.
+  credit_risk_*` in config.yaml, surfaced on the customer profile and
+  `/receivables`.
+- **Family-level margin benchmarking** — `family_margin_outliers()`, new
+  diagnostic rule `family_margin_benchmark`, config `thresholds.margin.
+  family_benchmark_pp` (default 15pp).
+- **Competitor price log** — `poslib/ownerdata.py`, the first *write* path in
+  the app. Owns `data/owner.db`, a separate SQLite file `poslib/etl.py` never
+  touches (an ETL refresh fully replaces `cache.db` every time — anything
+  owner-entered stored there would be destroyed). Form + table on the product
+  drill-down page.
+- **Automatic daily backup** — `poslib/backup.py`, copies source `.dblx` +
+  `cache.db` + `data/owner.db` into `backups/YYYY-MM-DD/`, keeps 30 days.
+  Wired into `watcher.py` the same way the daily digest is.
+- **Silent background launch** — turned out to already be built from the
+  original session (`start-quiet.bat`, `install-startup.bat` using
+  `pythonw.exe` + `schtasks /sc onlogon`, no stored password). Added the one
+  missing piece, `stop-background.bat`. **`install-startup.bat` has been run
+  on this machine** — Task Scheduler entries "Shop Analysis - Dashboard" and
+  "Shop Analysis - Digest" are live.
+- **Remote viewing** — `poslib/present.py` + `templates/remote_dashboard.html`
+  + `export_static.py` build a lean, self-contained static snapshot (today's
+  KPIs, a trend chart, top customers/products, diagnostics alerts, cash
+  position — never the full receipt history). `poslib/remote.py` pushes it via
+  `wrangler pages deploy`. Wired into `watcher.py`, pushed after every cache
+  rebuild, gated by `remote.push_interval_seconds` (90s). **Live and
+  deployed**: Cloudflare Pages project `promakeupmihoubipos`, gated by
+  Cloudflare Access (email-allowlist policy "owner only", owner's email only).
+  `remote.enabled: true` in config.yaml.
+
+## Cloudflare setup on this machine (already done — for reference on a new PC)
+
+- `wrangler` installed globally via `npm install -g wrangler` (Node.js was
+  already present). **On Windows, `subprocess` must call the fully-resolved
+  `wrangler.CMD` path**, not the bare string `"wrangler"` — `shutil.which()`
+  finds it fine but `subprocess.run(["wrangler", ...])` raises `WinError 2`
+  regardless; `poslib/remote.py:_wrangler_path()` handles this. Also:
+  `subprocess.run` needs explicit `encoding="utf-8"` — wrangler prints emoji
+  that crash the default-codepage decode on Windows otherwise (this crashes
+  a background reader thread, not the main call, so it doesn't fail the
+  push, but it does spam a traceback into the logs).
+- Authenticated via `wrangler login` (OAuth, browser-based — cannot be
+  scripted; the account is `rachadm23@gmail.com`).
+- Cloudflare Pages project `promakeupmihoubipos` created via
+  `wrangler pages project create`.
+- Cloudflare Access application configured through the Zero Trust dashboard
+  (no CLI/API path was used) — Applications → Self-hosted → destination
+  `promakeupmihoubipos.pages.dev` → policy "owner only" (Allow, Include:
+  Emails). **Gotcha hit while setting this up**: Cloudflare's current UI adds
+  an empty "Private IP" destination row by default that fails validation if
+  left as-is — delete it, keep only the public-hostname destination. Also
+  watch for browser autofill polluting a hostname-shaped field with a street
+  address — remove any destination that isn't the actual `.pages.dev`
+  hostname. **Access enforcement takes a minute or two to propagate** after
+  saving — don't conclude it's broken from an immediate check; wait, then
+  re-check for the redirect to `<team>.cloudflareaccess.com/cdn-cgi/access/login/...`.
 
 ## Cross-machine sync is automated
 
@@ -115,29 +174,39 @@ ones (stock value, receivables — these genuinely drift as trade happens).
 hook: every time Claude Code opens in this folder, it runs `git pull --ff-only`
 before doing anything else — silently, no-op if that fails (no upstream, offline,
 non-fast-forward) so it never surprises you with a merge or overwrites local
-work. That's the mechanism that makes "switch PCs mid-project" actually work:
-whichever machine has the latest push, the other one picks it up automatically
-on next session start. The same hook is also mirrored in the user's global
-`~/.claude/settings.json` so it applies to every future project on a given
-machine, not just this one — but the project-level copy here is what makes it
-work with **zero setup** after a fresh `git clone` on a brand new PC.
+work. The same hook is also mirrored in the user's global `~/.claude/settings.json`.
 
 `.claude/settings.local.json` is gitignored on purpose — it holds
 machine-specific permission allowlists, not meant to travel.
 
-**What this does NOT sync:** the raw conversation/session transcript. That's
-local per machine by design. This file (`CLAUDE.md`) plus the git history are
-the actual continuity mechanism — keep it current at natural stopping points
-rather than relying on transcript memory.
+**What this does NOT sync:** the raw conversation/session transcript, and
+(deliberately) `data/owner.db`, `backups/`, `remote-site/`, `.wrangler/` — see
+`.gitignore`. This file (`CLAUDE.md`) plus the git history are the actual
+continuity mechanism.
+
+## What's left (optional, not blocking)
+
+- **`.env` is empty on every machine** (gitignored, by design). Email and
+  Telegram digest channels are wired up but need real credentials. WhatsApp
+  additionally needs Meta template approval — see
+  `poslib/channels/whatsapp_channel.py` before turning it on.
+- **Arabic web font not fetched** (`tools/get_fonts.py` — harmless, falls
+  back to Windows' own Arabic font).
+- **Patch #1 (expiry stock) was explicitly dropped** — see discovery #6.
+- **This session's work is not yet committed/pushed** — run
+  `.\tools\sync.ps1` when ready (or ask Claude Code to do it) so the other PC
+  picks it up on its next session start.
+- Nothing else from Patch #2/#3 is outstanding. New metrics belong in
+  `poslib/metrics.py`, new diagnostic rules in `poslib/diagnostics.py`, new
+  owner-entered data in `poslib/ownerdata.py` (never in a file `etl.py`
+  rebuilds) — see the architecture rules at the bottom of `README.md`.
 
 ## Environment note
 
-This machine had neither Python nor Git on PATH at session start — both are
-installed now (Python via winget at
-`%LOCALAPPDATA%\Programs\Python\Python312`, Git at
-`C:\Program Files\Git\bin\git.exe`) but a fresh PowerShell may still need the
-full path if a new session's PATH hasn't picked it up. `.venv` itself is
-gitignored and must be rebuilt with `setup.bat` on any new machine.
+Python and Git are on PATH via winget installs
+(`%LOCALAPPDATA%\Programs\Python\Python312`, `C:\Program Files\Git\bin`).
+Node.js is present via a "pi-node" managed install; `wrangler` was added
+globally on top of it. `.venv` is gitignored and rebuilt with `setup.bat`.
 
 ## gstack (REQUIRED — global install)
 

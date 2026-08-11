@@ -221,12 +221,34 @@ class Config:
         if not isinstance(minute, int) or not (0 <= minute <= 59):
             problems.append(f"digest.minute is '{minute}'. It must be 0 to 59.")
 
+        backup_hour = self.get("backup.hour", 3)
+        backup_minute = self.get("backup.minute", 0)
+        if not isinstance(backup_hour, int) or not (0 <= backup_hour <= 23):
+            problems.append(f"backup.hour is '{backup_hour}'. It must be 0 to 23.")
+        if not isinstance(backup_minute, int) or not (0 <= backup_minute <= 59):
+            problems.append(f"backup.minute is '{backup_minute}'. It must be 0 to 59.")
+
         for key in ("thresholds.inventory.dead_stock_days",
                     "thresholds.customers.lapsed_days",
-                    "thresholds.customers.collection_risk_days"):
+                    "thresholds.customers.collection_risk_days",
+                    "thresholds.customers.credit_risk_medium_days",
+                    "thresholds.customers.credit_risk_high_days",
+                    "catalog.new_arrivals_days",
+                    "backup.keep_days"):
             val = self.get(key)
             if val is not None and (not isinstance(val, (int, float)) or val <= 0):
                 problems.append(f"{key} is '{val}'. It must be a positive number of days.")
+
+        pp = self.get("thresholds.margin.family_benchmark_pp")
+        if pp is not None and (not isinstance(pp, (int, float)) or pp <= 0):
+            problems.append(f"thresholds.margin.family_benchmark_pp is '{pp}'. "
+                            "It must be a positive number of percentage points.")
+
+        push_interval = self.get("remote.push_interval_seconds")
+        if push_interval is not None and (not isinstance(push_interval, (int, float))
+                                          or push_interval <= 0):
+            problems.append(f"remote.push_interval_seconds is '{push_interval}'. "
+                            "It must be a positive number of seconds.")
 
         if problems:
             raise ConfigError(

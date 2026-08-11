@@ -366,6 +366,37 @@ def _below_cost(c: Context) -> list[Finding]:
     )]
 
 
+@rule("family_margin_benchmark")
+def _family_margin_benchmark(c: Context) -> list[Finding]:
+    """
+    Products that look fine priced in isolation, but are outliers next to
+    every other product in their own brand/category.
+    """
+    out = c.m.family_margin_outliers()
+    if out.empty:
+        return []
+
+    gain = float((out["gap_pp"] / 100 * out["revenue_all"]).sum())
+    if gain <= 0:
+        return []
+    top = out.iloc[0]
+
+    return [Finding(
+        id="family_margin_below_average",
+        kind="failing",
+        severity=c.severity_for(gain),
+        money=gain,
+        page="products",
+        params={"count": ("number", len(out)),
+                "top_name": ("text", top["item_name"]),
+                "top_family": ("text", top["family_name"]),
+                "top_margin": ("pct", top["margin_pct"]),
+                "top_family_margin": ("pct", top["family_margin_pct"]),
+                "gap": ("pct", top["gap_pp"] / 100),
+                "gain": ("money", gain)},
+    )]
+
+
 # ===========================================================================
 #  MONEY OWED
 # ===========================================================================

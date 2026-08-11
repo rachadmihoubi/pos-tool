@@ -43,3 +43,31 @@ cache.building
 digests/
 logs/
 *.xlsx
+
+# Item photos extracted on-demand from the source database - not source, and
+# not portable data to sync (rebuilds automatically per machine).
+static/photo-cache/
+
+# Owner-entered data (competitor prices, etc). Deliberately NOT gitignored
+# in spirit - this is real, irreplaceable business data - but each machine
+# keeps its own copy rather than syncing through git; back it up via the
+# daily backup job instead.
+data/
+
+# Daily backups of the source database, cache and owner data. Never commit
+# these - it's a full copy of live business data, same reason *.dblx above
+# is excluded.
+backups/
+
+# The generated static export for the remote dashboard, and wrangler's own
+# local state/cache. Both are regenerated/re-fetched automatically; never
+# meant to be committed.
+remote-site/
+.wrangler/
+
+# Node.js, only present if wrangler was ever installed as a local project
+# dependency rather than globally.
+node_modules/
+
+# Local analysis output from the graphify skill - not project source.
+graphify-out/

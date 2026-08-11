@@ -82,7 +82,7 @@
         <tbody>
           {% for r in low %}
           <tr>
-            <td class="name">{{ r.item_name }}</td>
+            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
             <td class="name muted">{{ r.family_name }}</td>
             <td class="num strong" data-value="{{ r.revenue_all }}">{{ t.money(r.revenue_all) }}</td>
             <td class="num" data-value="{{ r.margin_pct or -9 }}">
@@ -125,7 +125,7 @@
         <tbody>
           {% for r in drift %}
           <tr>
-            <td class="name">{{ r.item_name }}</td>
+            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
             <td class="num" data-value="{{ r.first_cost or 0 }}">{{ t.money(r.first_cost) }}</td>
             <td class="num strong" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
             <td class="num" data-value="{{ r.first_price or 0 }}">{{ t.money(r.first_price) }}</td>
@@ -144,6 +144,46 @@
     </div>
   {% else %}
     <div class="empty">{{ t('products.drift_empty') }}</div>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------- family outliers #}
+<section class="panel">
+  <h2>{{ t('products.outliers_title') }}</h2>
+  <p class="note">{{ t('products.outliers_note', pp=benchmark_pp|int) }}</p>
+  {% if outliers %}
+    <div class="table-wrap scroll-y">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th>{{ t('common.product') }}</th>
+            <th>{{ t('common.family') }}</th>
+            <th class="num">{{ t('products.col_margin') }}</th>
+            <th class="num">{{ t('products.outliers_col_family_margin') }}</th>
+            <th class="num">{{ t('products.outliers_col_gap') }}</th>
+            <th class="num">{{ t('products.col_revenue') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in outliers %}
+          <tr>
+            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
+            <td class="name muted">{{ r.family_name }}</td>
+            <td class="num" data-value="{{ r.margin_pct or -9 }}">
+              <span class="delta down">{{ t.percent(r.margin_pct) }}</span>
+            </td>
+            <td class="num" data-value="{{ r.family_margin_pct or 0 }}">{{ t.percent(r.family_margin_pct) }}</td>
+            <td class="num strong" data-value="{{ r.gap_pp }}" style="color: var(--bad)">
+              {{ t.number(r.gap_pp, 1) }}
+            </td>
+            <td class="num">{{ t.money(r.revenue_all) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('products.outliers_empty') }}</div>
   {% endif %}
 </section>
 
@@ -169,7 +209,7 @@
         <tbody>
           {% for r in below %}
           <tr>
-            <td class="name">{{ r.item_name }}</td>
+            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
             <td class="num" data-value="{{ r.units }}">{{ t.number(r.units) }}</td>
             <td class="num strong" data-value="{{ r.loss }}" style="color: var(--bad)">{{ t.money(r.loss|abs) }}</td>
             <td class="num" data-value="{{ r.loss_per_unit }}">{{ t.money(r.loss_per_unit|abs) }}</td>
@@ -186,6 +226,47 @@
     </div>
   {% else %}
     <div class="empty">{{ t('products.below_cost_empty') }}</div>
+  {% endif %}
+</section>
+
+{# -------------------------------------------------------- new arrivals #}
+<section class="panel">
+  <h2>{{ t('products.new_arrivals_title', days=arrivals_days) }}</h2>
+  {% if arrivals %}
+    <p class="note">{{ t('products.new_arrivals_note') }}</p>
+    <textarea readonly rows="6" style="width:100%; font-family:inherit; font-size:14px; padding:8px;" id="arrivals-text">{{ arrivals_text }}</textarea>
+    <button type="button" class="btn" data-copy-target="arrivals-text" style="margin-top:8px;">{{ t('products.copy_text') }}</button>
+    <div class="table-wrap" style="margin-top:16px;">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th class="nosort"></th>
+            <th>{{ t('common.product') }}</th>
+            <th>{{ t('common.family') }}</th>
+            <th class="num">{{ t('common.price') }}</th>
+            <th class="num">{{ t('common.date') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in arrivals %}
+          <tr>
+            <td>
+              <img src="{{ url_for('api_item_photo', item_id=r.item_id) }}"
+                   alt="" width="32" height="32"
+                   style="object-fit:cover; border-radius:4px; vertical-align:middle;"
+                   onerror="this.hidden=true">
+            </td>
+            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
+            <td class="name muted">{{ r.family_name }}</td>
+            <td class="num">{{ t.money(r.price) }}</td>
+            <td class="num" data-value="{{ r.date_created }}">{{ t.date(r.date_created) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('products.new_arrivals_empty', days=arrivals_days) }}</div>
   {% endif %}
 </section>
 
@@ -215,7 +296,7 @@
       <tbody>
         {% for r in products %}
         <tr>
-          <td class="name">{{ r.item_name }}</td>
+          <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
           <td class="name muted">{{ r.family_name }}</td>
           <td class="num strong" data-value="{{ r.revenue_all }}">{{ t.money(r.revenue_all) }}</td>
           <td class="num" data-value="{{ r.gross_profit_all }}">{{ t.money(r.gross_profit_all) }}</td>
