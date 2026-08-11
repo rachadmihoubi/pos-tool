@@ -5,13 +5,8 @@ the build sessions that are not obvious from the code alone.
 
 ## What this is
 
-A local analysis tool for a wholesale cosmetics distributor in Algiers. Reads
-their POS's Access (Jet 4) database directly — no ODBC, no mdbtools, nothing
-installed but Python — and produces a dashboard, an Excel report, a daily
-digest in English/French/Arabic, automatic daily backups, and an optional
-password-gated remote view on Cloudflare Pages.
-
-**Status: feature-complete through Patch #3** (2026-08-10). Original build +
+See README.md for what the tool does. **Status: feature-complete through
+Patch #3** (2026-08-10). Original build +
 the cash/P&L, drill-down and date-range foundation ("Patch #2") + seven new
 Patch #3 features + silent background launch + remote viewing are all built,
 tested (169 tests) and — for the background launch and remote viewing —
@@ -96,93 +91,28 @@ goods is always computed from `ReceiptEntry` lines, never the header.
 "grows" values must never fall, point-in-time values (stock, receivables) are
 checked within tolerance since they drift as trade happens.
 
-## What was built this session (Patch #2 foundation + Patch #3)
+## Deployment state (not visible from the code)
 
-- **Cash/P&L page** (`/cash`) — income statement by month, cash/cheque/
-  transfer/credit split, till-session reconciliation, working capital.
-- **Date-range picker** on `/trend` and `/cash` (`?start=&end=`, whole-day
-  boundaries, degrades gracefully on bad input — never a 500).
-- **Customer & product drill-down pages** (`/customers/<id>`, `/products/<id>`)
-  — linked from the list pages; 404 for unknown IDs and for the walk-in
-  customer (not a real customer).
-- **New arrivals feed** — copyable plain-text list on `/products`, config
-  `catalog.new_arrivals_days` (default 7).
-- **Item photos** — best-effort, see discovery #7 above.
-- **Till/session reconciliation** — see discovery #4, surfaced on `/cash`.
-- **Inventory shrinkage** — event-level, see discovery #5, surfaced on
-  `/inventory`.
-- **Customer credit-risk tiers** (low/medium/high) — `thresholds.customers.
-  credit_risk_*` in config.yaml, surfaced on the customer profile and
-  `/receivables`.
-- **Family-level margin benchmarking** — `family_margin_outliers()`, new
-  diagnostic rule `family_margin_benchmark`, config `thresholds.margin.
-  family_benchmark_pp` (default 15pp).
-- **Competitor price log** — `poslib/ownerdata.py`, the first *write* path in
-  the app. Owns `data/owner.db`, a separate SQLite file `poslib/etl.py` never
-  touches (an ETL refresh fully replaces `cache.db` every time — anything
-  owner-entered stored there would be destroyed). Form + table on the product
-  drill-down page.
-- **Automatic daily backup** — `poslib/backup.py`, copies source `.dblx` +
-  `cache.db` + `data/owner.db` into `backups/YYYY-MM-DD/`, keeps 30 days.
-  Wired into `watcher.py` the same way the daily digest is.
-- **Silent background launch** — turned out to already be built from the
-  original session (`start-quiet.bat`, `install-startup.bat` using
-  `pythonw.exe` + `schtasks /sc onlogon`, no stored password). Added the one
-  missing piece, `stop-background.bat`. **`install-startup.bat` has been run
-  on this machine** — Task Scheduler entries "Shop Analysis - Dashboard" and
-  "Shop Analysis - Digest" are live.
-- **Remote viewing** — `poslib/present.py` + `templates/remote_dashboard.html`
-  + `export_static.py` build a lean, self-contained static snapshot (today's
-  KPIs, a trend chart, top customers/products, diagnostics alerts, cash
-  position — never the full receipt history). `poslib/remote.py` pushes it via
-  `wrangler pages deploy`. Wired into `watcher.py`, pushed after every cache
-  rebuild, gated by `remote.push_interval_seconds` (90s). **Live and
-  deployed**: Cloudflare Pages project `promakeupmihoubipos`, gated by
-  Cloudflare Access (email-allowlist policy "owner only", owner's email only).
-  `remote.enabled: true` in config.yaml.
+- **`install-startup.bat` has been run on this machine** — Task Scheduler
+  entries "Shop Analysis - Dashboard" and "Shop Analysis - Digest" are live.
+- **Remote viewing is live and deployed**: Cloudflare Pages project
+  `promakeupmihoubipos`, gated by Cloudflare Access (email-allowlist policy
+  "owner only", owner's email only). `remote.enabled: true` in config.yaml.
+  See `poslib/present.py`, `export_static.py`, `poslib/remote.py`,
+  `watcher.py` for how the push is wired.
 
-## Cloudflare setup on this machine (already done — for reference on a new PC)
+## Cloudflare setup on this machine
 
-- `wrangler` installed globally via `npm install -g wrangler` (Node.js was
-  already present). **On Windows, `subprocess` must call the fully-resolved
-  `wrangler.CMD` path**, not the bare string `"wrangler"` — `shutil.which()`
-  finds it fine but `subprocess.run(["wrangler", ...])` raises `WinError 2`
-  regardless; `poslib/remote.py:_wrangler_path()` handles this. Also:
-  `subprocess.run` needs explicit `encoding="utf-8"` — wrangler prints emoji
-  that crash the default-codepage decode on Windows otherwise (this crashes
-  a background reader thread, not the main call, so it doesn't fail the
-  push, but it does spam a traceback into the logs).
-- Authenticated via `wrangler login` (OAuth, browser-based — cannot be
-  scripted; the account is `rachadm23@gmail.com`).
-- Cloudflare Pages project `promakeupmihoubipos` created via
-  `wrangler pages project create`.
-- Cloudflare Access application configured through the Zero Trust dashboard
-  (no CLI/API path was used) — Applications → Self-hosted → destination
-  `promakeupmihoubipos.pages.dev` → policy "owner only" (Allow, Include:
-  Emails). **Gotcha hit while setting this up**: Cloudflare's current UI adds
-  an empty "Private IP" destination row by default that fails validation if
-  left as-is — delete it, keep only the public-hostname destination. Also
-  watch for browser autofill polluting a hostname-shaped field with a street
-  address — remove any destination that isn't the actual `.pages.dev`
-  hostname. **Access enforcement takes a minute or two to propagate** after
-  saving — don't conclude it's broken from an immediate check; wait, then
-  re-check for the redirect to `<team>.cloudflareaccess.com/cdn-cgi/access/login/...`.
+Already done — one-time setup + troubleshooting gotchas moved to the
+`cloudflare-remote-debug` skill (`.claude/skills/cloudflare-remote-debug/`).
+Load it if you're touching `poslib/remote.py`, `export_static.py`, or
+debugging the remote push.
 
 ## Cross-machine sync is automated
 
-`.claude/settings.json` (committed, travels with `git clone`) has a `SessionStart`
-hook: every time Claude Code opens in this folder, it runs `git pull --ff-only`
-before doing anything else — silently, no-op if that fails (no upstream, offline,
-non-fast-forward) so it never surprises you with a merge or overwrites local
-work. The same hook is also mirrored in the user's global `~/.claude/settings.json`.
-
-`.claude/settings.local.json` is gitignored on purpose — it holds
-machine-specific permission allowlists, not meant to travel.
-
-**What this does NOT sync:** the raw conversation/session transcript, and
-(deliberately) `data/owner.db`, `backups/`, `remote-site/`, `.wrangler/` — see
-`.gitignore`. This file (`CLAUDE.md`) plus the git history are the actual
-continuity mechanism.
+Sync mechanism: the `SessionStart` hook in `.claude/settings.json` (see that
+file). Sync exclusions and why: see `.gitignore`'s own comments. This file
+(`CLAUDE.md`) plus the git history are the actual continuity mechanism.
 
 ## What's left (optional, not blocking)
 
