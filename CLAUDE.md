@@ -43,8 +43,17 @@ wrong, so this fails loudly, not silently.
 2. **`Item.LastSold` is stale on ~60 products.** `metrics.py`'s
    `item_movement` uses the most recent *ticket* date (`last_sale_effective`)
    instead of the POS's own field.
-3. **Purchase line totals don't reconcile** — every supplier money figure is
-   built from cost-of-goods/stock-value instead of summed purchase lines.
+3. **~~Purchase line totals don't reconcile~~ — RESOLVED, see discovery #12.**
+   This was a real bug, not a quirk to preserve: supplier PAYMENT lines
+   (`ItemID = -2`, "Paiement de règlement") were being counted as if they
+   were goods purchased. Excluding them (`purchases()`'s `is_purchase`
+   filter) reconciles purchase totals to within ~1.4% of cost-of-goods +
+   stock-value — supplier money figures are built from summed purchase
+   lines again, same as everything else, not from cost-of-goods/stock-value
+   as a workaround. Kept here, struck through, so the history of what was
+   wrong and why isn't lost — the workaround language ("purchase amounts
+   are reported as relative shares... never as an amount of money spent")
+   is gone from `purchase_coverage()`'s docstring too.
 
 Also: `Receipt.TotalCost` is zero on `ReceiptType=1` ("DV") tickets — cost of
 goods is always computed from `ReceiptEntry` lines, never the header.
@@ -96,34 +105,7 @@ goods is always computed from `ReceiptEntry` lines, never the header.
 
 ## Remote-parity follow-up (2026-08-16) — full read-only remote feature parity
 
-10. **No supplier-payment records exist anywhere in this database — and
-    `Supplier.TotalPurchased` is a trap, not a money field.** Checked
-    directly against the raw schema: `StoreSafeIn` and `StoreSafeOut` —
-    the tables R.Lynx provides specifically for tracking cash moving in
-    and out of the till — are both completely empty (0 rows). `Charge`
-    (generic expenses) has exactly 4 rows total, all shop/warehouse rent,
-    nothing supplier-related. The only payment-adjacent figure anywhere is
-    `Supplier.Account` (`balance` in `suppliers()`), a single running
-    "amount currently owed" with no history, no dates, no line items.
-    A first attempt at this session showed `total_purchased - balance` as
-    an "estimated paid so far" — wrong, and reverted. `TotalPurchased`
-    looks like it should be an all-time money total but its values are
-    tiny (RUBY ROSE: `total_purchased` = 45, actual purchase value =
-    67,798,680 DZD) — it's a count of something (roughly order-sized), not
-    DZD, so subtracting real money (`balance`) from it produced a nonsense
-    large negative "amount paid" for every single supplier. See the note
-    on `suppliers()` in `metrics.py`. The honest alternative,
-    `purchase_value` (summed from real purchase lines), is *also* not
-    usable for this — discovery #3 already established purchase-line
-    totals run roughly double what they should. There is no field in this
-    database, computed or raw, that gives an honest "amount paid to
-    suppliers" figure — `balance` (what's currently owed) is the only
-    payment-related number shown anywhere, on the main Suppliers page.
-    Same category as discovery #5 (no stocktake line detail) — don't
-    build toward anything more granular unless a fresh copy from the
-    actual till PC someday shows the shop started using
-    `StoreSafeOut`/`Charge` for this.
-11. **Remote viewing reached full read-only feature parity with the local
+10. **Remote viewing reached full read-only feature parity with the local
     dashboard** (Today date presets + true custom ranges, Tickets and
     Stock catalog tabs, ticket/purchase drill-down), decided via a
     5-advisor council review that unanimously rejected any live-tunnel
@@ -133,6 +115,43 @@ goods is always computed from `ReceiptEntry` lines, never the header.
     caught before shipping: naive per-page drill-down export took ~19
     minutes (rebuilding `Metrics` from scratch per page); reusing one
     shared `Metrics` instance cut that to ~40 seconds.
+11. **A first attempt at "how much has been paid to suppliers" was wrong
+    and reverted — `Supplier.TotalPurchased` is a trap, not a money
+    field.** It looks like it should be an all-time purchase total but its
+    values are tiny (RUBY ROSE: `total_purchased` = 45, actual purchase
+    value = 67,798,680 DZD) — a count of something roughly order-sized,
+    not DZD. `total_purchased - balance` produced a nonsense large
+    negative "amount paid" for every single supplier; caught by eyeballing
+    the live page, not by a test. See the note on `suppliers()` in
+    `metrics.py`. This was fixed properly, not just reverted — see #12.
+12. **Supplier payments ARE recorded — as their own single-line "purchase"
+    transactions inside `PurchaseEntry`, the exact same idiom as customer
+    collections on the sales side.** Missed entirely in the first pass of
+    discovery #11 (checked `StoreSafeIn`/`StoreSafeOut`/`Charge` instead —
+    all empty or irrelevant — but never checked `PurchaseEntry` itself for
+    a sales-side-style pseudo-item, even though `lines`' `is_sale`/
+    `is_collection` split is exactly that pattern already). The user
+    caught it by showing screenshots of R.Lynx recording a payment as an
+    "Achat" (purchase) named "Paiement de règlement". Verified directly
+    against the real database: 271 rows with `ItemID = -2`, `ItemName =
+    "Paiement de règlement"`, totalling 225,852,701 DZD, each its own
+    unique `PurchaseID` containing nothing else. `purchases()` now splits
+    `is_purchase`/`is_payment` on this; `supplier_payments` is the
+    payment-only view; `purchase_coverage()` reports `payments_total`/
+    `payments_count` separately from purchase value.
+    **This also explains discovery #3**: those payment lines were being
+    summed into purchase totals as if they were goods bought — removing
+    them brought the purchase-vs-(COGS+stock) ratio from 1.75 down to
+    1.01. Checked whether payments trace to a specific supplier the same
+    way real purchase lines do (via `SupplierItem`): they don't — zero
+    `SupplierItem` rows exist for `ItemID = -2`, by item or by
+    `PurchaseID`. So `supplier_payments` is a dated all-time total and
+    line list, never a per-supplier breakdown; `balance` (what's
+    currently owed) remains the only *per-supplier* payment figure.
+    Cross-check: `real_purchase_value - payments_total` over all suppliers
+    ≈ 1.10× the sum of current balances — consistent with the already-
+    known ~11% of purchase lines that don't trace to a supplier at all,
+    a good sign this reading is correct.
 
 ## Verified numbers (as of 2026-08-10, re-verify with `pytest tests -q`)
 

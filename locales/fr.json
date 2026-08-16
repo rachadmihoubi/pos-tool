@@ -461,7 +461,9 @@
     "col_last": "Dernier achat",
     "col_days_since": "Jours depuis",
     "col_balance": "Vous leur devez",
-    "balance_note": "\"Vous leur devez\" est le seul chiffre lié aux paiements que ces données permettent d'afficher - le logiciel de caisse n'enregistre les paiements individuels aux fournisseurs nulle part (vérifié directement : les tables prévues pour cela sont vides), il n'y a donc ni historique de paiement ni total payé à afficher, seulement ce solde en cours.",
+    "col_payments_total": "Payé aux fournisseurs (depuis toujours)",
+    "payments_count_note": "{count} paiements enregistrés",
+    "balance_note": "Les {total} payés aux fournisseurs ci-dessus sont un vrai total depuis toujours ({count} paiements individuels, chacun une ligne \"Paiement de règlement\" dans le logiciel de caisse) - mais aucun ne peut être rattaché à un fournisseur précis, donc ce total ne peut pas être réparti en une colonne \"payé à ce jour\" par fournisseur. \"Vous leur devez\" (le solde en cours) est le seul chiffre de paiement disponible par fournisseur.",
     "col_orders": "Commandes",
     "col_gap": "Jours habituels entre commandes",
     "col_overdue": "En retard",
@@ -488,7 +490,7 @@
     "no_date": "Sans date",
     "view_transactions": "Voir toutes les transactions d'achat",
     "detail_back": "Retour aux transactions",
-    "payments_not_tracked_note": "Cet outil ne peut afficher aucun paiement aux fournisseurs, ni individuellement ni en total - le logiciel de caisse ne les enregistre nulle part, seulement les achats eux-mêmes. Le chiffre le plus proche disponible est le solde dû en cours, affiché sur la page principale des fournisseurs."
+    "payments_not_tracked_note": "Les paiements aux fournisseurs sont enregistrés dans le logiciel de caisse, mais comme leurs propres transactions à une seule ligne (\"Paiement de règlement\") qui ne portent jamais de lien vers un fournisseur - ils sont donc exclus de cette liste plutôt qu'affichés comme des achats non identifiés. Le total depuis toujours apparaît sur la page principale des fournisseurs."
   },
 
   "diagnostics": {

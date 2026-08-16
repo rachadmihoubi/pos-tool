@@ -24,6 +24,11 @@
     <div class="value">{{ t.percent(top5_share) }}</div>
     <div class="sub">{{ t('suppliers.top_share', count=5, share=t.percent(top5_share)) }}</div>
   </div>
+  <div class="tile">
+    <div class="label">{{ t('suppliers.col_payments_total') }}</div>
+    <div class="value">{{ t.money(coverage.payments_total) }}</div>
+    <div class="sub">{{ t('suppliers.payments_count_note', count=t.number(coverage.payments_count)) }}</div>
+  </div>
 </section>
 
 <section class="panel">
@@ -70,7 +75,9 @@
       </tbody>
     </table>
   </div>
-  <p class="note" style="margin-top: 12px;">{{ t('suppliers.balance_note') }}</p>
+  <p class="note" style="margin-top: 12px;">
+    {{ t('suppliers.balance_note', total=t.money(coverage.payments_total), count=t.number(coverage.payments_count)) }}
+  </p>
 </section>
 
 <section class="split-2">

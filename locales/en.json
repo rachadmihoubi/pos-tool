@@ -461,7 +461,9 @@
     "col_last": "Last purchase",
     "col_days_since": "Days since",
     "col_balance": "You owe them",
-    "balance_note": "\"You owe them\" is the one payment-related figure this data supports - the till software does not log individual supplier payments (checked directly: the tables meant for this are empty), so no payment history or paid-so-far total can be shown, only this running balance.",
+    "col_payments_total": "Paid to suppliers (all-time)",
+    "payments_count_note": "{count} payments recorded",
+    "balance_note": "The {total} paid to suppliers above is a real all-time total ({count} individual payments, each a \"Paiement de règlement\" line in the till software) - but none of them can be matched back to a specific supplier, so it cannot be split into a per-supplier paid-so-far column. \"You owe them\" (the running balance) is the only payment figure available per supplier.",
     "col_orders": "Orders",
     "col_gap": "Usual days between orders",
     "col_overdue": "Overdue",
@@ -488,7 +490,7 @@
     "no_date": "No date",
     "view_transactions": "See all purchase transactions",
     "detail_back": "Back to transactions",
-    "payments_not_tracked_note": "This tool cannot show payments to suppliers, individually or as a total - the till software does not record them anywhere, only the purchases themselves. The closest available figure is the running balance owed, shown on the main Suppliers page."
+    "payments_not_tracked_note": "Payments to suppliers are recorded in the till software, but as their own single-line transactions (\"Paiement de règlement\") that never carry a supplier link - so they're excluded from this list rather than shown as unidentified purchases. The all-time total appears on the main Suppliers page."
   },
 
   "diagnostics": {

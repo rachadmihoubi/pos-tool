@@ -591,6 +591,25 @@ class TestSupplierTransactions:
         assert (with_both["total_purchased"] < with_both["purchase_value"]).all(), \
             "total_purchased looks like real money now - re-derive estimated_paid if so"
 
+    def test_transactions_list_excludes_payment_only_purchases(self, metrics: Metrics):
+        """
+        A payment-only purchase_id (a "Paiement de règlement" line with
+        nothing else on it) must not show up in the transaction list as an
+        unidentified goods purchase - that would misrepresent what it is.
+        """
+        st = metrics.supplier_transactions()
+        payment_purchase_ids = set(metrics.supplier_payments["purchase_id"])
+        if st.empty or not payment_purchase_ids:
+            pytest.skip("no purchase or payment data in this database")
+        assert not (set(st["purchase_id"]) & payment_purchase_ids), \
+            "a payment-only purchase leaked into the transactions list"
+
+    def test_supplier_payments_total_matches_coverage(self, metrics: Metrics):
+        pay = metrics.supplier_payments
+        cov = metrics.purchase_coverage()
+        assert abs(float(pay["amount"].sum()) - cov["payments_total"]) < 0.01
+        assert len(pay) == cov["payments_count"]
+
 
 class TestCatalog:
 
@@ -676,17 +695,31 @@ class TestDataQuality:
         assert gap / revenue < 0.001, \
             "reported and calculated profit disagree by more than a rounding error"
 
-    def test_purchase_totals_are_marked_as_not_reconciling(self, metrics: Metrics):
+    def test_purchase_totals_reconcile_once_payments_are_excluded(self, metrics: Metrics):
         """
-        The purchase lines add up to about twice the cost of everything ever
-        sold. That cannot be right, and the tool must say so rather than
-        presenting it as spend.
+        Purchase lines used to add up to about twice the cost of everything
+        ever sold - traced to supplier PAYMENT lines (ItemID=-2, "Paiement
+        de règlement") being counted as if they were goods purchased.
+        purchase_coverage() now excludes them (is_purchase-filtered) and
+        the totals reconcile to within a few percent, same tolerance the
+        cash-realized/receivables reconciliation elsewhere already uses.
         """
         coverage = metrics.purchase_coverage()
         assert coverage["value_ratio"] is not None
-        assert coverage["value_reconciles"] is False, \
-            "if purchases now reconcile, the warning on the Suppliers page " \
-            "should be removed"
+        assert coverage["value_reconciles"] is True, \
+            "purchase totals stopped reconciling - check whether a new " \
+            "kind of non-goods PurchaseEntry line has appeared"
+
+    def test_payment_lines_are_reported_separately_from_purchases(self, metrics: Metrics):
+        coverage = metrics.purchase_coverage()
+        assert coverage["payments_total"] >= 0
+        assert coverage["payments_count"] >= 0
+        # A payment line must never be double-counted inside "value" too.
+        pay = metrics.supplier_payments
+        if not pay.empty:
+            assert (pay["item_id"] == -2).all()
+            assert pay["is_payment"].all()
+            assert not pay["is_purchase"].any()
 
     def test_tender_reconciliation_is_reported(self, metrics: Metrics):
         tr = metrics.data_quality()["tender_reconciliation"]

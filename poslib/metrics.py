@@ -320,11 +320,25 @@ class Metrics:
         has to be rebuilt from SupplierItem, which records supplier, purchase
         and item together with a date.
 
-        The rebuild is NOT complete - about a fifth of purchase lines cannot
-        be traced to a supplier and most purchases have no date. Rather than
+        The rebuild is NOT complete - about a tenth of real purchase lines
+        cannot be traced to a supplier and about a third of purchases carry
+        no date (see `purchase_coverage()`'s `supplier_share`/`date_share`
+        for the current figures - re-check after any data change rather
+        than trusting this comment's numbers going stale). Rather than
         quietly dropping them, everything is kept and `purchase_coverage()`
         reports exactly how much is traceable, so no supplier figure is ever
         presented as more complete than it is.
+
+        Rule (same idea as `lines`' is_sale/is_collection, different
+        sentinel): `ItemID = -2` with `ItemName = "Paiement de règlement"`
+        is a payment TO a supplier, not goods received - R.Lynx records it
+        as its own single-line "purchase" transaction. There are 271 of
+        these in this database, worth 225,852,701 DZD, and mixing them into
+        purchase totals was the actual cause of the "purchase lines run
+        about double what they should" discrepancy an earlier session
+        flagged (recomputing with them excluded reconciles the totals to
+        within ~1.4%, not ~75%). `is_purchase`/`is_payment` split them;
+        `supplier_payments` below is the payment-only view.
         """
         if not self._columns_of("PurchaseEntry"):
             return pd.DataFrame()
@@ -338,6 +352,8 @@ class Metrics:
         for col in ("qty", "price", "cost", "new_cost", "new_stock", "amount"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df["item_id"] = pd.to_numeric(df["item_id"], errors="coerce").fillna(0).astype(int)
+        df["is_payment"] = df["item_id"] == -2
+        df["is_purchase"] = ~df["is_payment"]
         df["supplier_id"] = np.nan
         df["purchase_time"] = pd.NaT
 
@@ -372,28 +388,50 @@ class Metrics:
 
         return df
 
+    @cached_property
+    def supplier_payments(self) -> pd.DataFrame:
+        """
+        Money paid to suppliers - the `ItemID = -2` "Paiement de règlement"
+        lines from `purchases`, each its own single-line purchase
+        transaction. None of these trace to a specific supplier: R.Lynx
+        never creates a SupplierItem row for the payment pseudo-item
+        (checked directly - zero matches, by item or by purchase), unlike
+        real purchase lines where SupplierItem is exactly how the supplier
+        link gets rebuilt. So this is a dated list and an all-time total,
+        never a per-supplier breakdown - the same "blank, not guessed"
+        discipline `purchase_coverage()` already applies to untraceable
+        purchase lines.
+        """
+        return self.purchases[self.purchases["is_payment"]].copy()
+
     def purchase_coverage(self) -> dict[str, Any]:
         """
         How much of the purchase history can actually be traced back to a
         supplier and a date. Shown on the Suppliers and Data quality screens
         so the supplier figures are read with the right amount of trust.
+
+        Scoped to real purchases (`is_purchase`) throughout - payments are
+        reported here too, but only as their own separate total, never
+        mixed into "how much was purchased" (that mixing was a real bug,
+        see `purchases`' docstring).
         """
-        p = self.purchases
+        p = self.purchases[self.purchases["is_purchase"]]
+        pay = self.supplier_payments
+        payments_total = float(pay["amount"].sum())
+        payments_count = int(len(pay))
         if p.empty:
             return {"lines": 0, "with_supplier": 0, "supplier_share": 0.0,
                     "orders": 0, "orders_dated": 0, "date_share": 0.0,
-                    "value": 0.0, "value_with_supplier": 0.0}
+                    "value": 0.0, "value_with_supplier": 0.0,
+                    "payments_total": payments_total, "payments_count": payments_count}
         total_val = float(p["amount"].sum())
         matched = p[p["supplier_id"].notna()]
         orders = int(p["purchase_id"].nunique())
         dated = int(p.dropna(subset=["purchase_time"])["purchase_id"].nunique())
 
         # Sanity check the purchase totals against what we know was sold.
-        # Everything ever sold cost this much, and this much is still on the
-        # shelf, so purchases should be roughly the sum of the two. In this
-        # database the purchase lines add up to about twice that, which
-        # cannot be right - so purchase amounts are reported as relative
-        # shares between suppliers and never as an amount of money spent.
+        # Everything ever sold cost this much, and this much is still on
+        # the shelf, so purchases should be roughly the sum of the two.
         cogs = float(self.sales["line_cost"].sum())
         stock = float(self.items["stock_value"].sum())
         expected = cogs + stock
@@ -411,6 +449,8 @@ class Metrics:
             "expected_value": expected,
             "value_ratio": (total_val / expected) if expected else None,
             "value_reconciles": bool(expected and 0.75 <= total_val / expected <= 1.35),
+            "payments_total": payments_total,
+            "payments_count": payments_count,
         }
 
     # =====================================================================
@@ -1805,15 +1845,20 @@ class Metrics:
                            purchase lines that could be traced to a supplier
           item_revenue   - what the products they supply have earned you
 
-        Use `purchase_coverage()` alongside this. About a fifth of purchase
-        lines cannot be traced to any supplier, so purchase_value understates
-        every supplier by an unknown amount and must not be read as a total.
+        Use `purchase_coverage()` alongside this. About a tenth of real
+        purchase lines cannot be traced to any supplier, so purchase_value
+        understates every supplier by an unknown amount and must not be
+        read as a total.
         """
         sup = self.suppliers.copy()
         if sup.empty:
             return pd.DataFrame()
 
-        pur = self.purchases
+        # Payment lines never get a supplier_id (see purchases()'s
+        # docstring), so dropna(subset=["supplier_id"]) already excludes
+        # them from purchase_value/purchase_lines/orders below - the
+        # is_purchase filter documents that rather than relying on it.
+        pur = self.purchases[self.purchases["is_purchase"]]
         if not pur.empty and pur["supplier_id"].notna().any():
             g = (pur.dropna(subset=["supplier_id"])
                  .groupby("supplier_id", as_index=False)
@@ -1871,8 +1916,13 @@ class Metrics:
         drill-down list. Supplier and date are blank exactly as often as
         `purchase_coverage()` already reports they are missing - nothing
         here is guessed.
+
+        Scoped to real purchases (`is_purchase`) - see `supplier_payments`
+        for the payment-only transactions this excludes. Mixing the two
+        would show a supplier payment as if it were an unidentified goods
+        purchase, which is worse than just leaving it off this list.
         """
-        p = self.purchases
+        p = self.purchases[self.purchases["is_purchase"]]
         if p.empty:
             return p
         g = (p.groupby("purchase_id", as_index=False)
@@ -1912,8 +1962,14 @@ class Metrics:
         """
         How much you spent buying stock each month, and the average cost per
         unit bought. Covers only the purchases that carry a date.
+
+        Payment lines never carry a date (no SupplierItem row exists for
+        the payment pseudo-item, which is where purchase_time comes from),
+        so `dropna(subset=["purchase_time"])` already excludes them - the
+        explicit `is_purchase` filter is redundant today but documents the
+        intent rather than relying on that as an implementation accident.
         """
-        pur = self.purchases
+        pur = self.purchases[self.purchases["is_purchase"]]
         if pur.empty or pur["purchase_time"].isna().all():
             return pd.DataFrame()
         p = pur.dropna(subset=["purchase_time"]).copy()
