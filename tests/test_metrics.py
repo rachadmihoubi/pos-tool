@@ -373,6 +373,42 @@ class TestCash:
         assert cash["by_month"].empty
 
 
+class TestCashRealizedSplit:
+
+    def test_split_adds_up_to_revenue(self, metrics: Metrics):
+        tk = metrics.tickets
+        gap = (tk["cash_revenue"] + tk["on_account_revenue"] - tk["revenue"]).abs()
+        assert (gap < 0.01).all(), "cash + on-account must always equal revenue"
+
+    def test_fully_paid_ticket_has_no_on_account(self, metrics: Metrics):
+        tk = metrics.tickets
+        fully_paid = tk[(tk["credit_account"].fillna(0) == 0) & (tk["revenue"] > 0)]
+        if fully_paid.empty:
+            pytest.skip("no fully cash/cheque/transfer-paid ticket with revenue in this database")
+        assert (fully_paid["on_account_revenue"].abs() < 0.01).all()
+
+    def test_fully_on_account_ticket_has_no_cash(self, metrics: Metrics):
+        tk = metrics.tickets
+        tender = tk["cash"].fillna(0) + tk["cheque"].fillna(0) + tk["transfer"].fillna(0)
+        fully_credit = tk[(tender == 0) & (tk["credit_account"].fillna(0) > 0) & (tk["revenue"] > 0)]
+        if fully_credit.empty:
+            pytest.skip("no fully-on-account ticket with revenue in this database")
+        assert (fully_credit["cash_revenue"].abs() < 0.01).all()
+
+    def test_zero_tender_defaults_to_fully_realized(self, metrics: Metrics):
+        """
+        A ticket with no tender recorded at all (cash=cheque=transfer=
+        credit_account=0) is not evidence the customer owes money - nothing
+        was ever put "on account" for it, so it must not silently show up
+        as on-account revenue.
+        """
+        tk = metrics.tickets
+        no_tender = tk[(tk["total_tender"] == 0) & (tk["revenue"] != 0)]
+        if no_tender.empty:
+            pytest.skip("every ticket with revenue in this database records some tender")
+        assert (no_tender["on_account_revenue"].abs() < 0.01).all()
+
+
 class TestCatalog:
 
     def test_new_arrivals_upper_bound(self, metrics: Metrics):
