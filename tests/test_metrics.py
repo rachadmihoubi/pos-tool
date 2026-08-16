@@ -572,20 +572,24 @@ class TestSupplierTransactions:
     def test_purchase_detail_unknown_id_returns_none(self, metrics: Metrics):
         assert metrics.purchase_detail(-999999999) is None
 
-    def test_estimated_paid_derives_from_purchased_minus_balance(self, metrics: Metrics):
+    def test_total_purchased_is_not_a_money_figure(self, metrics: Metrics):
         """
-        There is no per-payment record for suppliers anywhere in this
-        database, so estimated_paid must always be exactly
-        total_purchased - balance, a single all-time figure - never
-        anything more granular, since the data to build anything more
-        granular does not exist.
+        Regression guard for a real mistake made and reverted this
+        session: `Supplier.TotalPurchased` looks like it should be an
+        all-time money total, but its values are tiny (a count, not DZD) -
+        subtracting `balance` (real money) from it produces a nonsense
+        negative "amount paid" for every supplier. If this ever stops
+        being true, something in the source data changed and the note on
+        `suppliers()` needs re-checking before trusting the field again.
         """
         sup = metrics.supplier_summary()
-        if sup.empty:
-            pytest.skip("no suppliers in this database")
-        assert "estimated_paid" in sup.columns
-        expected = sup["total_purchased"].fillna(0.0) - sup["balance"].fillna(0.0)
-        assert (sup["estimated_paid"] - expected).abs().max() < 0.01
+        if sup.empty or sup["purchase_value"].sum() == 0:
+            pytest.skip("no purchase data in this database")
+        with_both = sup[(sup["total_purchased"] > 0) & (sup["purchase_value"] > 0)]
+        if with_both.empty:
+            pytest.skip("no supplier has both fields populated")
+        assert (with_both["total_purchased"] < with_both["purchase_value"]).all(), \
+            "total_purchased looks like real money now - re-derive estimated_paid if so"
 
 
 class TestCatalog:

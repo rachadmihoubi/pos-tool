@@ -96,20 +96,33 @@ goods is always computed from `ReceiptEntry` lines, never the header.
 
 ## Remote-parity follow-up (2026-08-16) — full read-only remote feature parity
 
-10. **No supplier-payment records exist anywhere in this database.**
-    Checked directly against the raw schema: `StoreSafeIn` and
-    `StoreSafeOut` — the tables R.Lynx provides specifically for tracking
-    cash moving in and out of the till — are both completely empty (0
-    rows). `Charge` (generic expenses) has exactly 4 rows total, all shop/
-    warehouse rent, nothing supplier-related. The only payment-adjacent
-    figure anywhere is `Supplier.Account`, a single running "amount
-    currently owed" balance with no history, no dates, no line items.
-    `supplier_summary()`'s `estimated_paid` column (`total_purchased -
-    balance`) is therefore the most this data will ever support — a single
-    all-time estimate, never a payment transaction history. Same category
-    as discovery #5 (no stocktake line detail) — don't build toward
-    anything more granular unless a fresh copy from the actual till PC
-    someday shows the shop started using `StoreSafeOut`/`Charge` for this.
+10. **No supplier-payment records exist anywhere in this database — and
+    `Supplier.TotalPurchased` is a trap, not a money field.** Checked
+    directly against the raw schema: `StoreSafeIn` and `StoreSafeOut` —
+    the tables R.Lynx provides specifically for tracking cash moving in
+    and out of the till — are both completely empty (0 rows). `Charge`
+    (generic expenses) has exactly 4 rows total, all shop/warehouse rent,
+    nothing supplier-related. The only payment-adjacent figure anywhere is
+    `Supplier.Account` (`balance` in `suppliers()`), a single running
+    "amount currently owed" with no history, no dates, no line items.
+    A first attempt at this session showed `total_purchased - balance` as
+    an "estimated paid so far" — wrong, and reverted. `TotalPurchased`
+    looks like it should be an all-time money total but its values are
+    tiny (RUBY ROSE: `total_purchased` = 45, actual purchase value =
+    67,798,680 DZD) — it's a count of something (roughly order-sized), not
+    DZD, so subtracting real money (`balance`) from it produced a nonsense
+    large negative "amount paid" for every single supplier. See the note
+    on `suppliers()` in `metrics.py`. The honest alternative,
+    `purchase_value` (summed from real purchase lines), is *also* not
+    usable for this — discovery #3 already established purchase-line
+    totals run roughly double what they should. There is no field in this
+    database, computed or raw, that gives an honest "amount paid to
+    suppliers" figure — `balance` (what's currently owed) is the only
+    payment-related number shown anywhere, on the main Suppliers page.
+    Same category as discovery #5 (no stocktake line detail) — don't
+    build toward anything more granular unless a fresh copy from the
+    actual till PC someday shows the shop started using
+    `StoreSafeOut`/`Charge` for this.
 11. **Remote viewing reached full read-only feature parity with the local
     dashboard** (Today date presets + true custom ranges, Tickets and
     Stock catalog tabs, ticket/purchase drill-down), decided via a

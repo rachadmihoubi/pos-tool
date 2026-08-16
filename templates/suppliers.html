@@ -46,7 +46,6 @@
           <th class="num">{{ t('suppliers.col_stock_value') }}</th>
           <th class="num">{{ t('suppliers.col_purchase_value') }}</th>
           <th class="num">{{ t('suppliers.col_balance') }}</th>
-          <th class="num">{{ t('suppliers.col_estimated_paid') }}</th>
           <th class="num">{{ t('suppliers.col_last') }}</th>
           <th class="num">{{ t('suppliers.col_days_since') }}</th>
         </tr>
@@ -62,11 +61,6 @@
           <td class="num" data-value="{{ s.item_stock_value or 0 }}">{{ t.money(s.item_stock_value) }}</td>
           <td class="num muted" data-value="{{ s.purchase_value or 0 }}">{{ t.money(s.purchase_value) }}</td>
           <td class="num" data-value="{{ s.balance or 0 }}">{{ t.money(s.balance) if s.balance else '—' }}</td>
-          <td class="num" data-value="{{ s.estimated_paid or 0 }}">
-            {% if s.estimated_paid and s.estimated_paid < 0 %}
-              <span class="pill pill-bad" title="{{ t('suppliers.col_estimated_paid_note') }}">{{ t.money(s.estimated_paid) }}</span>
-            {% else %}{{ t.money(s.estimated_paid) }}{% endif %}
-          </td>
           <td class="num" data-value="{{ s.last_purchase }}">{{ t.date(s.last_purchase) }}</td>
           <td class="num" data-value="{{ s.days_since_purchase or 99999 }}">
             {{ t.number(s.days_since_purchase) if s.days_since_purchase is not none else '—' }}
@@ -76,7 +70,7 @@
       </tbody>
     </table>
   </div>
-  <p class="note" style="margin-top: 12px;">{{ t('suppliers.col_estimated_paid_note') }}</p>
+  <p class="note" style="margin-top: 12px;">{{ t('suppliers.balance_note') }}</p>
 </section>
 
 <section class="split-2">

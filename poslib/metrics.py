@@ -297,6 +297,13 @@ class Metrics:
             FROM Supplier
         """)
         df["balance"] = pd.to_numeric(df["balance"], errors="coerce").fillna(0.0)
+        # `TotalPurchased` is NOT a money figure - values are single/double
+        # digits (a count, roughly on the same order as `orders` in
+        # `supplier_summary()`), while `balance` is real DZD. Verified by
+        # comparing against `purchase_value` (RUBY ROSE: total_purchased=45
+        # vs purchase_value=67,798,680 DZD) - do not subtract balance from
+        # this expecting a money result, that was tried and produced a
+        # nonsense negative "amount paid" for every single supplier.
         df["total_purchased"] = pd.to_numeric(df["total_purchased"], errors="coerce").fillna(0)
         df["last_purchase"] = pd.to_datetime(df["last_purchase"], errors="coerce")
         df["supplier_name"] = df["supplier_name"].fillna("").astype(str)
@@ -1845,14 +1852,6 @@ class Metrics:
         sup["days_since_purchase"] = (self.now - sup["last_purchase"]).dt.days
         sup["margin_pct"] = np.where(sup["item_revenue"] > 0,
                                      sup["item_gross_profit"] / sup["item_revenue"], np.nan)
-
-        # There is no line-item record of money paid to suppliers anywhere
-        # in this database (checked: StoreSafeIn/StoreSafeOut, the tables
-        # meant for exactly this, are both empty; Charge has 4 rows, all
-        # rent). `balance` is the one number the POS itself maintains -
-        # what's currently owed - so "paid so far" can only ever be a
-        # single derived all-time estimate, never a transaction history.
-        sup["estimated_paid"] = sup["total_purchased"].fillna(0.0) - sup["balance"].fillna(0.0)
 
         for col, share in (("purchase_value", "purchase_share"),
                            ("item_revenue", "revenue_share")):
