@@ -7,6 +7,7 @@ it is what stops a screen ever being half translated.
 
 from __future__ import annotations
 
+import datetime
 import json
 import re
 
@@ -221,6 +222,14 @@ class TestDashboard:
             response = client.get(f"{path}?{query}")
             assert response.status_code == 200, \
                 f"{path}?{query} returned {response.status_code}, not 200"
+
+    @pytest.mark.parametrize("query", [
+        "", "?start=2025-01-01&end=2025-01-01", "?start=2025-01-01&end=2025-01-07",
+        "?start=2025-01-01&end=2025-01-31",
+    ])
+    def test_today_accepts_single_day_and_range_queries(self, client, query):
+        response = client.get(f"/today{query}")
+        assert response.status_code == 200, f"/today{query} returned {response.status_code}"
 
     @pytest.mark.parametrize("lang", LANGUAGES)
     def test_customer_drilldown_loads_in_every_language(self, client, metrics, lang):

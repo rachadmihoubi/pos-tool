@@ -250,30 +250,57 @@ def home() -> Response:
 def page_today() -> str:
     m, etl, conn = open_metrics()
     try:
-        d = m.today()
         t = get_translator(current_language())
+        start, end = date_range_from_request()
 
-        # Trading hours, taken from when sales have actually happened rather
-        # than assumed, so the chart fits this shop.
-        by_hour = d["by_hour"]
-        all_hours = m.sales["hour"].dropna()
-        lo = int(all_hours.quantile(0.01)) if not all_hours.empty else 8
-        hi = int(all_hours.quantile(0.99)) if not all_hours.empty else 20
-        hours = list(range(max(0, lo), min(23, hi) + 1))
-        hour_map = dict(zip(by_hour["hour"].tolist(),
-                            by_hour["revenue"].tolist())) if not by_hour.empty else {}
+        if start is None and end is None:
+            single_day = m.now.date()
+        elif start is not None and (end is None or end == start):
+            single_day = start
+        elif start is None and end is not None:
+            single_day = end
+        else:
+            # Both given and different (the only way to reach this branch,
+            # since the branch above already caught start == end) - a real
+            # multi-day range.
+            single_day = None
+
+        if single_day is not None:
+            d = m.today(target_date=single_day)
+            period = None
+        else:
+            d = None
+            period = m.period_stats(start, end)
+
+        cache = etl.cache_info()
+
+        if d is not None:
+            by_hour = d["by_hour"]
+            all_hours = m.sales["hour"].dropna()
+            lo = int(all_hours.quantile(0.01)) if not all_hours.empty else 8
+            hi = int(all_hours.quantile(0.99)) if not all_hours.empty else 20
+            hours = list(range(max(0, lo), min(23, hi) + 1))
+            hour_map = dict(zip(by_hour["hour"].tolist(),
+                                by_hour["revenue"].tolist())) if not by_hour.empty else {}
+            hour_chart = charts.combo_chart(
+                labels=[f"{h:02d}" for h in hours],
+                bars=[float(hour_map.get(h, 0.0)) for h in hours],
+                rtl=t.is_rtl, max_labels=24)
+            weekday_name = t.weekday_name(single_day.weekday())
+        else:
+            hour_chart = None
+            weekday_name = None
 
         return render_template(
             "today.html",
             d=d,
-            weekday_name=t.weekday_name(datetime.datetime.now().weekday()),
-            top_items=rows(d["top_items"]),
-            top_customers=rows(d["top_customers"]),
-            hour_chart=charts.combo_chart(
-                labels=[f"{h:02d}" for h in hours],
-                bars=[float(hour_map.get(h, 0.0)) for h in hours],
-                rtl=t.is_rtl, max_labels=24),
-            cache=etl.cache_info(),
+            period=period,
+            single_day=single_day,
+            weekday_name=weekday_name,
+            top_items=rows(d["top_items"]) if d is not None else rows(period["top_items"]),
+            top_customers=rows(d["top_customers"]) if d is not None else rows(period["top_customers"]),
+            hour_chart=hour_chart,
+            cache=cache,
         )
     finally:
         conn.close()
