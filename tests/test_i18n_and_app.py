@@ -177,7 +177,8 @@ class TestDashboard:
         return app.test_client()
 
     PAGES = ["/today", "/trend", "/customers", "/receivables", "/inventory",
-             "/products", "/suppliers", "/cash", "/diagnostics", "/data-quality"]
+             "/products", "/suppliers", "/cash", "/diagnostics", "/data-quality",
+             "/tickets"]
 
     @pytest.mark.parametrize("lang", LANGUAGES)
     def test_every_page_loads_in_every_language(self, client, lang):
@@ -190,7 +191,8 @@ class TestDashboard:
     def test_no_untranslated_keys_leak_onto_a_page(self, client, lang):
         pattern = re.compile(
             r"\b(?:app|nav|common|today|trend|customers|segments|receivables|"
-            r"inventory|products|suppliers|cash|diagnostics|findings|dataquality)"
+            r"inventory|products|suppliers|cash|diagnostics|findings|dataquality|"
+            r"tickets)"
             r"\.[a-z_][a-z_0-9.]*")
         for path in self.PAGES:
             body = client.get(f"{path}?lang={lang}").get_data(as_text=True)
@@ -230,6 +232,22 @@ class TestDashboard:
     def test_today_accepts_single_day_and_range_queries(self, client, query):
         response = client.get(f"/today{query}")
         assert response.status_code == 200, f"/today{query} returned {response.status_code}"
+
+    def test_tickets_page_loads(self, client):
+        response = client.get("/tickets?start=2020-01-01&end=2030-01-01")
+        assert response.status_code == 200
+
+    @pytest.mark.parametrize("lang", LANGUAGES)
+    def test_ticket_drilldown_loads_in_every_language(self, client, metrics, lang):
+        tl = metrics.ticket_list(datetime.date(2000, 1, 1), datetime.date(2100, 1, 1))
+        if tl.empty:
+            pytest.skip("no tickets in this database")
+        receipt_id = int(tl.iloc[0]["receipt_id"])
+        response = client.get(f"/tickets/{receipt_id}?lang={lang}")
+        assert response.status_code == 200
+
+    def test_ticket_drilldown_404_for_unknown_id(self, client):
+        assert client.get("/tickets/999999999").status_code == 404
 
     @pytest.mark.parametrize("lang", LANGUAGES)
     def test_customer_drilldown_loads_in_every_language(self, client, metrics, lang):

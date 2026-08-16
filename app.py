@@ -106,6 +106,7 @@ def inject_globals() -> dict[str, Any]:
 
     pages = [
         ("today", url_for("page_today")),
+        ("tickets", url_for("page_tickets")),
         ("trend", url_for("page_trend")),
         ("customers", url_for("page_customers")),
         ("receivables", url_for("page_receivables")),
@@ -238,7 +239,7 @@ def handle_missing(exc: Exception) -> tuple[str, int]:
 @app.route("/")
 def home() -> Response:
     default = str(get_config().get("interface.default_page", "today"))
-    target = {"today": "page_today", "trend": "page_trend",
+    target = {"today": "page_today", "tickets": "page_tickets", "trend": "page_trend",
               "customers": "page_customers", "receivables": "page_receivables",
               "inventory": "page_inventory", "products": "page_products",
               "suppliers": "page_suppliers", "cash": "page_cash",
@@ -302,6 +303,44 @@ def page_today() -> str:
             top_customers=rows(d["top_customers"]) if d is not None else rows(period["top_customers"]),
             hour_chart=hour_chart,
             cache=cache,
+        )
+    finally:
+        conn.close()
+
+
+@app.route("/tickets")
+def page_tickets() -> str:
+    m, etl, conn = open_metrics()
+    try:
+        start, end = date_range_from_request()
+        if start is None:
+            start = m.now.date()
+        if end is None:
+            end = m.now.date()
+        tl = m.ticket_list(start, end)
+        return render_template(
+            "tickets.html",
+            tickets=rows(tl),
+            start=start,
+            end=end,
+            cache=etl.cache_info(),
+        )
+    finally:
+        conn.close()
+
+
+@app.route("/tickets/<int:receipt_id>")
+def page_ticket(receipt_id: int) -> str:
+    m, etl, conn = open_metrics()
+    try:
+        detail = m.ticket_detail(receipt_id)
+        if detail is None:
+            abort(404)
+        return render_template(
+            "ticket_detail.html",
+            header=row_dict(detail["header"]),
+            lines=rows(detail["lines"]),
+            cache=etl.cache_info(),
         )
     finally:
         conn.close()

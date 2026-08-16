@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}{{ header.ticket_no }}{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb" style="padding: 10px 24px 0;">
+  <a href="{{ url_for('page_tickets') }}">{{ t('tickets.detail_back') }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ header.ticket_no }}</h1>
+  <p>{{ t.datetime(header.ticket_time) }} · {{ header.customer_name }}</p>
+</div>
+
+<section class="tiles">
+  <div class="tile">
+    <div class="label">{{ t('common.total') }}</div>
+    <div class="value">{{ t.money(header.revenue) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('tickets.col_cash') }}</div>
+    <div class="value">{{ t.money(header.cash_revenue) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('tickets.col_on_account') }}</div>
+    <div class="value">{{ t.money(header.on_account_revenue) }}</div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>{{ t('tickets.detail_payment_title') }}</h2>
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        {% for key, label in [('cash', 'today.payment_cash'), ('cheque', 'today.payment_cheque'),
+                              ('transfer', 'today.payment_transfer'), ('credit_account', 'today.payment_credit')] %}
+          {% if header[key] %}
+          <tr>
+            <td>{{ t(label) }}</td>
+            <td class="num strong">{{ t.money(header[key]) }}</td>
+          </tr>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>{{ t('tickets.detail_lines_title') }}</h2>
+  {% if lines %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t('common.product') }}</th>
+            <th class="num">{{ t('tickets.col_qty') }}</th>
+            <th class="num">{{ t('tickets.col_price') }}</th>
+            <th class="num">{{ t('tickets.col_discount') }}</th>
+            <th class="num">{{ t('tickets.col_amount') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in lines %}
+          <tr>
+            <td class="name">
+              {{ r.item_name }}
+              {% if not r.is_sale %}<span class="pill pill-info">{{ t('tickets.detail_collection_line') }}</span>{% endif %}
+            </td>
+            <td class="num">{{ t.number(r.qty) }}</td>
+            <td class="num">{{ t.money(r.price) }}</td>
+            <td class="num">{{ t.money(r.discount) if r.discount else '—' }}</td>
+            <td class="num strong">{{ t.money(r.amount) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('tickets.empty') }}</div>
+  {% endif %}
+</section>
+{% endblock %}
