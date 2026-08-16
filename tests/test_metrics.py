@@ -477,3 +477,15 @@ class TestDataQuality:
         assert coverage["value_reconciles"] is False, \
             "if purchases now reconcile, the warning on the Suppliers page " \
             "should be removed"
+
+    def test_tender_reconciliation_is_reported(self, metrics: Metrics):
+        tr = metrics.data_quality()["tender_reconciliation"]
+        assert tr["tickets_checked"] > 0
+        assert 0.0 <= tr["share_mismatched"] <= 1.0
+        assert tr["max_gap"] >= 0
+
+    def test_on_account_reconciliation_does_not_raise(self, metrics: Metrics):
+        oar = metrics.data_quality()["on_account_reconciliation"]
+        assert oar["on_account_all_time"] >= 0
+        assert oar["actual_receivables"] >= 0
+        assert isinstance(oar["explains_receivables"], bool)
