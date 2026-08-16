@@ -14,138 +14,190 @@
 
 {% block content %}
 
-<div class="page-head">
-  <h1>{{ t('today.title') }}</h1>
-  <p>{{ t('today.subtitle', date=t.date(now)) }} · {{ weekday_name }}</p>
-</div>
-
-{% if d.data_age_hours is not none and d.data_age_hours > 24 %}
-  <div class="banner banner-warn">
-    {{ t('app.stale_warning', age=t.relative_hours(d.data_age_hours)) }}
-    {{ t('app.data_from', when=t.datetime(d.last_sale_time)) }}
+<section class="panel" style="margin-bottom: 18px;">
+  <h2>{{ t('today.preset_title') }}</h2>
+  {% set today_str = now.strftime('%Y-%m-%d') %}
+  {% set yesterday_str = (now - timedelta(days=1)).strftime('%Y-%m-%d') %}
+  {% set week_start_str = (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d') %}
+  {% set last7_str = (now - timedelta(days=6)).strftime('%Y-%m-%d') %}
+  <div class="filter-row">
+    <a class="btn {{ 'btn-primary' if not request.args.get('start') and not request.args.get('end') else '' }}"
+       href="?lang={{ lang }}">{{ t('common.today') }}</a>
+    <a class="btn {{ 'btn-primary' if request.args.get('start') == yesterday_str and request.args.get('end') == yesterday_str else '' }}"
+       href="?lang={{ lang }}&start={{ yesterday_str }}&end={{ yesterday_str }}">{{ t('common.yesterday') }}</a>
+    <a class="btn {{ 'btn-primary' if request.args.get('start') == week_start_str and request.args.get('end') == today_str else '' }}"
+       href="?lang={{ lang }}&start={{ week_start_str }}&end={{ today_str }}">{{ t('common.this_week') }}</a>
+    <a class="btn {{ 'btn-primary' if request.args.get('start') == last7_str and request.args.get('end') == today_str else '' }}"
+       href="?lang={{ lang }}&start={{ last7_str }}&end={{ today_str }}">{{ t('common.last_7_days') }}</a>
   </div>
-{% endif %}
-
-{# ------------------------------------------------------- the big numbers #}
-<section class="tiles tiles-big">
-  <div class="tile">
-    <div class="label">{{ t('today.revenue') }}</div>
-    <div class="value">{{ t.money(d.today.revenue) }}</div>
-    <div class="sub">
-      {{ delta(d.vs_yesterday) }} {{ t('today.vs_yesterday') }}
-    </div>
-  </div>
-
-  <div class="tile">
-    <div class="label">{{ t('today.tickets') }}</div>
-    <div class="value">{{ t.number(d.today.tickets) }}</div>
-    <div class="sub">{{ t('today.avg_basket') }}: {{ t.money(d.today.avg_basket) }}</div>
-  </div>
-
-  <div class="tile">
-    <div class="label">{{ t('today.gross_profit') }}</div>
-    <div class="value">{{ t.money(d.today.gross_profit) }}</div>
-    <div class="sub">
-      {{ t('today.margin') }}:
-      <strong>{{ t.percent(d.today.margin_pct) if d.today.margin_pct is not none else t('common.not_measurable') }}</strong>
-    </div>
-  </div>
-
-  <div class="tile">
-    <div class="label">{{ t('today.vs_weekday_avg', weekday=weekday_name) }}</div>
-    <div class="value">{{ delta(d.vs_weekday_avg) }}</div>
-    <div class="sub">
-      {{ t('today.weekday_avg_note', count=d.weekday_sample, weekday=weekday_name) }}:
-      {{ t.money(d.weekday_average) }}
-    </div>
-  </div>
+  {% include "_daterange.html" %}
 </section>
 
-<p class="muted" style="margin: -8px 0 20px; font-size: 13px;">
-  {{ t('today.compared_at_same_time') }}
-</p>
-
-{# ------------------------------------------------------------ comparisons #}
-<section class="split-2">
-  <div class="panel">
-    <h2>{{ t('trend.table_title') }}</h2>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th></th>
-            <th class="num">{{ t('common.revenue') }}</th>
-            <th class="num">{{ t('common.tickets') }}</th>
-            <th class="num">{{ t('today.avg_basket') }}</th>
-            <th class="num">{{ t('common.margin_pct') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr class="strong">
-            <td>{{ t('common.today')|capitalize }}</td>
-            <td class="num">{{ t.money(d.today.revenue) }}</td>
-            <td class="num">{{ t.number(d.today.tickets) }}</td>
-            <td class="num">{{ t.money(d.today.avg_basket) }}</td>
-            <td class="num">{{ t.percent(d.today.margin_pct) if d.today.margin_pct is not none else '—' }}</td>
-          </tr>
-          <tr>
-            <td>{{ t('common.yesterday')|capitalize }}</td>
-            <td class="num">{{ t.money(d.yesterday.revenue) }}</td>
-            <td class="num">{{ t.number(d.yesterday.tickets) }}</td>
-            <td class="num">{{ t.money(d.yesterday.avg_basket) }}</td>
-            <td class="num">{{ t.percent(d.yesterday.margin_pct) if d.yesterday.margin_pct is not none else '—' }}</td>
-          </tr>
-          <tr>
-            <td>{{ t('today.vs_last_week') }}</td>
-            <td class="num">{{ t.money(d.last_week_same_day.revenue) }}</td>
-            <td class="num">{{ t.number(d.last_week_same_day.tickets) }}</td>
-            <td class="num">{{ t.money(d.last_week_same_day.avg_basket) }}</td>
-            <td class="num">{{ t.percent(d.last_week_same_day.margin_pct) if d.last_week_same_day.margin_pct is not none else '—' }}</td>
-          </tr>
-        </tbody>
-      </table>
+{% if d %}
+  {% if d.data_age_hours is not none and d.data_age_hours > 24 %}
+    <div class="banner banner-warn">
+      {{ t('app.stale_warning', age=t.relative_hours(d.data_age_hours)) }}
+      {{ t('app.data_from', when=t.datetime(d.last_sale_time)) }}
     </div>
+  {% endif %}
+
+  <div class="page-head">
+    <h1>{{ t('today.title') }}</h1>
+    <p>{{ t.date(single_day) }}{% if weekday_name %} · {{ weekday_name }}{% endif %}</p>
   </div>
 
-  <div class="panel">
-    <h2>{{ t('today.payments_title') }}</h2>
-    {% set pay_total = d.payments.cash + d.payments.cheque + d.payments.transfer + d.payments.credit %}
-    {% if pay_total > 0 %}
+  {# ------------------------------------------------------- the big numbers #}
+  <section class="tiles tiles-big">
+    <div class="tile">
+      <div class="label">{{ t('today.revenue') }}</div>
+      <div class="value">{{ t.money(d.today.cash_revenue) }}</div>
+      <div class="sub">
+        {{ delta(d.vs_yesterday) }} {{ t('today.vs_yesterday') }}
+      </div>
+    </div>
+
+    <div class="tile">
+      <div class="label">{{ t('today.on_account') }}</div>
+      <div class="value">{{ t.money(d.today.on_account_revenue) }}</div>
+      <div class="sub">{{ t('today.on_account_note') }}</div>
+    </div>
+
+    <div class="tile">
+      <div class="label">{{ t('today.tickets') }}</div>
+      <div class="value">{{ t.number(d.today.tickets) }}</div>
+      <div class="sub">{{ t('today.avg_basket') }}: {{ t.money(d.today.avg_basket) }}</div>
+    </div>
+
+    <div class="tile">
+      <div class="label">{{ t('today.gross_profit') }}</div>
+      <div class="value">{{ t.money(d.today.gross_profit) }}</div>
+      <div class="sub">
+        {{ t('today.margin') }}:
+        <strong>{{ t.percent(d.today.margin_pct) if d.today.margin_pct is not none else t('common.not_measurable') }}</strong>
+      </div>
+    </div>
+  </section>
+
+  <p class="muted" style="margin: -8px 0 20px; font-size: 13px;">
+    {{ t('today.cash_realized_note') }}
+  </p>
+
+  {# ------------------------------------------------------------ comparisons #}
+  <section class="split-2">
+    <div class="panel">
+      <h2>{{ t('trend.table_title') }}</h2>
       <div class="table-wrap">
         <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th class="num">{{ t('common.revenue') }}</th>
+              <th class="num">{{ t('common.tickets') }}</th>
+              <th class="num">{{ t('today.avg_basket') }}</th>
+              <th class="num">{{ t('common.margin_pct') }}</th>
+            </tr>
+          </thead>
           <tbody>
-            {% for key, label in [('cash', 'today.payment_cash'), ('cheque', 'today.payment_cheque'),
-                                  ('transfer', 'today.payment_transfer'), ('credit', 'today.payment_credit')] %}
-              {% if d.payments[key] %}
-              <tr>
-                <td>{{ t(label) }}</td>
-                <td class="num strong">{{ t.money(d.payments[key]) }}</td>
-                <td class="num muted">{{ t.percent(d.payments[key] / pay_total) }}</td>
-              </tr>
-              {% endif %}
-            {% endfor %}
+            <tr class="strong">
+              <td>{{ t.date(single_day) }}</td>
+              <td class="num">{{ t.money(d.today.cash_revenue) }}</td>
+              <td class="num">{{ t.number(d.today.tickets) }}</td>
+              <td class="num">{{ t.money(d.today.avg_basket) }}</td>
+              <td class="num">{{ t.percent(d.today.margin_pct) if d.today.margin_pct is not none else '—' }}</td>
+            </tr>
+            <tr>
+              <td>{{ t.date(d.yesterday.date) }}</td>
+              <td class="num">{{ t.money(d.yesterday.cash_revenue) }}</td>
+              <td class="num">{{ t.number(d.yesterday.tickets) }}</td>
+              <td class="num">{{ t.money(d.yesterday.avg_basket) }}</td>
+              <td class="num">{{ t.percent(d.yesterday.margin_pct) if d.yesterday.margin_pct is not none else '—' }}</td>
+            </tr>
+            <tr>
+              <td>{{ t('today.vs_last_week') }}</td>
+              <td class="num">{{ t.money(d.last_week_same_day.cash_revenue) }}</td>
+              <td class="num">{{ t.number(d.last_week_same_day.tickets) }}</td>
+              <td class="num">{{ t.money(d.last_week_same_day.avg_basket) }}</td>
+              <td class="num">{{ t.percent(d.last_week_same_day.margin_pct) if d.last_week_same_day.margin_pct is not none else '—' }}</td>
+            </tr>
           </tbody>
         </table>
       </div>
-      {% if d.collections_today %}
-        <p class="note" style="margin-top: 12px;">
-          {{ t('today.collections') }}: <strong>{{ t.money(d.collections_today) }}</strong>
-        </p>
+    </div>
+
+    <div class="panel">
+      <h2>{{ t('today.payments_title') }}</h2>
+      {% set pay_total = d.payments.cash + d.payments.cheque + d.payments.transfer + d.payments.credit %}
+      {% if pay_total > 0 %}
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              {% for key, label in [('cash', 'today.payment_cash'), ('cheque', 'today.payment_cheque'),
+                                    ('transfer', 'today.payment_transfer'), ('credit', 'today.payment_credit')] %}
+                {% if d.payments[key] %}
+                <tr>
+                  <td>{{ t(label) }}</td>
+                  <td class="num strong">{{ t.money(d.payments[key]) }}</td>
+                  <td class="num muted">{{ t.percent(d.payments[key] / pay_total) }}</td>
+                </tr>
+                {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if d.collections_today %}
+          <p class="note" style="margin-top: 12px;">
+            {{ t('today.collections') }}: <strong>{{ t.money(d.collections_today) }}</strong>
+          </p>
+        {% endif %}
+      {% else %}
+        <div class="empty">{{ t('today.no_sales_yet') }}</div>
       {% endif %}
-    {% else %}
-      <div class="empty">{{ t('today.no_sales_yet') }}</div>
-    {% endif %}
+    </div>
+  </section>
+
+  {# ------------------------------------------------------------ by the hour #}
+  <section class="panel">
+    <h2>{{ t('today.by_hour') }}</h2>
+    <p class="note">{{ t('today.chart_hour_axis') }} · {{ t('today.chart_revenue_axis') }}</p>
+    {{ ch.combo(hour_chart, t) }}
+  </section>
+{% else %}
+  <div class="page-head">
+    <h1>{{ t('today.title') }}</h1>
+    <p>{{ t('today.period_title', start=t.date(period.start), end=t.date(period.end)) }}</p>
   </div>
-</section>
 
-{# ------------------------------------------------------------ by the hour #}
-<section class="panel">
-  <h2>{{ t('today.by_hour') }}</h2>
-  <p class="note">{{ t('today.chart_hour_axis') }} · {{ t('today.chart_revenue_axis') }}</p>
-  {{ ch.combo(hour_chart, t) }}
-</section>
+  <section class="tiles tiles-big">
+    <div class="tile">
+      <div class="label">{{ t('today.period_revenue') }}</div>
+      <div class="value">{{ t.money(period.cash_revenue) }}</div>
+    </div>
+    <div class="tile">
+      <div class="label">{{ t('today.on_account') }}</div>
+      <div class="value">{{ t.money(period.on_account_revenue) }}</div>
+      <div class="sub">{{ t('today.on_account_note') }}</div>
+    </div>
+    <div class="tile">
+      <div class="label">{{ t('today.period_tickets') }}</div>
+      <div class="value">{{ t.number(period.tickets) }}</div>
+      <div class="sub">{{ t('today.avg_basket') }}: {{ t.money(period.avg_basket) }}</div>
+    </div>
+    <div class="tile">
+      <div class="label">{{ t('today.gross_profit') }}</div>
+      <div class="value">{{ t.money(period.gross_profit) }}</div>
+      <div class="sub">
+        {{ t('today.period_margin') }}:
+        <strong>{{ t.percent(period.margin_pct) if period.margin_pct is not none else t('common.not_measurable') }}</strong>
+      </div>
+    </div>
+  </section>
 
-{# ------------------------------------------------------------ top sellers #}
+  <p class="muted" style="margin: -8px 0 20px; font-size: 13px;">
+    {{ t('today.cash_realized_note') }}
+  </p>
+{% endif %}
+
+{# --------------------------------------------- top sellers, both views #}
 <section class="split-2">
   <div class="panel">
     <h2>{{ t('today.top_items') }}</h2>
@@ -203,6 +255,13 @@
     {% endif %}
   </div>
 </section>
+
+<p style="margin-top: 8px;">
+  <a class="btn"
+     href="{{ url_for('page_tickets') }}?lang={{ lang }}{% if single_day %}&start={{ single_day.strftime('%Y-%m-%d') }}&end={{ single_day.strftime('%Y-%m-%d') }}{% elif period %}&start={{ period.start.strftime('%Y-%m-%d') }}&end={{ period.end.strftime('%Y-%m-%d') }}{% endif %}">
+    {{ t('today.view_tickets') }}
+  </a>
+</p>
 
 {% endblock %}
 
