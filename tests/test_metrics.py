@@ -435,6 +435,28 @@ class TestTodayByDate:
         d = metrics.today(target_date=a_day)
         assert abs(d["today"]["revenue"] - float(whole_day["amount"].sum())) < 0.01
 
+    def test_period_stats_matches_headline_for_all_time(self, metrics: Metrics):
+        first = metrics.data_range["first"]
+        last = metrics.data_range["last"]
+        if first is None:
+            pytest.skip("no sales in this database")
+        p = metrics.period_stats(first.date(), last.date() + datetime.timedelta(days=1))
+        h = metrics.headline()
+        assert abs(p["revenue"] - h["revenue"]) < 1.0
+
+    def test_period_stats_cash_and_on_account_add_up(self, metrics: Metrics):
+        first = metrics.data_range["first"]
+        if first is None:
+            pytest.skip("no sales in this database")
+        p = metrics.period_stats(first.date(), first.date() + datetime.timedelta(days=30))
+        assert abs(p["cash_revenue"] + p["on_account_revenue"] - p["revenue"]) < 0.01
+
+    def test_period_stats_empty_range_does_not_raise(self, metrics: Metrics):
+        far_future = datetime.date(2200, 1, 1)
+        p = metrics.period_stats(far_future, far_future)
+        assert p["revenue"] == 0.0
+        assert p["tickets"] == 0
+
 
 class TestCatalog:
 

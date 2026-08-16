@@ -632,6 +632,53 @@ class Metrics:
             "is_current_day": is_current_day,
         }
 
+    def period_stats(self, start: datetime.date, end: datetime.date) -> dict[str, Any]:
+        """
+        The same shape of figures as `today()`, for an arbitrary whole-day
+        range - the Today screen's view when a range preset (this week,
+        last 7 days, a custom multi-day range) is chosen instead of a
+        single day. `end` is inclusive, matching `_window_range`.
+        """
+        s = self._window_range(self.sales, start, end)
+        tk = self._window_range(self.tickets, start, end)
+        coll = self._window_range(self.collections, start, end)
+
+        revenue = float(s["amount"].sum())
+        known = s[s["cost_known"]]
+        rev_known = float(known["amount"].sum())
+        gp_known = float(known["gross_profit"].sum())
+        n_tickets = int(tk["receipt_id"].nunique())
+
+        top_items = (s.groupby(["item_id", "item_name"], as_index=False)
+                     .agg(qty=("qty", "sum"), revenue=("amount", "sum"),
+                          gross_profit=("gross_profit", "sum"))
+                     .sort_values("revenue", ascending=False).head(10))
+
+        top_customers = (s[s["customer_id"] != self.walkin_id]
+                         .groupby("customer_id", as_index=False)
+                         .agg(revenue=("amount", "sum")))
+        if not top_customers.empty:
+            top_customers = (top_customers
+                             .merge(self.customers[["customer_id", "customer_name"]],
+                                    on="customer_id", how="left")
+                             .sort_values("revenue", ascending=False).head(5))
+
+        return {
+            "start": start,
+            "end": end,
+            "revenue": revenue,
+            "cash_revenue": float(tk["cash_revenue"].sum()),
+            "on_account_revenue": float(tk["on_account_revenue"].sum()),
+            "gross_profit": float(s["gross_profit"].sum()),
+            "margin_pct": (gp_known / rev_known) if rev_known else None,
+            "tickets": n_tickets,
+            "avg_basket": (revenue / n_tickets) if n_tickets else 0.0,
+            "units": float(s["qty"].sum()),
+            "collections": float(coll["amount"].sum()),
+            "top_items": top_items,
+            "top_customers": top_customers,
+        }
+
     # =====================================================================
     #  PAGE 2 - TREND
     # =====================================================================
