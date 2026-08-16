@@ -273,6 +273,14 @@ class TestDashboard:
         body = client.get("/today?__static__=1").get_data(as_text=True)
         assert 'id="refresh-btn"' not in body
 
+    @pytest.mark.parametrize("query", [
+        "", "?start=2025-01-01&end=2025-01-01", "?start=2025-01-01&end=2025-01-07",
+        "?start=2025-01-01&end=2025-01-31",
+    ])
+    def test_today_accepts_single_day_and_range_queries(self, client, query):
+        response = client.get(f"/today{query}")
+        assert response.status_code == 200, f"/today{query} returned {response.status_code}"
+
 
 class TestCompetitorPriceRoutes:
     """
