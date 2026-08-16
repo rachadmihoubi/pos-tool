@@ -92,7 +92,10 @@
     "date_from": "من",
     "date_to": "إلى",
     "apply_range": "تطبيق",
-    "clear_range": "مسح"
+    "clear_range": "مسح",
+    "this_week": "هذا الأسبوع",
+    "last_7_days": "آخر 7 أيام",
+    "custom_range": "فترة مخصصة"
   },
 
   "today": {
@@ -122,7 +125,16 @@
     "quiet_day": "اليوم متأخر عن يوم {weekday} عادي.",
     "good_day": "اليوم متقدم على يوم {weekday} عادي.",
     "chart_hour_axis": "ساعة اليوم",
-    "chart_revenue_axis": "المبيعات (دج)"
+    "chart_revenue_axis": "المبيعات (دج)",
+    "preset_title": "اختر فترة",
+    "on_account": "على الحساب (لم يُدفع بعد)",
+    "on_account_note": "أموال لا يزال الزبون مديناً بها من مبيعات هذه الفترة - لا تُحتسب كبيع حتى يتم تحصيلها فعلياً.",
+    "cash_realized_note": "فقط الدفع نقداً أو بشيك أو تحويل يُحتسب كبيع هنا. أي مبلغ وُضع على حساب الزبون يظهر بشكل منفصل، على اليمين.",
+    "period_title": "من {start} إلى {end}",
+    "period_revenue": "المبيعات (المحصّلة نقداً)",
+    "period_tickets": "الفواتير",
+    "period_margin": "الهامش",
+    "view_tickets": "عرض كل فواتير هذه الفترة"
   },
 
   "trend": {

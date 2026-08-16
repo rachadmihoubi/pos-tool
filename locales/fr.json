@@ -92,7 +92,10 @@
     "date_from": "Du",
     "date_to": "Au",
     "apply_range": "Appliquer",
-    "clear_range": "Effacer"
+    "clear_range": "Effacer",
+    "this_week": "Cette semaine",
+    "last_7_days": "7 derniers jours",
+    "custom_range": "Période personnalisée"
   },
 
   "today": {
@@ -122,7 +125,16 @@
     "quiet_day": "La journée est en retard sur un {weekday} habituel.",
     "good_day": "La journée est en avance sur un {weekday} habituel.",
     "chart_hour_axis": "Heure de la journée",
-    "chart_revenue_axis": "Ventes (DZD)"
+    "chart_revenue_axis": "Ventes (DZD)",
+    "preset_title": "Choisir une période",
+    "on_account": "À crédit (pas encore payé)",
+    "on_account_note": "Argent que le client doit encore sur les ventes de cette période - non compté comme une vente tant qu'il n'est pas réellement encaissé.",
+    "cash_realized_note": "Seuls les paiements en espèces, chèque et virement comptent comme une vente ici. Tout ce qui est mis sur le compte d'un client est affiché séparément, à droite.",
+    "period_title": "Du {start} au {end}",
+    "period_revenue": "Ventes (encaissées)",
+    "period_tickets": "Tickets",
+    "period_margin": "Marge",
+    "view_tickets": "Voir tous les tickets de cette période"
   },
 
   "trend": {

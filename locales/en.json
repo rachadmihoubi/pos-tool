@@ -92,7 +92,10 @@
     "date_from": "From",
     "date_to": "To",
     "apply_range": "Apply",
-    "clear_range": "Clear"
+    "clear_range": "Clear",
+    "this_week": "This week",
+    "last_7_days": "Last 7 days",
+    "custom_range": "Custom range"
   },
 
   "today": {
@@ -122,7 +125,16 @@
     "quiet_day": "Today is running behind a usual {weekday}.",
     "good_day": "Today is ahead of a usual {weekday}.",
     "chart_hour_axis": "Hour of day",
-    "chart_revenue_axis": "Sales (DZD)"
+    "chart_revenue_axis": "Sales (DZD)",
+    "preset_title": "Choose a period",
+    "on_account": "On account (not yet paid)",
+    "on_account_note": "Money the customer still owes on this period's sales - not counted as a sale until it's actually collected.",
+    "cash_realized_note": "Only Cash, Cheque and Transfer tender counts as a sale here. Anything put on a customer's account is shown separately, on the right.",
+    "period_title": "{start} to {end}",
+    "period_revenue": "Sales (cash-realized)",
+    "period_tickets": "Tickets",
+    "period_margin": "Margin",
+    "view_tickets": "See every ticket in this period"
   },
 
   "trend": {

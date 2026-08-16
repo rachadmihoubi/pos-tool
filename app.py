@@ -120,6 +120,7 @@ def inject_globals() -> dict[str, Any]:
     return {
         "t": t,
         "lang": lang,
+        "timedelta": datetime.timedelta,
         "dir": t.direction,
         "is_rtl": t.is_rtl,
         "languages": available_languages(),
