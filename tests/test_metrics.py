@@ -146,6 +146,19 @@ class TestStock:
         assert (risk["monthly_rate"] > 0).all()
         assert (risk["cover_months"] < 1).all()
 
+    def test_stockout_risk_excludes_unknown_stock(self, metrics: Metrics):
+        """
+        cover_months treats a NaN stock as 0 (see item_movement), which
+        would make an actively-selling product with unknown stock always
+        look "about to run out" and leak a NaN into the stock column - a
+        product we don't have a stock figure for is not evidence it's low,
+        it's just unmeasured, so it must not appear in this table at all.
+        """
+        risk = metrics.stockout_risk()
+        if risk.empty:
+            pytest.skip("nothing is close to running out")
+        assert risk["stock"].notna().all(), "stockout_risk must never include a NaN stock row"
+
     def test_shrinkage_events_does_not_raise(self, metrics: Metrics):
         events = metrics.shrinkage_events()
         assert not events.empty, "expected at least the one live stocktake"

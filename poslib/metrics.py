@@ -1208,7 +1208,12 @@ class Metrics:
         """
         cover = float(self.t("inventory.stockout_cover_months", 0.75))
         it = self.item_movement
-        r = it[(it["qty_window"] > 0) & (it["cover_months"] < cover)].copy()
+        # cover_months treats a NaN stock as 0 (see item_movement), which
+        # would otherwise make any actively-selling product with an unknown
+        # stock figure always look "about to run out" - unmeasured is not
+        # evidence of low, so it's excluded here rather than folded in.
+        r = it[it["stock"].notna() & (it["qty_window"] > 0) &
+               (it["cover_months"] < cover)].copy()
         if r.empty:
             return pd.DataFrame()
 
