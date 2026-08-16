@@ -111,6 +111,7 @@ def inject_globals() -> dict[str, Any]:
         ("customers", url_for("page_customers")),
         ("receivables", url_for("page_receivables")),
         ("inventory", url_for("page_inventory")),
+        ("catalog", url_for("page_catalog")),
         ("products", url_for("page_products")),
         ("suppliers", url_for("page_suppliers")),
         ("cash", url_for("page_cash")),
@@ -547,6 +548,21 @@ def page_inventory() -> str:
             cover_months=float(m.t("inventory.stockout_cover_months", 0.75)),
             over_months=float(m.t("inventory.overstock_cover_months", 12.0)),
             shrinkage=rows(shrinkage),
+            cache=etl.cache_info(),
+        )
+    finally:
+        conn.close()
+
+
+@app.route("/catalog")
+def page_catalog() -> str:
+    m, etl, conn = open_metrics()
+    try:
+        cat = m.catalog()
+        return render_template(
+            "catalog.html",
+            products=rows(cat),
+            product_count=len(cat),
             cache=etl.cache_info(),
         )
     finally:
