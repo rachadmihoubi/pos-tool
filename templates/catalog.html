@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ t('catalog.title') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('catalog.title') }}</h1>
+  <p>{{ t('catalog.subtitle') }}</p>
+</div>
+
+<section class="panel">
+  <div class="filter-row">
+    <input type="search" placeholder="{{ t('common.search') }}" data-filters="catalog-table">
+    <span class="muted"><span id="catalog-table-count">{{ products|length }}</span> {{ t('common.of_total', total=t.number(product_count)) }}</span>
+  </div>
+  <div class="table-wrap scroll-y">
+    <table class="sortable" id="catalog-table">
+      <thead>
+        <tr>
+          <th>{{ t('catalog.col_reference') }}</th>
+          <th>{{ t('common.product') }}</th>
+          <th>{{ t('common.family') }}</th>
+          <th class="num">{{ t('common.stock') }}</th>
+          <th class="num">{{ t('common.cost') }}</th>
+          <th class="num">{{ t('common.price') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in products %}
+        <tr>
+          <td class="muted">{{ r.item_no or '—' }}</td>
+          <td class="name">{{ r.item_name }}</td>
+          <td class="name muted">{{ r.family_name }}</td>
+          <td class="num" data-value="{{ r.stock or 0 }}">
+            {% if r.stock is not none and r.stock < 0 %}<span class="pill pill-bad">{{ t.number(r.stock) }}</span>
+            {% else %}{{ t.number(r.stock) }}{% endif %}
+          </td>
+          <td class="num" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+          <td class="num strong" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

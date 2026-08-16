@@ -24,6 +24,7 @@
     "customers": "الزبائن",
     "receivables": "الديون",
     "inventory": "المخزون",
+    "catalog": "كتالوج المنتجات",
     "products": "المنتجات والهامش",
     "suppliers": "الموردون",
     "tickets": "الفواتير",
@@ -370,6 +371,12 @@
     "shrinkage_col_units_over": "وحدات زائدة",
     "shrinkage_col_units_under": "وحدات ناقصة",
     "shrinkage_col_cost_net": "الأثر الصافي على التكلفة"
+  },
+
+  "catalog": {
+    "title": "كتالوج المنتجات",
+    "subtitle": "كل منتج - المرجع، العلامة، الكمية والسعر.",
+    "col_reference": "المرجع"
   },
 
   "products": {

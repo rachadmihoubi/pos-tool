@@ -24,6 +24,7 @@
     "customers": "Customers",
     "receivables": "Money owed",
     "inventory": "Stock",
+    "catalog": "Stock catalog",
     "products": "Products & margin",
     "suppliers": "Suppliers",
     "tickets": "Tickets",
@@ -370,6 +371,12 @@
     "shrinkage_col_units_over": "Units over",
     "shrinkage_col_units_under": "Units under",
     "shrinkage_col_cost_net": "Net cost impact"
+  },
+
+  "catalog": {
+    "title": "Stock catalog",
+    "subtitle": "Every product - reference, family, quantity and price.",
+    "col_reference": "Reference"
   },
 
   "products": {

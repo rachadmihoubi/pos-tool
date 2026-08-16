@@ -178,7 +178,7 @@ class TestDashboard:
 
     PAGES = ["/today", "/trend", "/customers", "/receivables", "/inventory",
              "/products", "/suppliers", "/cash", "/diagnostics", "/data-quality",
-             "/tickets"]
+             "/tickets", "/catalog"]
 
     @pytest.mark.parametrize("lang", LANGUAGES)
     def test_every_page_loads_in_every_language(self, client, lang):
@@ -192,7 +192,7 @@ class TestDashboard:
         pattern = re.compile(
             r"\b(?:app|nav|common|today|trend|customers|segments|receivables|"
             r"inventory|products|suppliers|cash|diagnostics|findings|dataquality|"
-            r"tickets)"
+            r"tickets|catalog)"
             r"\.[a-z_][a-z_0-9.]*")
         for path in self.PAGES:
             body = client.get(f"{path}?lang={lang}").get_data(as_text=True)

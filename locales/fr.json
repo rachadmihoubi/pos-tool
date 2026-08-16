@@ -24,6 +24,7 @@
     "customers": "Clients",
     "receivables": "Créances",
     "inventory": "Stock",
+    "catalog": "Catalogue produits",
     "products": "Produits et marge",
     "suppliers": "Fournisseurs",
     "tickets": "Tickets",
@@ -370,6 +371,12 @@
     "shrinkage_col_units_over": "Unités en trop",
     "shrinkage_col_units_under": "Unités manquantes",
     "shrinkage_col_cost_net": "Impact net"
+  },
+
+  "catalog": {
+    "title": "Catalogue produits",
+    "subtitle": "Tous les produits - référence, famille, quantité et prix.",
+    "col_reference": "Référence"
   },
 
   "products": {
