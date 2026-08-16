@@ -470,6 +470,29 @@ class TestTodayByDate:
         assert p["revenue"] == 0.0
         assert p["tickets"] == 0
 
+    def test_daily_rollup_columns_and_no_duplicate_dates(self, metrics: Metrics):
+        d = metrics.daily_rollup()
+        for col in ("date", "revenue", "cash_revenue", "on_account_revenue",
+                    "gross_profit", "tickets"):
+            assert col in d.columns
+        assert d["date"].is_unique
+
+    def test_daily_rollup_matches_period_stats_for_a_window(self, metrics: Metrics):
+        first = metrics.data_range["first"]
+        if first is None:
+            pytest.skip("no sales in this database")
+        start = first.date()
+        end = start + datetime.timedelta(days=30)
+        d = metrics.daily_rollup()
+        window = d[(d["date"] >= pd.Timestamp(start)) & (d["date"] <= pd.Timestamp(end))]
+        p = metrics.period_stats(start, end)
+        assert abs(float(window["revenue"].sum()) - p["revenue"]) < 0.01
+        assert abs(float(window["cash_revenue"].sum()) - p["cash_revenue"]) < 0.01
+        assert int(window["tickets"].sum()) == p["tickets"] or \
+            abs(int(window["tickets"].sum()) - p["tickets"]) <= 1, \
+            "daily ticket counts summed across days may double-count a ticket " \
+            "spanning midnight only if the POS itself records it that way"
+
 
 class TestTickets:
 

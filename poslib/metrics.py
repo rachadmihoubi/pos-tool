@@ -679,6 +679,29 @@ class Metrics:
             "top_customers": top_customers,
         }
 
+    def daily_rollup(self) -> pd.DataFrame:
+        """
+        One row per calendar day for the whole history: revenue split into
+        cash-realized vs on-account, gross profit, tickets. This is
+        `period_stats()`'s inputs pre-aggregated to a day - built for the
+        remote static export, which has no server to answer an arbitrary
+        `?start=&end=` query, so the browser fetches this once as JSON and
+        sums whatever range the visitor picks itself, client-side.
+        """
+        s = self.sales
+        tk_df = self.tickets
+        if s.empty:
+            return pd.DataFrame()
+
+        rev = s.groupby("date")["amount"].sum().rename("revenue")
+        gp = s.groupby("date")["gross_profit"].sum().rename("gross_profit")
+        tk = tk_df.groupby("date")["receipt_id"].nunique().rename("tickets")
+        cash = tk_df.groupby("date")["cash_revenue"].sum().rename("cash_revenue")
+        on_account = tk_df.groupby("date")["on_account_revenue"].sum().rename("on_account_revenue")
+
+        df = pd.concat([rev, gp, tk, cash, on_account], axis=1).fillna(0.0)
+        return df.sort_index().reset_index()
+
     # =====================================================================
     #  PAGE 1B - TICKETS
     # =====================================================================
