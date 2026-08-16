@@ -1289,6 +1289,16 @@ class Metrics:
         df["days_since_sale"] = (self.now - df["last_sale_effective"]).dt.days
         return df
 
+    def catalog(self) -> pd.DataFrame:
+        """
+        The full product catalogue for the Stock catalog screen: reference,
+        name, family/brand, quantity, cost, price. A thin, sorted view over
+        `items` - no new business logic, just what a search screen needs.
+        """
+        cols = ["item_id", "item_no", "item_name", "family_name", "stock",
+                "cost", "price", "inactive"]
+        return self.items[cols].sort_values("item_name").reset_index(drop=True)
+
     def inventory_summary(self) -> dict[str, Any]:
         """The stock picture in one set of numbers."""
         it = self.item_movement

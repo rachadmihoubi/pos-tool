@@ -547,6 +547,20 @@ class TestCatalog:
         dates = recent["date_created"].tolist()
         assert dates == sorted(dates, reverse=True)
 
+    def test_catalog_has_every_item(self, metrics: Metrics, expected_counts):
+        cat = metrics.catalog()
+        assert len(cat) >= expected_counts["Item"]
+
+    def test_catalog_columns(self, metrics: Metrics):
+        cat = metrics.catalog()
+        for col in ("item_id", "item_no", "item_name", "family_name",
+                    "stock", "cost", "price"):
+            assert col in cat.columns
+
+    def test_catalog_sorted_by_name(self, metrics: Metrics):
+        cat = metrics.catalog()
+        assert list(cat["item_name"]) == sorted(cat["item_name"])
+
 
 class TestFamilyMarginOutliers:
 
