@@ -493,22 +493,37 @@ class Metrics:
     #  PAGE 1 - TODAY / LIVE
     # =====================================================================
 
-    def today(self) -> dict[str, Any]:
+    def today(self, target_date: datetime.date | None = None) -> dict[str, Any]:
         """
-        Everything the Today screen shows.
+        Everything the Today screen shows, for any single day - defaults to
+        the actual current day when `target_date` is not given, which is
+        every existing caller's behaviour unchanged.
+
+        "Sales" means cash-realized only: Cash + Cheque + Transfer tender,
+        never the portion of a sale put on the customer's account. The
+        on-account portion is reported alongside it, always separately,
+        never folded in - see `tickets`' `cash_revenue`/`on_account_revenue`
+        columns and docs/superpowers/specs/2026-08-16-tickets-catalog-
+        suppliers-design.md for why this definition is scoped to this
+        screen and the Tickets screen only.
 
         Comparisons are chosen to be fair rather than flattering:
-          - yesterday, for a same-shape comparison
-          - the same weekday last week, because a Sunday is not a Tuesday
+          - the day before target_date, for a same-shape comparison
+          - the same weekday the week before, because a Sunday is not a
+            Tuesday
           - the average of the last 8 of the same weekday, so one freak day
             does not set the bar
-        All comparisons are cut off at the same time of day, so at 10am you
-        are compared with how the other days looked at 10am, not with their
-        finished totals.
+        When target_date is the live current day, every comparison is cut
+        off at the same time of day target_date has reached so far, so an
+        in-progress day is compared fairly against finished ones. When
+        target_date is a day that has already finished, nothing is clipped
+        - the whole day is compared against whole days.
         """
-        today = self.now.date()
-        yesterday = today - datetime.timedelta(days=1)
-        same_day_last_week = today - datetime.timedelta(days=7)
+        target = target_date or self.now.date()
+        is_current_day = target == self.now.date()
+        day_before = target - datetime.timedelta(days=1)
+        same_day_last_week = target - datetime.timedelta(days=7)
+        cutoff_time = self.now.time() if is_current_day else None
 
         def day_slice(d: datetime.date, until_time: datetime.time | None = None
                       ) -> pd.DataFrame:
@@ -517,18 +532,25 @@ class Metrics:
                 s = s[s["ticket_time"].dt.time <= until_time]
             return s
 
-        def day_stats(d: datetime.date, clip: bool = False) -> dict[str, Any]:
-            cut = self.now.time() if clip else None
-            s = day_slice(d, cut)
+        def ticket_slice(d: datetime.date, until_time: datetime.time | None = None
+                         ) -> pd.DataFrame:
             tk = self.tickets[self.tickets["ticket_time"].dt.date == d]
-            if clip:
-                tk = tk[tk["ticket_time"].dt.time <= self.now.time()]
+            if until_time is not None:
+                tk = tk[tk["ticket_time"].dt.time <= until_time]
+            return tk
+
+        def day_stats(d: datetime.date, clip: bool = False) -> dict[str, Any]:
+            cut = cutoff_time if clip else None
+            s = day_slice(d, cut)
+            tk = ticket_slice(d, cut)
             known = s[s["cost_known"]]
             rev = float(s["amount"].sum())
             n = int(tk["receipt_id"].nunique())
             return {
                 "date": d,
                 "revenue": rev,
+                "cash_revenue": float(tk["cash_revenue"].sum()),
+                "on_account_revenue": float(tk["on_account_revenue"].sum()),
                 "gross_profit": float(s["gross_profit"].sum()),
                 "margin_pct": (float(known["gross_profit"].sum()) /
                                float(known["amount"].sum())) if float(known["amount"].sum()) else None,
@@ -537,45 +559,48 @@ class Metrics:
                 "units": float(s["qty"].sum()),
             }
 
-        now_stats = day_stats(today)
-        yest = day_stats(yesterday, clip=True)
+        now_stats = day_stats(target, clip=True)
+        yest = day_stats(day_before, clip=True)
         last_week = day_stats(same_day_last_week, clip=True)
 
-        # Average of the last 8 occurrences of this weekday, up to this time
-        # of day, ignoring days the shop took nothing at all.
-        weekday = self.now.weekday()
+        # Average of the last 8 occurrences of this weekday, cash-realized,
+        # up to the same time of day, ignoring days the shop took nothing.
+        weekday = target.weekday()
         same_weekday_totals: list[float] = []
-        d = today - datetime.timedelta(days=7)
+        d = target - datetime.timedelta(days=7)
         while len(same_weekday_totals) < 8 and d >= (self.data_range["first"].date()
-                                                     if self.data_range["first"] is not None else today):
-            s = day_slice(d, self.now.time())
-            v = float(s["amount"].sum())
+                                                     if self.data_range["first"] is not None else target):
+            tk = ticket_slice(d, cutoff_time)
+            v = float(tk["cash_revenue"].sum())
             if v > 0:
                 same_weekday_totals.append(v)
             d -= datetime.timedelta(days=7)
         weekday_avg = float(np.mean(same_weekday_totals)) if same_weekday_totals else 0.0
 
-        # How the money came in today.
-        tk_today = self.tickets[self.tickets["ticket_time"].dt.date == today]
+        # How the money came in on target_date - the whole day, never
+        # clipped, since there is nothing "in progress" about a payments
+        # breakdown for a day already being fully shown elsewhere on the
+        # page.
+        tk_target = self.tickets[self.tickets["ticket_time"].dt.date == target]
         payments = {
-            "cash": float(tk_today["cash"].sum()),
-            "cheque": float(tk_today["cheque"].sum()),
-            "transfer": float(tk_today["transfer"].sum()),
-            "credit": float(tk_today["credit_account"].sum()),
+            "cash": float(tk_target["cash"].sum()),
+            "cheque": float(tk_target["cheque"].sum()),
+            "transfer": float(tk_target["transfer"].sum()),
+            "credit": float(tk_target["credit_account"].sum()),
         }
 
-        s_today = day_slice(today)
-        top_items = (s_today.groupby(["item_id", "item_name"], as_index=False)
+        s_target = day_slice(target)
+        top_items = (s_target.groupby(["item_id", "item_name"], as_index=False)
                      .agg(qty=("qty", "sum"), revenue=("amount", "sum"),
                           gross_profit=("gross_profit", "sum"))
                      .sort_values("revenue", ascending=False)
                      .head(10))
 
-        by_hour = (s_today.groupby("hour", as_index=False)
+        by_hour = (s_target.groupby("hour", as_index=False)
                    .agg(revenue=("amount", "sum"))
                    .sort_values("hour"))
 
-        top_customers = (s_today[s_today["customer_id"] != self.walkin_id]
+        top_customers = (s_target[s_target["customer_id"] != self.walkin_id]
                          .groupby("customer_id", as_index=False)
                          .agg(revenue=("amount", "sum")))
         if not top_customers.empty:
@@ -593,17 +618,65 @@ class Metrics:
             "last_week_same_day": last_week,
             "weekday_average": weekday_avg,
             "weekday_sample": len(same_weekday_totals),
-            "vs_yesterday": delta(now_stats["revenue"], yest["revenue"]),
-            "vs_last_week": delta(now_stats["revenue"], last_week["revenue"]),
-            "vs_weekday_avg": delta(now_stats["revenue"], weekday_avg),
+            "vs_yesterday": delta(now_stats["cash_revenue"], yest["cash_revenue"]),
+            "vs_last_week": delta(now_stats["cash_revenue"], last_week["cash_revenue"]),
+            "vs_weekday_avg": delta(now_stats["cash_revenue"], weekday_avg),
             "payments": payments,
             "collections_today": float(
-                self.collections[self.collections["ticket_time"].dt.date == today]["amount"].sum()),
+                self.collections[self.collections["ticket_time"].dt.date == target]["amount"].sum()),
             "top_items": top_items,
             "by_hour": by_hour,
             "top_customers": top_customers,
             "data_age_hours": self.data_range["age_hours"],
             "last_sale_time": self.data_range["last"],
+            "is_current_day": is_current_day,
+        }
+
+    def period_stats(self, start: datetime.date, end: datetime.date) -> dict[str, Any]:
+        """
+        The same shape of figures as `today()`, for an arbitrary whole-day
+        range - the Today screen's view when a range preset (this week,
+        last 7 days, a custom multi-day range) is chosen instead of a
+        single day. `end` is inclusive, matching `_window_range`.
+        """
+        s = self._window_range(self.sales, start, end)
+        tk = self._window_range(self.tickets, start, end)
+        coll = self._window_range(self.collections, start, end)
+
+        revenue = float(s["amount"].sum())
+        known = s[s["cost_known"]]
+        rev_known = float(known["amount"].sum())
+        gp_known = float(known["gross_profit"].sum())
+        n_tickets = int(tk["receipt_id"].nunique())
+
+        top_items = (s.groupby(["item_id", "item_name"], as_index=False)
+                     .agg(qty=("qty", "sum"), revenue=("amount", "sum"),
+                          gross_profit=("gross_profit", "sum"))
+                     .sort_values("revenue", ascending=False).head(10))
+
+        top_customers = (s[s["customer_id"] != self.walkin_id]
+                         .groupby("customer_id", as_index=False)
+                         .agg(revenue=("amount", "sum")))
+        if not top_customers.empty:
+            top_customers = (top_customers
+                             .merge(self.customers[["customer_id", "customer_name"]],
+                                    on="customer_id", how="left")
+                             .sort_values("revenue", ascending=False).head(5))
+
+        return {
+            "start": start,
+            "end": end,
+            "revenue": revenue,
+            "cash_revenue": float(tk["cash_revenue"].sum()),
+            "on_account_revenue": float(tk["on_account_revenue"].sum()),
+            "gross_profit": float(s["gross_profit"].sum()),
+            "margin_pct": (gp_known / rev_known) if rev_known else None,
+            "tickets": n_tickets,
+            "avg_basket": (revenue / n_tickets) if n_tickets else 0.0,
+            "units": float(s["qty"].sum()),
+            "collections": float(coll["amount"].sum()),
+            "top_items": top_items,
+            "top_customers": top_customers,
         }
 
     # =====================================================================
