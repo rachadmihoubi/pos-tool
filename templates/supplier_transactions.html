@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ t('suppliers.transactions_title') }}{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb" style="padding: 10px 24px 0;">
+  <a href="{{ url_for('page_suppliers') }}">{{ t('suppliers.title') }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('suppliers.transactions_title') }}</h1>
+  <p>{{ t('suppliers.transactions_subtitle') }}</p>
+</div>
+
+<section class="panel">
+  <div class="filter-row">
+    <input type="search" placeholder="{{ t('common.search') }}" data-filters="transactions-table">
+    <span class="muted"><span id="transactions-table-count">{{ transactions|length }}</span></span>
+  </div>
+  {% if transactions %}
+    <div class="table-wrap scroll-y">
+      <table class="sortable" id="transactions-table">
+        <thead>
+          <tr>
+            <th class="num">{{ t('suppliers.col_purchase_date') }}</th>
+            <th>{{ t('common.supplier') }}</th>
+            <th class="num">{{ t('suppliers.col_lines') }}</th>
+            <th class="num">{{ t('suppliers.col_purchase_total') }}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in transactions %}
+          <tr>
+            <td class="num" data-value="{{ r.purchase_time or '' }}">
+              {{ t.date(r.purchase_time) if r.purchase_time else t('suppliers.no_date') }}
+            </td>
+            <td class="name">{{ r.supplier_name if r.supplier_name else t('suppliers.unknown_supplier') }}</td>
+            <td class="num">{{ t.number(r.lines) }}</td>
+            <td class="num strong" data-value="{{ r.total }}">{{ t.money(r.total) }}</td>
+            <td><a href="{{ url_for('page_purchase', purchase_id=r.purchase_id|int) }}">→</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('suppliers.gaps_empty') }}</div>
+  {% endif %}
+</section>
+{% endblock %}

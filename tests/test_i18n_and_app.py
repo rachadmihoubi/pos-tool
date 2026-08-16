@@ -267,6 +267,21 @@ class TestDashboard:
         response = client.get(f"/products/{item_id}?lang={lang}")
         assert response.status_code == 200
 
+    def test_supplier_transactions_page_loads(self, client):
+        response = client.get("/suppliers/purchases")
+        assert response.status_code == 200
+
+    def test_purchase_drilldown_loads(self, client, metrics):
+        st = metrics.supplier_transactions()
+        if st.empty:
+            pytest.skip("no purchase data in this database")
+        purchase_id = st.iloc[0]["purchase_id"]
+        response = client.get(f"/suppliers/purchases/{purchase_id}")
+        assert response.status_code == 200
+
+    def test_purchase_drilldown_404_for_unknown_id(self, client):
+        assert client.get("/suppliers/purchases/not-a-real-id").status_code == 404
+
     def test_customer_drilldown_404_for_unknown_id(self, client):
         assert client.get("/customers/999999999").status_code == 404
 

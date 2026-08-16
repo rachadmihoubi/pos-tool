@@ -473,7 +473,16 @@
     "col_avg_cost": "Coût moyen par unité",
     "col_spend": "Dépensé",
     "coverage_warning": "Seulement {share} des lignes d'achat peuvent être rattachées à un fournisseur, et seulement {date_share} des commandes portent une date. La caisse n'enregistre pas d'en-tête d'achat ; ces chiffres sont reconstitués à partir des fiches fournisseur-article. À prendre comme une indication, pas comme un compte complet.",
-    "chart_concentration_title": "Part des achats par fournisseur"
+    "chart_concentration_title": "Part des achats par fournisseur",
+    "transactions_title": "Transactions d'achat",
+    "transactions_subtitle": "Chaque achat que cet outil peut regrouper en une transaction, avec accès au détail de ses lignes.",
+    "col_purchase_date": "Date",
+    "col_purchase_total": "Total",
+    "col_lines": "Lignes",
+    "unknown_supplier": "Fournisseur inconnu",
+    "no_date": "Sans date",
+    "view_transactions": "Voir toutes les transactions d'achat",
+    "detail_back": "Retour aux transactions"
   },
 
   "diagnostics": {

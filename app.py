@@ -730,6 +730,41 @@ def page_suppliers() -> str:
         conn.close()
 
 
+@app.route("/suppliers/purchases")
+def page_supplier_transactions() -> str:
+    m, etl, conn = open_metrics()
+    try:
+        st = m.supplier_transactions()
+        return render_template(
+            "supplier_transactions.html",
+            transactions=rows(st),
+            cache=etl.cache_info(),
+        )
+    finally:
+        conn.close()
+
+
+@app.route("/suppliers/purchases/<purchase_id>")
+def page_purchase(purchase_id: str) -> str:
+    m, etl, conn = open_metrics()
+    try:
+        try:
+            pid: Any = int(purchase_id)
+        except ValueError:
+            pid = purchase_id
+        detail = m.purchase_detail(pid)
+        if detail is None:
+            abort(404)
+        return render_template(
+            "purchase_detail.html",
+            header=row_dict(detail["header"]),
+            lines=rows(detail["lines"]),
+            cache=etl.cache_info(),
+        )
+    finally:
+        conn.close()
+
+
 @app.route("/cash")
 def page_cash() -> str:
     m, etl, conn = open_metrics()

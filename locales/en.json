@@ -473,7 +473,16 @@
     "col_avg_cost": "Average cost per unit",
     "col_spend": "Spent",
     "coverage_warning": "Only {share} of purchase lines can be traced to a supplier, and only {date_share} of orders carry a date. The POS does not store a purchase header, so these figures are built from the supplier-item records. Treat supplier totals as a guide, not a full account.",
-    "chart_concentration_title": "Share of buying by supplier"
+    "chart_concentration_title": "Share of buying by supplier",
+    "transactions_title": "Purchase transactions",
+    "transactions_subtitle": "Every purchase this tool can group into one transaction, with a drill-down into its lines.",
+    "col_purchase_date": "Date",
+    "col_purchase_total": "Total",
+    "col_lines": "Lines",
+    "unknown_supplier": "Unknown supplier",
+    "no_date": "No date",
+    "view_transactions": "See all purchase transactions",
+    "detail_back": "Back to transactions"
   },
 
   "diagnostics": {

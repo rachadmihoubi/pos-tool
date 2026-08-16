@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ t('suppliers.transactions_title') }}{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb" style="padding: 10px 24px 0;">
+  <a href="{{ url_for('page_supplier_transactions') }}">{{ t('suppliers.detail_back') }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ header.supplier_name if header.supplier_name else t('suppliers.unknown_supplier') }}</h1>
+  <p>{{ t.date(header.purchase_time) if header.purchase_time else t('suppliers.no_date') }}</p>
+</div>
+
+<section class="tiles">
+  <div class="tile">
+    <div class="label">{{ t('suppliers.col_purchase_total') }}</div>
+    <div class="value">{{ t.money(header.total) }}</div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('suppliers.col_lines') }}</div>
+    <div class="value">{{ t.number(header.lines) }}</div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>{{ t('tickets.detail_lines_title') }}</h2>
+  {% if lines %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t('common.product') }}</th>
+            <th class="num">{{ t('tickets.col_qty') }}</th>
+            <th class="num">{{ t('common.cost') }}</th>
+            <th class="num">{{ t('tickets.col_amount') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in lines %}
+          <tr>
+            <td class="name">{{ r.item_name }}</td>
+            <td class="num">{{ t.number(r.qty) }}</td>
+            <td class="num">{{ t.money(r.cost) }}</td>
+            <td class="num strong">{{ t.money(r.amount) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('suppliers.gaps_empty') }}</div>
+  {% endif %}
+</section>
+{% endblock %}
