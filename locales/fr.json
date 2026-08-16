@@ -717,6 +717,14 @@
     "margin_check_body": "La marge calculée par cet outil à partir des lignes diffère de celle enregistrée par la caisse de {value}, soit {share} du chiffre d'affaires.",
     "margin_check_handled": "L'écart vient entièrement des lignes sans coût. Les deux concordent partout ailleurs, ce qui confirme que la lecture est correcte.",
 
+    "tender_title": "À quel point les montants payés correspondent au total du ticket",
+    "tender_body": "{mismatched} tickets sur {checked} ({share}) ont un total Espèces + Chèque + Virement + À crédit qui ne correspond pas au total du ticket, avec un écart pouvant aller jusqu'à {gap}.",
+    "tender_handled": "La répartition ventes encaissées / à crédit se base toujours sur le total des paiements lui-même, jamais sur le total du ticket, donc ceci ne fausse jamais la répartition - cela indique seulement à quelle fréquence les deux diffèrent.",
+
+    "on_account_title": "Vérification croisée : ventes à crédit et créances",
+    "on_account_body": "Les ventes à crédit depuis toujours ({on_account}) moins les {collections} déjà encaissés laissent un solde attendu de {expected} encore dû. L'écran Créances affiche actuellement {actual}.",
+    "on_account_handled": "Ces deux montants sont calculés de deux façons entièrement différentes - l'un à partir des paiements des tickets, l'autre à partir des soldes clients - ils ne correspondront donc pas exactement. Un écart de cette taille est normal, dû aux soldes d'ouverture et à tout ajustement fait directement dans le logiciel de caisse.",
+
     "verification_title": "Preuve que la base est lue correctement",
     "verification_note": "Ces chiffres ont été vérifiés à la main contre votre base lors de la construction de l'outil. Les totaux depuis le début ne doivent que croître, exactement de la valeur des nouvelles ventes. Si l'un d'eux bondit ou chute, quelque chose ne va pas et il faut regarder.",
     "verification_check": "Contrôle",
