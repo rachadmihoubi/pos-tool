@@ -2117,6 +2117,50 @@ class Metrics:
                 "days": self.data_range["days"],
                 "age_hours": self.data_range["age_hours"],
             },
+
+            "tender_reconciliation": self._tender_reconciliation(),
+            "on_account_reconciliation": self._on_account_reconciliation(),
+        }
+
+    def _tender_reconciliation(self) -> dict[str, Any]:
+        """
+        How well Cash+Cheque+Transfer+CreditAccount adds up to the ticket's
+        own Total. The cash-realized split (see `tickets`) uses the tender
+        total as its own denominator regardless, so this never affects the
+        split - it only says how much to trust it.
+        """
+        tk = self.tickets
+        gap = (tk["total_tender"] - tk["total"].fillna(0)).abs()
+        mismatched = tk[gap > 1]
+        return {
+            "tickets_checked": int(len(tk)),
+            "tickets_mismatched": int(len(mismatched)),
+            "share_mismatched": (len(mismatched) / len(tk)) if len(tk) else 0.0,
+            "max_gap": float(gap.max()) if not tk.empty else 0.0,
+        }
+
+    def _on_account_reconciliation(self) -> dict[str, Any]:
+        """
+        Cross-checks the new on-account figure against the existing
+        Receivables total, which is computed an entirely different way
+        (from Customer.balance, not from ticket tenders). They are not
+        expected to match exactly - opening balances and any adjustment
+        made directly in the POS are invisible to ticket-level tender data
+        - but a wildly different order of magnitude would mean one of the
+        two is wrong.
+        """
+        on_account_all = float(self.tickets["on_account_revenue"].sum())
+        collections_all = float(self.collections["amount"].sum())
+        expected = on_account_all - collections_all
+        actual = float(self.receivables_summary()["total"])
+        gap = actual - expected
+        return {
+            "on_account_all_time": on_account_all,
+            "collections_all_time": collections_all,
+            "expected_receivables": expected,
+            "actual_receivables": actual,
+            "gap": gap,
+            "explains_receivables": bool(expected and 0.5 <= actual / expected <= 2.0),
         }
 
     def _stale_last_sold(self) -> dict[str, Any]:
