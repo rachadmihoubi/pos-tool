@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ t('tickets.title') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ t('tickets.title') }}</h1>
+  <p>{{ t('tickets.subtitle') }}</p>
+</div>
+
+{% include "_daterange.html" %}
+
+<section class="panel">
+  <div class="filter-row">
+    <input type="search" placeholder="{{ t('common.search') }}" data-filters="ticket-table">
+    <span class="muted"><span id="ticket-table-count">{{ tickets|length }}</span></span>
+  </div>
+  {% if tickets %}
+    <div class="table-wrap scroll-y">
+      <table class="sortable" id="ticket-table">
+        <thead>
+          <tr>
+            <th class="num">{{ t('tickets.col_time') }}</th>
+            <th class="num">{{ t('tickets.col_ticket_no') }}</th>
+            <th>{{ t('tickets.col_customer') }}</th>
+            <th class="num">{{ t('tickets.col_total') }}</th>
+            <th class="num">{{ t('tickets.col_cash') }}</th>
+            <th class="num">{{ t('tickets.col_on_account') }}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in tickets %}
+          <tr>
+            <td class="num" data-value="{{ r.ticket_time }}">{{ t.datetime(r.ticket_time) }}</td>
+            <td class="num muted">{{ r.ticket_no }}</td>
+            <td class="name">{{ r.customer_name }}</td>
+            <td class="num strong" data-value="{{ r.revenue }}">{{ t.money(r.revenue) }}</td>
+            <td class="num" data-value="{{ r.cash_revenue }}">{{ t.money(r.cash_revenue) }}</td>
+            <td class="num" data-value="{{ r.on_account_revenue }}">
+              {% if r.on_account_revenue and r.on_account_revenue > 0.01 %}
+                <span class="pill pill-warn">{{ t.money(r.on_account_revenue) }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td><a href="{{ url_for('page_ticket', receipt_id=r.receipt_id) }}">→</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('tickets.empty') }}</div>
+  {% endif %}
+</section>
+{% endblock %}

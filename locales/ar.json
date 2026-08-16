@@ -26,6 +26,7 @@
     "inventory": "المخزون",
     "products": "المنتجات والهامش",
     "suppliers": "الموردون",
+    "tickets": "الفواتير",
     "cash": "السيولة والأرباح",
     "diagnostics": "ما يجب إصلاحه",
     "dataquality": "جودة البيانات"
@@ -135,6 +136,30 @@
     "period_tickets": "الفواتير",
     "period_margin": "الهامش",
     "view_tickets": "عرض كل فواتير هذه الفترة"
+  },
+
+  "tickets": {
+    "title": "الفواتير",
+    "subtitle": "كل فاتورة في الفترة التي تختارها",
+    "col_time": "الوقت",
+    "col_ticket_no": "رقم الفاتورة",
+    "col_customer": "الزبون",
+    "col_total": "الإجمالي",
+    "col_cash": "محصّل نقداً",
+    "col_on_account": "على الحساب",
+    "col_lines": "الأسطر",
+    "status_cash": "مدفوع بالكامل",
+    "status_split": "جزئياً على الحساب",
+    "status_account": "بالكامل على الحساب",
+    "empty": "لا توجد فواتير في هذه الفترة.",
+    "detail_back": "العودة إلى الفواتير",
+    "detail_lines_title": "الأسطر",
+    "detail_payment_title": "الدفع",
+    "detail_collection_line": "تسديد حساب، وليس بيعاً",
+    "col_qty": "الكمية",
+    "col_price": "السعر",
+    "col_discount": "الخصم",
+    "col_amount": "المبلغ"
   },
 
   "trend": {

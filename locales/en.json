@@ -26,6 +26,7 @@
     "inventory": "Stock",
     "products": "Products & margin",
     "suppliers": "Suppliers",
+    "tickets": "Tickets",
     "cash": "Cash & P&L",
     "diagnostics": "What to fix",
     "dataquality": "Data quality"
@@ -135,6 +136,30 @@
     "period_tickets": "Tickets",
     "period_margin": "Margin",
     "view_tickets": "See every ticket in this period"
+  },
+
+  "tickets": {
+    "title": "Tickets",
+    "subtitle": "Every ticket for the period you choose",
+    "col_time": "Time",
+    "col_ticket_no": "Ticket #",
+    "col_customer": "Customer",
+    "col_total": "Total",
+    "col_cash": "Cash-realized",
+    "col_on_account": "On account",
+    "col_lines": "Lines",
+    "status_cash": "Fully paid",
+    "status_split": "Partly on account",
+    "status_account": "Fully on account",
+    "empty": "No tickets in this period.",
+    "detail_back": "Back to tickets",
+    "detail_lines_title": "Lines",
+    "detail_payment_title": "Payment",
+    "detail_collection_line": "Account payment, not a sale",
+    "col_qty": "Qty",
+    "col_price": "Price",
+    "col_discount": "Discount",
+    "col_amount": "Amount"
   },
 
   "trend": {
