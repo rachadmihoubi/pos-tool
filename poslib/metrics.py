@@ -216,6 +216,22 @@ class Metrics:
         df["weekday"] = df["ticket_time"].dt.weekday
         df["hour"] = df["ticket_time"].dt.hour
         df["is_walkin"] = df["customer_id"] == self.walkin_id
+
+        # Cash-realized vs on-account, scoped to the Today and Tickets
+        # screens only (see docs/superpowers/specs/2026-08-16-tickets-
+        # catalog-suppliers-design.md for why this doesn't touch revenue
+        # anywhere else). The POS records tender per ticket header, not per
+        # line, so a ticket that is partly on account has every one of its
+        # lines prorated by the same ratio - the best the data supports.
+        # A ticket with no tender recorded at all defaults to fully
+        # realized: silence is not evidence a customer owes money.
+        df["realized_tender"] = (df["cash"].fillna(0) + df["cheque"].fillna(0) +
+                                 df["transfer"].fillna(0))
+        df["total_tender"] = df["realized_tender"] + df["credit_account"].fillna(0)
+        df["realized_share"] = np.where(df["total_tender"] > 0,
+                                        df["realized_tender"] / df["total_tender"], 1.0)
+        df["cash_revenue"] = df["revenue"] * df["realized_share"]
+        df["on_account_revenue"] = df["revenue"] - df["cash_revenue"]
         return df
 
     @cached_property
