@@ -40,13 +40,15 @@ Available in **English, French and Arabic**.
 
 | Screen | What it answers |
 |---|---|
-| **Today** | How is today going, against yesterday and against a usual day of this weekday |
+| **Today** | How is this period going, against a comparable day/period, with sales split into what's actually been collected vs what's still on the customer's account |
+| **Tickets** | Every ticket for a period you choose, drilling into full line-level detail |
 | **Trend** | Is the business getting better or worse, and why |
 | **Customers** | Who is worth chasing, who is quietly leaving, and a printable call list |
 | **Money owed** | Who owes you what, and who has gone quiet while owing it |
 | **Stock** | Where your money is stuck, and what is about to run out |
+| **Stock catalog** | Every product - reference, family, quantity and price - to look one up quickly |
 | **Products & margin** | What actually makes money, and what quietly loses it |
-| **Suppliers** | Who you depend on, and how often you reorder |
+| **Suppliers** | Who you depend on, how often you reorder, and every purchase transaction in full detail |
 | **What to fix** | Every problem found, ranked by money, with what to do about each |
 | **Data quality** | How much to trust each number on the other screens |
 

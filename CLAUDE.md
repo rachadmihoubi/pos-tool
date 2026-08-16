@@ -6,11 +6,13 @@ the build sessions that are not obvious from the code alone.
 ## What this is
 
 See README.md for what the tool does. **Status: feature-complete through
-Patch #3** (2026-08-10). Original build +
-the cash/P&L, drill-down and date-range foundation ("Patch #2") + seven new
-Patch #3 features + silent background launch + remote viewing are all built,
-tested (169 tests) and — for the background launch and remote viewing —
-actually deployed and verified live on this machine. See "What's left" below.
+Patch #4** (2026-08-16). Original build +
+the cash/P&L, drill-down and date-range foundation ("Patch #2") + seven
+Patch #3 features + silent background launch + remote viewing + Patch #4
+(Today drill-down, cash-realized sales, Tickets tab, Stock catalog tab,
+supplier purchase drill-down) are all built, tested (214 tests) and — for
+the background launch and remote viewing — actually deployed and verified
+live on this machine. See "What's left" below.
 
 ## The one rule that overrides everything else
 
@@ -76,6 +78,22 @@ goods is always computed from `ReceiptEntry` lines, never the header.
    1,570 real items currently have a photo, so this path is deliberately
    lightweight (best-effort OLE-wrapper sniffing, not a full parser).
 
+## Patch #4 session discoveries (2026-08-16) — cash-realized sales
+
+9. **Tender reconciliation is clean.** `_tender_reconciliation()` found
+   Cash+Cheque+Transfer+CreditAccount matches each ticket's own `Total` on
+   7,867 of 7,950 tickets (98.96%); the 83 mismatches (1.04%) top out at a
+   132,000 DZD gap on the single worst ticket. Good enough to trust the
+   cash-realized split as built. `_on_account_reconciliation()` cross-checked
+   the new on-account figure against the existing Receivables total two
+   completely different ways: all-time on-account sales (48,951,498 DZD)
+   minus all-time collections (30,699,564 DZD) predicts 18,251,934 DZD still
+   owed; the Money Owed screen (built from `Customer.balance`, never touched
+   by this patch) currently shows 18,035,429 DZD — a 216,506 DZD gap
+   (~1.2% of the expected figure), which `explains_receivables` reports as
+   within tolerance. The two independently-computed figures agreeing this
+   closely is a good sign both are reading the data correctly.
+
 ## Verified numbers (as of 2026-08-10, re-verify with `pytest tests -q`)
 
 | Check | Value |
@@ -123,10 +141,13 @@ file). Sync exclusions and why: see `.gitignore`'s own comments. This file
 - **Arabic web font not fetched** (`tools/get_fonts.py` — harmless, falls
   back to Windows' own Arabic font).
 - **Patch #1 (expiry stock) was explicitly dropped** — see discovery #6.
-- **This session's work is not yet committed/pushed** — run
-  `.\tools\sync.ps1` when ready (or ask Claude Code to do it) so the other PC
-  picks it up on its next session start.
-- Nothing else from Patch #2/#3 is outstanding. New metrics belong in
+- **Task 14's manual spot-check against a live POS screenshot was not
+  done** — it needs a screenshot from the shop owner, which wasn't
+  available this session. The programmatic tender/on-account
+  reconciliation (discovery #9) is the automated substitute; a manual
+  screenshot comparison is still worth doing next time the owner is
+  available, per the plan's Task 14 Step 2.
+- Nothing else from Patch #2/#3/#4 is outstanding. New metrics belong in
   `poslib/metrics.py`, new diagnostic rules in `poslib/diagnostics.py`, new
   owner-entered data in `poslib/ownerdata.py` (never in a file `etl.py`
   rebuilds) — see the architecture rules at the bottom of `README.md`.
