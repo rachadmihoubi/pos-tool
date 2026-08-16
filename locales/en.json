@@ -717,6 +717,14 @@
     "margin_check_body": "The profit this tool works out from the lines differs from the profit the POS recorded by {value}, which is {share} of revenue.",
     "margin_check_handled": "The difference comes entirely from the lines with no cost. The two agree everywhere else, which is a good sign that the reading is correct.",
 
+    "tender_title": "How well payment amounts add up to the ticket total",
+    "tender_body": "{mismatched} tickets out of {checked} ({share}) have Cash + Cheque + Transfer + On-account that does not match the ticket's own total, by up to {gap}.",
+    "tender_handled": "The cash-realized split always uses the payment total itself as its base, not the ticket total, so this never throws the split off - it only says how often the two disagree.",
+
+    "on_account_title": "Cross-check: on-account sales against money owed",
+    "on_account_body": "All-time on-account sales of {on_account} minus {collections} collected back leaves an expected {expected} still owed. The Money Owed screen currently shows {actual}.",
+    "on_account_handled": "These are worked out two completely different ways - one from ticket payment amounts, one from customer balances - so they will not match exactly. A gap this size is expected from opening balances and anything adjusted directly in the till software.",
+
     "verification_title": "Proof the database is being read correctly",
     "verification_note": "These figures were checked by hand against your database when the tool was built. The all-time totals should only ever grow, by exactly the value of new sales. If one of them jumps or falls, something is wrong and it should be looked at.",
     "verification_check": "Check",

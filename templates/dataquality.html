@@ -128,6 +128,24 @@
         value=t.money(dq.reported_vs_calculated_margin.difference),
         share=t.percent(dq.reported_vs_calculated_margin.share, 3)),
       t('dataquality.margin_check_handled')) }}
+
+  {{ issue(
+      t('dataquality.tender_title'),
+      t('dataquality.tender_body',
+        mismatched=t.number(dq.tender_reconciliation.tickets_mismatched),
+        checked=t.number(dq.tender_reconciliation.tickets_checked),
+        share=t.percent(dq.tender_reconciliation.share_mismatched),
+        gap=t.money(dq.tender_reconciliation.max_gap)),
+      t('dataquality.tender_handled')) }}
+
+  {{ issue(
+      t('dataquality.on_account_title'),
+      t('dataquality.on_account_body',
+        on_account=t.money(dq.on_account_reconciliation.on_account_all_time),
+        collections=t.money(dq.on_account_reconciliation.collections_all_time),
+        expected=t.money(dq.on_account_reconciliation.expected_receivables),
+        actual=t.money(dq.on_account_reconciliation.actual_receivables)),
+      t('dataquality.on_account_handled')) }}
 </section>
 
 {# --------------------------------------------------------- verification #}
