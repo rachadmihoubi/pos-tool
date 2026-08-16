@@ -471,6 +471,55 @@ class TestTodayByDate:
         assert p["tickets"] == 0
 
 
+class TestTickets:
+
+    def test_ticket_list_columns(self, metrics: Metrics):
+        first = metrics.data_range["first"]
+        if first is None:
+            pytest.skip("no sales in this database")
+        tl = metrics.ticket_list(first.date(), first.date() + datetime.timedelta(days=60))
+        if tl.empty:
+            pytest.skip("no tickets in the first 60 days of this database")
+        for col in ("receipt_id", "ticket_no", "ticket_time", "customer_name",
+                    "revenue", "cash_revenue", "on_account_revenue", "total"):
+            assert col in tl.columns
+
+    def test_ticket_list_empty_range(self, metrics: Metrics):
+        far_future = datetime.date(2200, 1, 1)
+        tl = metrics.ticket_list(far_future, far_future)
+        assert tl.empty
+
+    def test_ticket_detail_round_trips_from_ticket_list(self, metrics: Metrics):
+        first = metrics.data_range["first"]
+        if first is None:
+            pytest.skip("no sales in this database")
+        tl = metrics.ticket_list(first.date(), first.date() + datetime.timedelta(days=60))
+        if tl.empty:
+            pytest.skip("no tickets in the first 60 days of this database")
+        receipt_id = int(tl.iloc[0]["receipt_id"])
+        detail = metrics.ticket_detail(receipt_id)
+        assert detail is not None
+        assert detail["header"]["receipt_id"] == receipt_id
+        assert not detail["lines"].empty
+
+    def test_ticket_detail_unknown_id_returns_none(self, metrics: Metrics):
+        assert metrics.ticket_detail(999999999) is None
+
+    def test_ticket_detail_keeps_collection_lines_labelled(self, metrics: Metrics):
+        """
+        A ticket that mixes a real sale with an account-payment line (a
+        "Paiement de règlement") must show that line too, still marked as
+        not-a-sale - never silently dropped or folded into the sale total.
+        """
+        mixed_receipt_ids = (set(metrics.sales["receipt_id"]) &
+                             set(metrics.collections["receipt_id"]))
+        if not mixed_receipt_ids:
+            pytest.skip("no ticket in this database mixes a sale with a collection")
+        receipt_id = next(iter(mixed_receipt_ids))
+        detail = metrics.ticket_detail(receipt_id)
+        assert (~detail["lines"]["is_sale"]).any()
+
+
 class TestCatalog:
 
     def test_new_arrivals_upper_bound(self, metrics: Metrics):

@@ -680,6 +680,54 @@ class Metrics:
         }
 
     # =====================================================================
+    #  PAGE 1B - TICKETS
+    # =====================================================================
+
+    def ticket_list(self, start: datetime.date, end: datetime.date) -> pd.DataFrame:
+        """
+        Every ticket in a date range, for the Tickets screen: who, when,
+        how much, and how much of that was cash-realized vs put on the
+        customer's account. Built from `tickets`, filtered to the range -
+        not a new aggregation.
+        """
+        tk = self._window_range(self.tickets, start, end)
+        if tk.empty:
+            return tk
+        tk = tk.merge(self.customers[["customer_id", "customer_name"]],
+                      on="customer_id", how="left")
+        tk["customer_name"] = tk["customer_name"].fillna("—")
+        return tk[["receipt_id", "ticket_no", "ticket_time", "customer_id",
+                   "customer_name", "revenue", "cash_revenue", "on_account_revenue",
+                   "collected", "total", "n_lines"]].sort_values(
+            "ticket_time", ascending=False).reset_index(drop=True)
+
+    def ticket_detail(self, receipt_id: int) -> dict[str, Any] | None:
+        """
+        Everything on one ticket, for the drill-down page: its header
+        (customer, time, totals, cash-realized vs on-account) and every
+        line on it, sales and collections both - a collection line stays
+        labelled as a collection, never folded into "sale". Returns None
+        if the ticket does not exist.
+        """
+        tk = self.tickets[self.tickets["receipt_id"] == receipt_id]
+        if tk.empty:
+            return None
+        header = tk.iloc[0].to_dict()
+
+        cust = self.customers[self.customers["customer_id"] == header["customer_id"]]
+        header["customer_name"] = (cust.iloc[0]["customer_name"]
+                                   if not cust.empty else "—")
+
+        lines = (self.lines[self.lines["receipt_id"] == receipt_id]
+                 .sort_values("entry_id"))
+
+        return {
+            "header": header,
+            "lines": lines[["entry_id", "item_name", "qty", "price", "discount",
+                            "amount", "is_sale", "is_return"]],
+        }
+
+    # =====================================================================
     #  PAGE 2 - TREND
     # =====================================================================
 
