@@ -48,7 +48,8 @@ import logging
 import shutil
 from pathlib import Path
 
-from poslib.config import PROJECT_ROOT, Config, get_config, setup_logging
+from poslib.config import (PROJECT_ROOT, REMOTE_TICKET_WINDOW_DAYS, Config,
+                           get_config, setup_logging)
 from poslib.etl import ETL
 from poslib.i18n import LANGUAGES
 from poslib.metrics import Metrics
@@ -71,8 +72,11 @@ NESTED_PAGES = ["suppliers/purchases"]
 TODAY_PRESET_FILES = ["today-yesterday", "today-week", "today-last7"]
 
 # How many days back to export ticket drill-downs remotely (see module
-# docstring). Purchases are exported in full, unwindowed - see above.
-DRILLDOWN_WINDOW_DAYS = 120
+# docstring), and to show on the exported Tickets list page. Purchases are
+# exported in full, unwindowed - see above. Shared with app.py (see
+# poslib/config.py) so the Tickets template can tell a visitor the same
+# number.
+DRILLDOWN_WINDOW_DAYS = REMOTE_TICKET_WINDOW_DAYS
 
 _NOT_FOUND_HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Not available remotely</title></head>
@@ -181,7 +185,15 @@ def export(cfg: Config | None = None) -> Path:
                 out_file.write_text(response.get_data(as_text=True), encoding="utf-8")
 
             for slug in PAGES:
-                render(f"/{slug}", lang_dir / f"{slug}.html")
+                if slug == "tickets":
+                    # The bare route defaults to today only - not useful as
+                    # a standing remote snapshot. Export the same window as
+                    # the ticket drill-downs below instead, so the list and
+                    # the links on it agree with each other.
+                    render(f"/tickets?start={window_start.isoformat()}&end={today.isoformat()}",
+                           lang_dir / "tickets.html")
+                else:
+                    render(f"/{slug}", lang_dir / f"{slug}.html")
 
             for slug in NESTED_PAGES:
                 render(f"/{slug}", lang_dir / f"{slug}.html")

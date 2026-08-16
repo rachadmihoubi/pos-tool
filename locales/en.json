@@ -163,7 +163,8 @@
     "col_qty": "Qty",
     "col_price": "Price",
     "col_discount": "Discount",
-    "col_amount": "Amount"
+    "col_amount": "Amount",
+    "remote_window_note": "Showing the last {days} days. Filter within that window below, or open the local dashboard for older tickets."
   },
 
   "trend": {
@@ -460,6 +461,8 @@
     "col_last": "Last purchase",
     "col_days_since": "Days since",
     "col_balance": "You owe them",
+    "col_estimated_paid": "Est. paid so far",
+    "col_estimated_paid_note": "\"Est. paid so far\" is total purchased minus what you currently owe - the only payment figure this data supports. The till software does not log individual supplier payments (checked directly: the tables meant for this are empty), so there is no payment history to show, only this one all-time estimate.",
     "col_orders": "Orders",
     "col_gap": "Usual days between orders",
     "col_overdue": "Overdue",
@@ -485,7 +488,8 @@
     "unknown_supplier": "Unknown supplier",
     "no_date": "No date",
     "view_transactions": "See all purchase transactions",
-    "detail_back": "Back to transactions"
+    "detail_back": "Back to transactions",
+    "payments_not_tracked_note": "This tool cannot show individual payments to suppliers - the till software does not record them, only the purchases themselves. An estimated all-time total paid appears on the main Suppliers page instead."
   },
 
   "diagnostics": {

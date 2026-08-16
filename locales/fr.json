@@ -163,7 +163,8 @@
     "col_qty": "Qté",
     "col_price": "Prix",
     "col_discount": "Remise",
-    "col_amount": "Montant"
+    "col_amount": "Montant",
+    "remote_window_note": "Affiche les {days} derniers jours. Filtrez dans cette période ci-dessous, ou ouvrez le tableau de bord local pour les tickets plus anciens."
   },
 
   "trend": {
@@ -460,6 +461,8 @@
     "col_last": "Dernier achat",
     "col_days_since": "Jours depuis",
     "col_balance": "Vous leur devez",
+    "col_estimated_paid": "Est. payé à ce jour",
+    "col_estimated_paid_note": "\"Est. payé à ce jour\" correspond au total acheté moins ce que vous devez actuellement - le seul chiffre de paiement que ces données permettent de calculer. Le logiciel de caisse n'enregistre pas les paiements individuels aux fournisseurs (vérifié directement : les tables prévues pour cela sont vides), il n'y a donc pas d'historique de paiement à afficher, seulement cette estimation globale.",
     "col_orders": "Commandes",
     "col_gap": "Jours habituels entre commandes",
     "col_overdue": "En retard",
@@ -485,7 +488,8 @@
     "unknown_supplier": "Fournisseur inconnu",
     "no_date": "Sans date",
     "view_transactions": "Voir toutes les transactions d'achat",
-    "detail_back": "Retour aux transactions"
+    "detail_back": "Retour aux transactions",
+    "payments_not_tracked_note": "Cet outil ne peut pas afficher les paiements individuels aux fournisseurs - le logiciel de caisse ne les enregistre pas, seulement les achats eux-mêmes. Un total estimé payé depuis toujours apparaît sur la page principale des fournisseurs."
   },
 
   "diagnostics": {

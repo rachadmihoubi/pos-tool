@@ -94,6 +94,33 @@ goods is always computed from `ReceiptEntry` lines, never the header.
    within tolerance. The two independently-computed figures agreeing this
    closely is a good sign both are reading the data correctly.
 
+## Remote-parity follow-up (2026-08-16) — full read-only remote feature parity
+
+10. **No supplier-payment records exist anywhere in this database.**
+    Checked directly against the raw schema: `StoreSafeIn` and
+    `StoreSafeOut` — the tables R.Lynx provides specifically for tracking
+    cash moving in and out of the till — are both completely empty (0
+    rows). `Charge` (generic expenses) has exactly 4 rows total, all shop/
+    warehouse rent, nothing supplier-related. The only payment-adjacent
+    figure anywhere is `Supplier.Account`, a single running "amount
+    currently owed" balance with no history, no dates, no line items.
+    `supplier_summary()`'s `estimated_paid` column (`total_purchased -
+    balance`) is therefore the most this data will ever support — a single
+    all-time estimate, never a payment transaction history. Same category
+    as discovery #5 (no stocktake line detail) — don't build toward
+    anything more granular unless a fresh copy from the actual till PC
+    someday shows the shop started using `StoreSafeOut`/`Charge` for this.
+11. **Remote viewing reached full read-only feature parity with the local
+    dashboard** (Today date presets + true custom ranges, Tickets and
+    Stock catalog tabs, ticket/purchase drill-down), decided via a
+    5-advisor council review that unanimously rejected any live-tunnel
+    approach — see `export_static.py`'s module docstring for the design
+    (bounded ticket drill-down window, `daily.json` for client-side range
+    slicing, no server-side exposure added at all). One real perf bug
+    caught before shipping: naive per-page drill-down export took ~19
+    minutes (rebuilding `Metrics` from scratch per page); reusing one
+    shared `Metrics` instance cut that to ~40 seconds.
+
 ## Verified numbers (as of 2026-08-10, re-verify with `pytest tests -q`)
 
 | Check | Value |

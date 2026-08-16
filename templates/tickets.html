@@ -7,7 +7,23 @@
   <p>{{ t('tickets.subtitle') }}</p>
 </div>
 
-{% include "_daterange.html" %}
+{% if is_static_export %}
+  <p class="note" style="margin-bottom: 12px;">{{ t('tickets.remote_window_note', days=remote_window_days) }}</p>
+  <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:18px;">
+    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
+      {{ t('common.date_from') }}
+      <input type="date" id="ticket-range-start">
+    </label>
+    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
+      {{ t('common.date_to') }}
+      <input type="date" id="ticket-range-end">
+    </label>
+    <button type="button" class="btn" id="ticket-range-apply">{{ t('common.apply_range') }}</button>
+    <button type="button" class="btn btn-quiet" id="ticket-range-clear">{{ t('common.clear_range') }}</button>
+  </div>
+{% else %}
+  {% include "_daterange.html" %}
+{% endif %}
 
 <section class="panel">
   <div class="filter-row">
@@ -30,7 +46,7 @@
         </thead>
         <tbody>
           {% for r in tickets %}
-          <tr>
+          <tr data-date="{{ r.ticket_time.strftime('%Y-%m-%d') }}">
             <td class="num" data-value="{{ r.ticket_time }}">{{ t.datetime(r.ticket_time) }}</td>
             <td class="num muted">{{ r.ticket_no }}</td>
             <td class="name">{{ r.customer_name }}</td>
@@ -51,4 +67,43 @@
     <div class="empty">{{ t('tickets.empty') }}</div>
   {% endif %}
 </section>
+
+{% if is_static_export %}
+<script>
+(function () {
+  "use strict";
+  var startInput = document.getElementById("ticket-range-start");
+  var endInput = document.getElementById("ticket-range-end");
+  var applyBtn = document.getElementById("ticket-range-apply");
+  var clearBtn = document.getElementById("ticket-range-clear");
+  var table = document.getElementById("ticket-table");
+  var countEl = document.getElementById("ticket-table-count");
+
+  function apply() {
+    if (!table) { return; }
+    var start = startInput.value;
+    var end = endInput.value;
+    var shown = 0;
+    Array.prototype.forEach.call(table.tBodies[0].rows, function (row) {
+      var d = row.getAttribute("data-date");
+      var visible = (!start || d >= start) && (!end || d <= end);
+      row.hidden = !visible;
+      if (visible) { shown++; }
+    });
+    if (countEl) { countEl.textContent = shown; }
+  }
+
+  if (applyBtn) {
+    applyBtn.addEventListener("click", apply);
+  }
+  if (clearBtn) {
+    clearBtn.addEventListener("click", function () {
+      startInput.value = "";
+      endInput.value = "";
+      apply();
+    });
+  }
+})();
+</script>
+{% endif %}
 {% endblock %}

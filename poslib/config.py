@@ -26,6 +26,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
 
+# How many days back the remote static export renders ticket drill-downs
+# (see export_static.py's module docstring). Shared here, not just defined
+# in export_static.py, so app.py can tell the Tickets template the same
+# number without importing export_static (which itself imports app.py -
+# an import cycle) or risking the two drifting out of sync.
+REMOTE_TICKET_WINDOW_DAYS = 120
+
 log = logging.getLogger(__name__)
 
 

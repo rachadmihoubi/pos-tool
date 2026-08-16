@@ -1846,6 +1846,14 @@ class Metrics:
         sup["margin_pct"] = np.where(sup["item_revenue"] > 0,
                                      sup["item_gross_profit"] / sup["item_revenue"], np.nan)
 
+        # There is no line-item record of money paid to suppliers anywhere
+        # in this database (checked: StoreSafeIn/StoreSafeOut, the tables
+        # meant for exactly this, are both empty; Charge has 4 rows, all
+        # rent). `balance` is the one number the POS itself maintains -
+        # what's currently owed - so "paid so far" can only ever be a
+        # single derived all-time estimate, never a transaction history.
+        sup["estimated_paid"] = sup["total_purchased"].fillna(0.0) - sup["balance"].fillna(0.0)
+
         for col, share in (("purchase_value", "purchase_share"),
                            ("item_revenue", "revenue_share")):
             if col in sup.columns:

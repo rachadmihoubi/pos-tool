@@ -29,7 +29,8 @@ from flask import (Flask, Response, abort, jsonify, make_response, redirect,
                    render_template, request, send_file, url_for)
 
 from poslib import charts, ownerdata
-from poslib.config import ConfigError, get_config, setup_logging
+from poslib.config import (REMOTE_TICKET_WINDOW_DAYS, ConfigError, get_config,
+                           setup_logging)
 from poslib.diagnostics import Diagnostics
 from poslib.etl import ETL, ETLError
 from poslib.photos import get_item_photo
@@ -137,6 +138,7 @@ def inject_globals() -> dict[str, Any]:
         # and every page behaves exactly as it always has.
         "is_static_export": request.args.get("__static__") == "1",
         "page_slug": request.path.strip("/") or "today",
+        "remote_window_days": REMOTE_TICKET_WINDOW_DAYS,
     }
 
 

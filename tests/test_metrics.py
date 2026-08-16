@@ -572,6 +572,21 @@ class TestSupplierTransactions:
     def test_purchase_detail_unknown_id_returns_none(self, metrics: Metrics):
         assert metrics.purchase_detail(-999999999) is None
 
+    def test_estimated_paid_derives_from_purchased_minus_balance(self, metrics: Metrics):
+        """
+        There is no per-payment record for suppliers anywhere in this
+        database, so estimated_paid must always be exactly
+        total_purchased - balance, a single all-time figure - never
+        anything more granular, since the data to build anything more
+        granular does not exist.
+        """
+        sup = metrics.supplier_summary()
+        if sup.empty:
+            pytest.skip("no suppliers in this database")
+        assert "estimated_paid" in sup.columns
+        expected = sup["total_purchased"].fillna(0.0) - sup["balance"].fillna(0.0)
+        assert (sup["estimated_paid"] - expected).abs().max() < 0.01
+
 
 class TestCatalog:
 
