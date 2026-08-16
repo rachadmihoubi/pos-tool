@@ -136,7 +136,10 @@
     "period_revenue": "Sales (cash-realized)",
     "period_tickets": "Tickets",
     "period_margin": "Margin",
-    "view_tickets": "See every ticket in this period"
+    "view_tickets": "See every ticket in this period",
+    "remote_range_title": "Custom range",
+    "remote_range_note": "Computed on your phone from a small daily summary file - works for any range, including days not shown above.",
+    "remote_range_empty": "No sales in that range."
   },
 
   "tickets": {

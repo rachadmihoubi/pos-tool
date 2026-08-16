@@ -132,6 +132,22 @@ class Translator:
 
     # -- numbers -----------------------------------------------------------
 
+    def js_format(self) -> dict[str, str]:
+        """
+        The pieces of this language's number/money formatting a client-side
+        script needs to replicate `number()`/`money()` in the browser -
+        used only by the remote static export's custom-range picker, which
+        has no server left to ask once it's deployed.
+        """
+        fmt = NUMBER_FORMATS.get(self.lang, NUMBER_FORMATS[FALLBACK])
+        return {
+            "thousands": fmt["thousands"],
+            "decimal": fmt["decimal"],
+            "currency": self.get("common.currency"),
+            "money_format": self.get("common.money_format",
+                                     amount="{amount}", currency="{currency}"),
+        }
+
     def number(self, value: Any, decimals: int = 0) -> str:
         """A plain number with the right separators for this language."""
         if value is None:

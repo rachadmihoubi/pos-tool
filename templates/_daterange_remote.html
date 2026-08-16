@@ -1,0 +1,103 @@
+{# Client-side custom-range picker for the remote static export - there is #}
+{# no server to answer an arbitrary ?start=&end= once deployed to         #}
+{# Cloudflare Pages, so this sums /daily.json (Metrics.daily_rollup())    #}
+{# in the browser instead. See export_static.py's module docstring.      #}
+<div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line);">
+  <h3 style="margin: 0 0 4px; font-size: 14px;">{{ t('today.remote_range_title') }}</h3>
+  <p class="note" style="margin: 0 0 12px;">{{ t('today.remote_range_note') }}</p>
+  <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom: 12px;">
+    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
+      {{ t('common.date_from') }}
+      <input type="date" id="remote-range-start">
+    </label>
+    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
+      {{ t('common.date_to') }}
+      <input type="date" id="remote-range-end">
+    </label>
+    <button type="button" class="btn" id="remote-range-apply">{{ t('common.apply_range') }}</button>
+  </div>
+  <div class="tiles" id="remote-range-result" hidden>
+    <div class="tile">
+      <div class="label">{{ t('today.period_revenue') }}</div>
+      <div class="value" id="remote-range-cash">—</div>
+    </div>
+    <div class="tile">
+      <div class="label">{{ t('today.on_account') }}</div>
+      <div class="value" id="remote-range-onaccount">—</div>
+    </div>
+    <div class="tile">
+      <div class="label">{{ t('today.period_tickets') }}</div>
+      <div class="value" id="remote-range-tickets">—</div>
+    </div>
+    <div class="tile">
+      <div class="label">{{ t('common.gross_profit') }}</div>
+      <div class="value" id="remote-range-profit">—</div>
+    </div>
+  </div>
+  <p class="empty" id="remote-range-empty" hidden>{{ t('today.remote_range_empty') }}</p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var fmt = {{ t.js_format() | tojson }};
+
+  function formatNumber(v, decimals) {
+    decimals = decimals || 0;
+    var s = Math.abs(v).toFixed(decimals);
+    var parts = s.split(".");
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, "\x00");
+    var joined = parts.join(fmt.decimal).split("\x00").join(fmt.thousands);
+    return (v < 0 ? "-" : "") + joined;
+  }
+  function formatMoney(v) {
+    return fmt.money_format.replace("{amount}", formatNumber(v))
+                            .replace("{currency}", fmt.currency);
+  }
+
+  var startInput = document.getElementById("remote-range-start");
+  var endInput = document.getElementById("remote-range-end");
+  var applyBtn = document.getElementById("remote-range-apply");
+  var result = document.getElementById("remote-range-result");
+  var empty = document.getElementById("remote-range-empty");
+  var cached = null;
+
+  function load() {
+    if (cached) { return Promise.resolve(cached); }
+    return fetch("/daily.json").then(function (r) { return r.json(); }).then(function (data) {
+      cached = data;
+      return data;
+    });
+  }
+
+  applyBtn.addEventListener("click", function () {
+    var start = startInput.value;
+    var end = endInput.value;
+    if (!start || !end || start > end) { return; }
+    applyBtn.disabled = true;
+    load().then(function (rows) {
+      var revenue = 0, cash = 0, onAccount = 0, profit = 0, tickets = 0;
+      rows.forEach(function (r) {
+        if (r.date >= start && r.date <= end) {
+          revenue += r.revenue;
+          cash += r.cash_revenue;
+          onAccount += r.on_account_revenue;
+          profit += r.gross_profit;
+          tickets += r.tickets;
+        }
+      });
+      if (revenue === 0 && tickets === 0) {
+        result.hidden = true;
+        empty.hidden = false;
+      } else {
+        empty.hidden = true;
+        result.hidden = false;
+        document.getElementById("remote-range-cash").textContent = formatMoney(cash);
+        document.getElementById("remote-range-onaccount").textContent = formatMoney(onAccount);
+        document.getElementById("remote-range-tickets").textContent = formatNumber(tickets);
+        document.getElementById("remote-range-profit").textContent = formatMoney(profit);
+      }
+    }).finally(function () { applyBtn.disabled = false; });
+  });
+})();
+</script>

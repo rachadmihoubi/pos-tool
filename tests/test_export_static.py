@@ -150,21 +150,73 @@ class TestExport:
         assert 'id="refresh-btn"' not in html
         assert "/export?lang=" not in html
 
-    def test_drilldown_pages_are_not_exported(self, cfg, monkeypatch, tmp_path):
+    def test_customer_and_product_drilldowns_are_not_exported(self, cfg, monkeypatch, tmp_path):
         """
-        The lean-payload boundary: individual customer/product detail
-        pages are deliberately excluded from the frequent remote export -
-        confirmed here structurally rather than just by omission from
-        PAGES (in case someone adds a route without updating this test's
-        intent).
+        Customer/product detail pages are deliberately excluded from the
+        remote export - there's no natural recency cutoff for a customer
+        or product (unlike a ticket or purchase, see
+        `export_static.DRILLDOWN_WINDOW_DAYS`), so exporting them would
+        only ever grow. Confirmed structurally rather than just by
+        omission from PAGES (in case someone adds a route without
+        updating this test's intent).
         """
         _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
         out_dir = export_static.export(cfg)
 
         for lang in LANGUAGES:
             lang_dir = out_dir / lang
-            files = {p.name for p in lang_dir.glob("*.html")}
-            assert files == {f"{slug}.html" for slug in export_static.PAGES}
+            flat_files = {p.name for p in lang_dir.glob("*.html")}
+            expected = ({f"{slug}.html" for slug in export_static.PAGES} |
+                       {f"{name}.html" for name in export_static.TODAY_PRESET_FILES})
+            assert flat_files == expected
+            assert not (lang_dir / "customers").exists()
+            assert not (lang_dir / "products").exists()
+
+    def test_ticket_and_purchase_drilldowns_are_exported(self, cfg, monkeypatch, tmp_path):
+        """
+        Unlike customer/product, ticket and purchase drill-downs ARE
+        exported - bounded to a recent window for tickets (there's no
+        cutoff for purchases; there are only a few hundred of them total).
+        """
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+
+        for lang in LANGUAGES:
+            tickets_dir = out_dir / lang / "tickets"
+            purchases_dir = out_dir / lang / "suppliers" / "purchases"
+            assert tickets_dir.is_dir(), f"missing {tickets_dir}"
+            assert purchases_dir.is_dir(), f"missing {purchases_dir}"
+            ticket_files = list(tickets_dir.glob("*.html"))
+            assert ticket_files, "expected at least one exported ticket in this database"
+            for f in ticket_files:
+                assert f.stem.isdigit(), f"unexpected ticket filename {f.name}"
+
+    def test_today_presets_show_different_content(self, cfg, monkeypatch, tmp_path):
+        """
+        The whole point of pre-rendering separate files per preset: they
+        must not all be the same page under different names.
+        """
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+
+        today_html = (out_dir / "en" / "today.html").read_text(encoding="utf-8")
+        yesterday_html = (out_dir / "en" / "today-yesterday.html").read_text(encoding="utf-8")
+        assert today_html != yesterday_html
+
+    def test_daily_rollup_json_is_written_and_valid(self, cfg, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+
+        daily_path = out_dir / "daily.json"
+        assert daily_path.is_file()
+        records = json.loads(daily_path.read_text(encoding="utf-8"))
+        assert isinstance(records, list)
+        if records:
+            for key in ("date", "revenue", "cash_revenue", "on_account_revenue",
+                        "gross_profit", "tickets"):
+                assert key in records[0]
+            dates = [r["date"] for r in records]
+            assert dates == sorted(dates), "daily.json must be chronological for the client-side slicer"
 
 
 class TestStatusPayload:

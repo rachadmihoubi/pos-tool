@@ -22,15 +22,19 @@
   {% set last7_str = (now - timedelta(days=6)).strftime('%Y-%m-%d') %}
   <div class="filter-row">
     <a class="btn {{ 'btn-primary' if not request.args.get('start') and not request.args.get('end') else '' }}"
-       href="?lang={{ lang }}">{{ t('common.today') }}</a>
+       href="{{ ('/' ~ lang ~ '/today') if is_static_export else ('?lang=' ~ lang) }}">{{ t('common.today') }}</a>
     <a class="btn {{ 'btn-primary' if request.args.get('start') == yesterday_str and request.args.get('end') == yesterday_str else '' }}"
-       href="?lang={{ lang }}&start={{ yesterday_str }}&end={{ yesterday_str }}">{{ t('common.yesterday') }}</a>
+       href="{{ ('/' ~ lang ~ '/today-yesterday') if is_static_export else ('?lang=' ~ lang ~ '&start=' ~ yesterday_str ~ '&end=' ~ yesterday_str) }}">{{ t('common.yesterday') }}</a>
     <a class="btn {{ 'btn-primary' if request.args.get('start') == week_start_str and request.args.get('end') == today_str else '' }}"
-       href="?lang={{ lang }}&start={{ week_start_str }}&end={{ today_str }}">{{ t('common.this_week') }}</a>
+       href="{{ ('/' ~ lang ~ '/today-week') if is_static_export else ('?lang=' ~ lang ~ '&start=' ~ week_start_str ~ '&end=' ~ today_str) }}">{{ t('common.this_week') }}</a>
     <a class="btn {{ 'btn-primary' if request.args.get('start') == last7_str and request.args.get('end') == today_str else '' }}"
-       href="?lang={{ lang }}&start={{ last7_str }}&end={{ today_str }}">{{ t('common.last_7_days') }}</a>
+       href="{{ ('/' ~ lang ~ '/today-last7') if is_static_export else ('?lang=' ~ lang ~ '&start=' ~ last7_str ~ '&end=' ~ today_str) }}">{{ t('common.last_7_days') }}</a>
   </div>
-  {% include "_daterange.html" %}
+  {% if is_static_export %}
+    {% include "_daterange_remote.html" %}
+  {% else %}
+    {% include "_daterange.html" %}
+  {% endif %}
 </section>
 
 {% if d %}

@@ -136,7 +136,10 @@
     "period_revenue": "Ventes (encaissées)",
     "period_tickets": "Tickets",
     "period_margin": "Marge",
-    "view_tickets": "Voir tous les tickets de cette période"
+    "view_tickets": "Voir tous les tickets de cette période",
+    "remote_range_title": "Période personnalisée",
+    "remote_range_note": "Calculé sur votre téléphone à partir d'un petit fichier de résumé quotidien - fonctionne pour n'importe quelle période, y compris les jours non listés ci-dessus.",
+    "remote_range_empty": "Aucune vente sur cette période."
   },
 
   "tickets": {
