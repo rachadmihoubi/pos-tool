@@ -1829,6 +1829,50 @@ class Metrics:
             float(sup["purchase_value"].sum()) > 0 else "item_revenue"
         return sup.sort_values(sort_col, ascending=False).reset_index(drop=True)
 
+    def supplier_transactions(self) -> pd.DataFrame:
+        """
+        Purchases grouped into transactions, the same way tickets group
+        ticket lines - one row per `purchase_id`, for the Suppliers
+        drill-down list. Supplier and date are blank exactly as often as
+        `purchase_coverage()` already reports they are missing - nothing
+        here is guessed.
+        """
+        p = self.purchases
+        if p.empty:
+            return p
+        g = (p.groupby("purchase_id", as_index=False)
+             .agg(supplier_id=("supplier_id", "first"),
+                  purchase_time=("purchase_time", "first"),
+                  lines=("entry_id", "count"),
+                  total=("amount", "sum"),
+                  items=("item_id", "nunique")))
+        g = g.merge(self.suppliers[["supplier_id", "supplier_name"]],
+                    on="supplier_id", how="left")
+        g["supplier_name"] = g["supplier_name"].fillna("")
+        return g.sort_values("purchase_time", ascending=False,
+                             na_position="last").reset_index(drop=True)
+
+    def purchase_detail(self, purchase_id: Any) -> dict[str, Any] | None:
+        """One purchase's lines, for the Suppliers drill-down detail page."""
+        p = self.purchases[self.purchases["purchase_id"] == purchase_id]
+        if p.empty:
+            return None
+        header = {
+            "purchase_id": purchase_id,
+            "supplier_id": p.iloc[0]["supplier_id"],
+            "purchase_time": p.iloc[0]["purchase_time"],
+            "total": float(p["amount"].sum()),
+            "lines": int(len(p)),
+        }
+        sup = self.suppliers[self.suppliers["supplier_id"] == header["supplier_id"]]
+        header["supplier_name"] = sup.iloc[0]["supplier_name"] if not sup.empty else ""
+
+        return {
+            "header": header,
+            "lines": p[["entry_id", "item_id", "item_name", "qty", "price",
+                       "cost", "new_cost", "new_stock", "amount"]].sort_values("entry_id"),
+        }
+
     def supplier_cost_trend(self) -> pd.DataFrame:
         """
         How much you spent buying stock each month, and the average cost per

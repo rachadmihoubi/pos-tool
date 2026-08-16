@@ -507,6 +507,36 @@ class TestTickets:
         assert (~detail["lines"]["is_sale"]).any()
 
 
+class TestSupplierTransactions:
+
+    def test_transactions_columns(self, metrics: Metrics):
+        st = metrics.supplier_transactions()
+        if st.empty:
+            pytest.skip("no purchase data in this database")
+        for col in ("purchase_id", "supplier_id", "supplier_name",
+                    "purchase_time", "lines", "total"):
+            assert col in st.columns
+
+    def test_untraceable_supplier_shows_as_blank_not_guessed(self, metrics: Metrics):
+        st = metrics.supplier_transactions()
+        if st.empty or st["supplier_id"].notna().all():
+            pytest.skip("every purchase in this database traces to a supplier")
+        untraced = st[st["supplier_id"].isna()]
+        assert (untraced["supplier_name"] == "").all()
+
+    def test_purchase_detail_round_trips(self, metrics: Metrics):
+        st = metrics.supplier_transactions()
+        if st.empty:
+            pytest.skip("no purchase data in this database")
+        purchase_id = st.iloc[0]["purchase_id"]
+        detail = metrics.purchase_detail(purchase_id)
+        assert detail is not None
+        assert not detail["lines"].empty
+
+    def test_purchase_detail_unknown_id_returns_none(self, metrics: Metrics):
+        assert metrics.purchase_detail(-999999999) is None
+
+
 class TestCatalog:
 
     def test_new_arrivals_upper_bound(self, metrics: Metrics):
