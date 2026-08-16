@@ -172,11 +172,19 @@ walk-ins), ticket total, cash-realized amount, on-account amount, item
 count. Sortable/filterable using the `table.sortable` / `data-filters`
 infrastructure already in `base.html` — no new JS needed.
 
-**Route:** `/tickets/<int:receipt_id>` — full detail: every `ReceiptEntry`
-line (item, qty, price, discount, amount), the payment breakdown
-(cash/cheque/transfer/on-account), old/new account balance if the ticket
-touched one (mirrors the "Ancien solde / Nouveau solde" the POS itself
-shows), same visual idiom as `customer_detail.html` / `product_detail.html`.
+**Route:** `/tickets/<int:receipt_id>` — full detail: every line on the
+ticket (item, qty, price, discount, amount — including a collection line
+such as "Paiement de règlement" if the ticket carried one, clearly still
+labelled as a collection, not a sale) and the ticket's own payment breakdown
+(cash/cheque/transfer/on-account). Same visual idiom as
+`customer_detail.html` / `product_detail.html`.
+
+Deliberately **not** included: the POS's "Ancien solde / Nouveau solde"
+(old/new account balance) line. Reproducing that would mean reconstructing
+a customer's running balance history by replaying every balance-affecting
+event in chronological order — a materially separate, riskier feature this
+tool has no existing machinery for, not a detail this data readily gives
+up. Worth a dedicated future spec if wanted; not part of this build.
 
 **metrics.py additions:**
 - `ticket_list(start, end)` — built from the existing `tickets` cached
