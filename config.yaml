@@ -14,7 +14,7 @@ database:
   # IMPORTANT: point this at the file your POS software actually writes to.
   # The tool NEVER writes to this file - it copies it somewhere temporary
   # first and reads the copy. Your live data cannot be touched.
-  path: "C:/Users/RACHAD/Desktop/Base de données4.dblx"
+  path: "C:/Users/RACHAD/Desktop/pos tools/Base de données4.dblx"
 
   # Where the fast local copy of your data is kept. You can delete this file
   # any time; the tool simply rebuilds it.
