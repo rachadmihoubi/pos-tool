@@ -2,26 +2,30 @@
 export_static.py - renders the real local dashboard pages into a static
 site for Cloudflare Pages.
 
-Every page - Today, Trend, Customers, Receivables, Inventory, Products,
-Suppliers, Cash, Diagnostics, Data Quality - is rendered via Flask's own
-test client, hitting the exact same routes and templates a real browser
-would, in each of the three languages, under a SCRIPT_NAME prefix
-(/en, /fr, /ar). Every url_for()-generated link (nav tabs, static assets)
-therefore already points at the right per-language path, and Cloudflare
-Pages resolves e.g. "/en/today" to "/en/today.html" automatically (its
-built-in clean-URL behaviour) - no link rewriting needed.
+Every page - Today, Tickets, Trend, Customers, Receivables, Inventory,
+Stock catalog, Products, Suppliers, Cash, Diagnostics, Data Quality - is
+rendered via Flask's own test client, hitting the exact same routes and
+templates a real browser would, in each of the three languages, under a
+SCRIPT_NAME prefix (/en, /fr, /ar). Every url_for()-generated link (nav
+tabs, static assets) therefore already points at the right per-language
+path, and Cloudflare Pages resolves e.g. "/en/today" to "/en/today.html"
+automatically (its built-in clean-URL behaviour) - no link rewriting
+needed.
 
 `app.py`'s `inject_globals()` sets `is_static_export=True` only when the
 request carries `?__static__=1` (added below) - every real local request
 never sets it, so this export can share 100% of the routes/templates with
 zero behavioural change to the live local server.
 
-What is deliberately NOT exported: the individual customer/product
-drill-down pages (/customers/<id>, /products/<id>) - there are 600+/1500+
-of them; regenerating that many pages every ~90 seconds would defeat the
-point of a lean, frequent push. Those stay local-only for now, consistent
-with the original spec's "deep drill-down can stay local-only, or sync
-less often". Clicking one remotely hits the custom 404 page below.
+What is deliberately NOT exported: individual drill-down pages
+(/customers/<id>, /products/<id>, /tickets/<id>,
+/suppliers/purchases/<id>) - there are hundreds to thousands of them;
+regenerating that many pages every ~90 seconds would defeat the point of a
+lean, frequent push. Those stay local-only for now, consistent with the
+original spec's "deep drill-down can stay local-only, or sync less often".
+Clicking one remotely hits the custom 404 page below. The Tickets and
+Stock catalog LIST pages (unlike their drill-downs) are top-level pages
+like every other page here, so they are exported.
 """
 
 from __future__ import annotations
@@ -40,8 +44,8 @@ from poslib.present import status_payload
 log = logging.getLogger(__name__)
 
 # Matches app.py's routes exactly (minus the leading slash).
-PAGES = ["today", "trend", "customers", "receivables", "inventory",
-         "products", "suppliers", "cash", "diagnostics", "data-quality"]
+PAGES = ["today", "tickets", "trend", "customers", "receivables", "inventory",
+         "catalog", "products", "suppliers", "cash", "diagnostics", "data-quality"]
 
 _NOT_FOUND_HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Not available remotely</title></head>
