@@ -396,6 +396,46 @@ class TestCashRealizedSplit:
         assert (no_tender["on_account_revenue"].abs() < 0.01).all()
 
 
+class TestTodayByDate:
+
+    def test_default_still_means_the_actual_today(self, metrics: Metrics):
+        assert metrics.today()["today"]["date"] == metrics.now.date()
+
+    def test_target_date_overrides_today(self, metrics: Metrics):
+        first = metrics.data_range["first"]
+        if first is None:
+            pytest.skip("no sales in this database")
+        a_day = first.date()
+        d = metrics.today(target_date=a_day)
+        assert d["today"]["date"] == a_day
+
+    def test_cash_and_on_account_are_present_and_add_up(self, metrics: Metrics):
+        d = metrics.today()
+        for bucket in ("today", "yesterday", "last_week_same_day"):
+            row = d[bucket]
+            assert abs(row["cash_revenue"] + row["on_account_revenue"] - row["revenue"]) < 0.01
+
+    def test_a_past_day_is_not_clipped_to_now(self, metrics: Metrics):
+        """
+        Viewing a finished past day should show that whole day, not the
+        slice up to the current wall-clock time - only the live "today"
+        gets clipped for fairness against still-finishing days.
+        """
+        first = metrics.data_range["first"]
+        if first is None:
+            pytest.skip("no sales in this database")
+        a_day = first.date()
+        if a_day == metrics.now.date():
+            pytest.skip("first sale happens to be today in this database")
+        clipped = metrics.sales[(metrics.sales["ticket_time"].dt.date == a_day) &
+                                (metrics.sales["ticket_time"].dt.time <= metrics.now.time())]
+        whole_day = metrics.sales[metrics.sales["ticket_time"].dt.date == a_day]
+        if len(whole_day) == len(clipped):
+            pytest.skip("this particular day has no sales after the current time of day")
+        d = metrics.today(target_date=a_day)
+        assert abs(d["today"]["revenue"] - float(whole_day["amount"].sum())) < 0.01
+
+
 class TestCatalog:
 
     def test_new_arrivals_upper_bound(self, metrics: Metrics):
