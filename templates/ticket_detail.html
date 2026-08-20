@@ -9,9 +9,15 @@
 
 {% block content %}
 <div class="page-head">
-  <h1>{{ header.ticket_no }}</h1>
+  <h1>{{ header.ticket_no }}
+    {% if header.is_devis %}<span class="pill pill-info">{{ t('tickets.pill_devis') }}</span>{% endif %}
+  </h1>
   <p>{{ t.datetime(header.ticket_time) }} · {{ header.customer_name }}</p>
 </div>
+
+{% if header.is_devis %}
+  <div class="banner banner-warn">{{ t('tickets.detail_devis_banner') }}</div>
+{% endif %}
 
 <section class="tiles">
   <div class="tile">
@@ -26,6 +32,13 @@
     <div class="label">{{ t('tickets.col_on_account') }}</div>
     <div class="value">{{ t.money(header.on_account_revenue) }}</div>
   </div>
+  {% if header.collected %}
+  <div class="tile">
+    <div class="label">{{ t('tickets.col_collected') }}</div>
+    <div class="value">{{ t.money(header.collected) }}</div>
+    <div class="sub">{{ t('tickets.detail_collected_note') }}</div>
+  </div>
+  {% endif %}
 </section>
 
 <section class="panel">

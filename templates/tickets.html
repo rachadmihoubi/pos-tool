@@ -48,7 +48,10 @@
           {% for r in tickets %}
           <tr data-date="{{ r.ticket_time.strftime('%Y-%m-%d') }}">
             <td class="num" data-value="{{ r.ticket_time }}">{{ t.datetime(r.ticket_time) }}</td>
-            <td class="num muted">{{ r.ticket_no }}</td>
+            <td class="num muted">
+              {{ r.ticket_no }}
+              {% if r.is_devis %}<span class="pill pill-info">{{ t('tickets.pill_devis') }}</span>{% endif %}
+            </td>
             <td class="name">{{ r.customer_name }}</td>
             <td class="num strong" data-value="{{ r.revenue }}">{{ t.money(r.revenue) }}</td>
             <td class="num" data-value="{{ r.cash_revenue }}">{{ t.money(r.cash_revenue) }}</td>

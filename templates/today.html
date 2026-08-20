@@ -54,10 +54,13 @@
   <section class="tiles tiles-big">
     <div class="tile">
       <div class="label">{{ t('today.revenue') }}</div>
-      <div class="value">{{ t.money(d.today.cash_revenue) }}</div>
+      <div class="value">{{ t.money(d.today.cash_in) }}</div>
       <div class="sub">
         {{ delta(d.vs_yesterday) }} {{ t('today.vs_yesterday') }}
       </div>
+      {% if d.today.collections %}
+        <div class="sub">{{ t('today.cash_in_breakdown', sales=t.money(d.today.cash_revenue), collected=t.money(d.today.collections)) }}</div>
+      {% endif %}
     </div>
 
     <div class="tile">
@@ -104,21 +107,21 @@
           <tbody>
             <tr class="strong">
               <td>{{ t.date(single_day) }}</td>
-              <td class="num">{{ t.money(d.today.cash_revenue) }}</td>
+              <td class="num">{{ t.money(d.today.cash_in) }}</td>
               <td class="num">{{ t.number(d.today.tickets) }}</td>
               <td class="num">{{ t.money(d.today.avg_basket) }}</td>
               <td class="num">{{ t.percent(d.today.margin_pct) if d.today.margin_pct is not none else '—' }}</td>
             </tr>
             <tr>
               <td>{{ t.date(d.yesterday.date) }}</td>
-              <td class="num">{{ t.money(d.yesterday.cash_revenue) }}</td>
+              <td class="num">{{ t.money(d.yesterday.cash_in) }}</td>
               <td class="num">{{ t.number(d.yesterday.tickets) }}</td>
               <td class="num">{{ t.money(d.yesterday.avg_basket) }}</td>
               <td class="num">{{ t.percent(d.yesterday.margin_pct) if d.yesterday.margin_pct is not none else '—' }}</td>
             </tr>
             <tr>
               <td>{{ t('today.vs_last_week') }}</td>
-              <td class="num">{{ t.money(d.last_week_same_day.cash_revenue) }}</td>
+              <td class="num">{{ t.money(d.last_week_same_day.cash_in) }}</td>
               <td class="num">{{ t.number(d.last_week_same_day.tickets) }}</td>
               <td class="num">{{ t.money(d.last_week_same_day.avg_basket) }}</td>
               <td class="num">{{ t.percent(d.last_week_same_day.margin_pct) if d.last_week_same_day.margin_pct is not none else '—' }}</td>
@@ -174,7 +177,10 @@
   <section class="tiles tiles-big">
     <div class="tile">
       <div class="label">{{ t('today.period_revenue') }}</div>
-      <div class="value">{{ t.money(period.cash_revenue) }}</div>
+      <div class="value">{{ t.money(period.cash_in) }}</div>
+      {% if period.collections %}
+        <div class="sub">{{ t('today.cash_in_breakdown', sales=t.money(period.cash_revenue), collected=t.money(period.collections)) }}</div>
+      {% endif %}
     </div>
     <div class="tile">
       <div class="label">{{ t('today.on_account') }}</div>

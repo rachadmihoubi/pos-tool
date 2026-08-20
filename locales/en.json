@@ -103,7 +103,7 @@
   "today": {
     "title": "Today",
     "subtitle": "{date}",
-    "revenue": "Sales today",
+    "revenue": "Cash in today",
     "tickets": "Tickets",
     "avg_basket": "Average ticket",
     "gross_profit": "Gross profit today",
@@ -131,9 +131,10 @@
     "preset_title": "Choose a period",
     "on_account": "On account (not yet paid)",
     "on_account_note": "Money the customer still owes on this period's sales - not counted as a sale until it's actually collected.",
-    "cash_realized_note": "Only Cash, Cheque and Transfer tender counts as a sale here. Anything put on a customer's account is shown separately, on the right.",
+    "cash_realized_note": "This figure is cash-realized sales (Cash, Cheque, Transfer) plus any account payments collected today - the actual cash that came into the till. Anything put on a customer's account is shown separately, on the right.",
+    "cash_in_breakdown": "Of which {sales} from sales, {collected} collected on account",
     "period_title": "{start} to {end}",
-    "period_revenue": "Sales (cash-realized)",
+    "period_revenue": "Cash in (cash-realized sales + collections)",
     "period_tickets": "Tickets",
     "period_margin": "Margin",
     "view_tickets": "See every ticket in this period",
@@ -164,7 +165,11 @@
     "col_price": "Price",
     "col_discount": "Discount",
     "col_amount": "Amount",
-    "remote_window_note": "Showing the last {days} days. Filter within that window below, or open the local dashboard for older tickets."
+    "remote_window_note": "Showing the last {days} days. Filter within that window below, or open the local dashboard for older tickets.",
+    "pill_devis": "Devis",
+    "detail_devis_banner": "This is a devis (price quote) - the customer reviewed it, but nothing was sold and no money changed hands. It is not counted in any revenue or ticket-count figure.",
+    "col_collected": "Collected on account",
+    "detail_collected_note": "Paid down against what this customer owed - not part of today's sales, but real cash in the till."
   },
 
   "trend": {

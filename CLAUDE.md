@@ -153,7 +153,62 @@ goods is always computed from `ReceiptEntry` lines, never the header.
     known ~11% of purchase lines that don't trace to a supplier at all,
     a good sign this reading is correct.
 
+## Owner-reported fixes (2026-08-20) — devis tickets and account payments
+
+The owner flagged two things wrong on the Today/Tickets screens from live
+screenshots (a "DV" ticket and a mixed sale+payment ticket):
+
+13. **"DV" tickets (`Receipt.ReceiptType == 1`, ticket numbers like
+    `DV0076/26`) are devis — price quotes the customer reviewed, never a
+    completed sale.** No goods left the shop, no money changed hands, but
+    they were being counted as full sales everywhere (Today, Trend, Cash
+    P&L, ticket counts) because `ReceiptType` was loaded into `lines`/
+    `tickets` but never actually filtered on anything. Fixed as Rule 6 in
+    `metrics.py`: `lines["is_devis"]` excludes a devis ticket's lines from
+    `is_sale`/`sales` (the single source of truth every revenue figure is
+    built from), and the new `completed_tickets` property (⁠`tickets` minus
+    devis) is what every ticket-count/avg-basket figure uses instead of
+    `tickets` directly — so a devis can't inflate a ticket count or drag an
+    average basket down either. The ticket itself still appears on the
+    Tickets screen and is still viewable in drill-down (so the owner can
+    still look up what was quoted), just clearly labelled "Devis" and
+    worth 0 DZD of sales. This is a real correction, not a preference: it
+    can only ever make historical revenue/gross-profit figures fall
+    slightly (there are only nine DV tickets total per the existing Rule 2
+    note), so **the frozen floors in `tests/conftest.py`
+    (`revenue_all_time`, `gross_profit_all_time`, `revenue_12m`,
+    `gross_profit_12m`) may need lowering** — re-run `pytest tests -q` on
+    a machine with the real database and adjust them down if they now
+    fail, the same "re-verify by hand" step this file has always asked
+    for after a rule change.
+14. **A "Paiement de règlement" (account payment) is real cash landing in
+    the till today, even though Rule 1 correctly keeps it out of "sales."**
+    The owner's screenshot showed a ticket that mixed a real product sale
+    with a customer paying down an old balance — the ticket's "Total" tile
+    only reflected the sale, and the payment was buried in the lines table
+    with no total anywhere adding it back in, which read as the money
+    having vanished. Rule 1 (a collection is not a sale) is still correct
+    and unchanged — margin/product accounting must stay accrual — but the
+    Today screen's headline figure now answers a different, narrower
+    question: "how much cash came into the till today". `today()` and
+    `period_stats()` gained a `cash_in` figure (`cash_revenue` +
+    `collections`, both still returned separately so the split is never
+    hidden) and that is what the Today screen's headline tile and
+    day/week/period comparisons now show, labelled accordingly. The ticket
+    drill-down page also gained a "Collected on account" tile so a mixed
+    ticket's payment line is visible as a number, not just a labelled row
+    to spot in the lines table. Trend, Products & margin and Cash P&L are
+    untouched — this stays scoped to Today/Tickets, the same boundary the
+    2026-08-16 cash-realized/on-account split already drew (see
+    `docs/superpowers/specs/2026-08-16-tickets-catalog-suppliers-design.md`).
+
 ## Verified numbers (as of 2026-08-10, re-verify with `pytest tests -q`)
+
+**Stale after discovery #13 above** — devis tickets are now correctly
+excluded from revenue/profit, so `revenue_all_time`, `gross_profit_all_time`,
+`revenue_12m` and `gross_profit_12m` below may come out slightly lower than
+this table on the next real run. That is expected; lower the frozen floors
+in `tests/conftest.py` to match rather than treating a small drop as a bug.
 
 | Check | Value |
 |---|---|

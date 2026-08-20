@@ -151,6 +151,8 @@ def export(cfg: Config | None = None) -> Path:
                 "revenue": round(float(row["revenue"]), 2),
                 "cash_revenue": round(float(row["cash_revenue"]), 2),
                 "on_account_revenue": round(float(row["on_account_revenue"]), 2),
+                "collections": round(float(row["collections"]), 2),
+                "cash_in": round(float(row["cash_in"]), 2),
                 "gross_profit": round(float(row["gross_profit"]), 2),
                 "tickets": int(row["tickets"]),
             })

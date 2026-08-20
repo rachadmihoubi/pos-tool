@@ -103,7 +103,7 @@
   "today": {
     "title": "Aujourd'hui",
     "subtitle": "{date}",
-    "revenue": "Ventes du jour",
+    "revenue": "Encaissé aujourd'hui",
     "tickets": "Tickets",
     "avg_basket": "Ticket moyen",
     "gross_profit": "Marge brute du jour",
@@ -131,9 +131,10 @@
     "preset_title": "Choisir une période",
     "on_account": "À crédit (pas encore payé)",
     "on_account_note": "Argent que le client doit encore sur les ventes de cette période - non compté comme une vente tant qu'il n'est pas réellement encaissé.",
-    "cash_realized_note": "Seuls les paiements en espèces, chèque et virement comptent comme une vente ici. Tout ce qui est mis sur le compte d'un client est affiché séparément, à droite.",
+    "cash_realized_note": "Ce chiffre est constitué des ventes encaissées (espèces, chèque, virement) plus les règlements clients encaissés aujourd'hui - l'argent réellement rentré en caisse. Tout ce qui est mis sur le compte d'un client est affiché séparément, à droite.",
+    "cash_in_breakdown": "Dont {sales} de ventes, {collected} de règlements encaissés",
     "period_title": "Du {start} au {end}",
-    "period_revenue": "Ventes (encaissées)",
+    "period_revenue": "Encaissé (ventes encaissées + règlements)",
     "period_tickets": "Tickets",
     "period_margin": "Marge",
     "view_tickets": "Voir tous les tickets de cette période",
@@ -164,7 +165,11 @@
     "col_price": "Prix",
     "col_discount": "Remise",
     "col_amount": "Montant",
-    "remote_window_note": "Affiche les {days} derniers jours. Filtrez dans cette période ci-dessous, ou ouvrez le tableau de bord local pour les tickets plus anciens."
+    "remote_window_note": "Affiche les {days} derniers jours. Filtrez dans cette période ci-dessous, ou ouvrez le tableau de bord local pour les tickets plus anciens.",
+    "pill_devis": "Devis",
+    "detail_devis_banner": "Ceci est un devis - le client l'a consulté, mais rien n'a été vendu et aucun argent n'a changé de mains. Il n'est compté dans aucun chiffre de vente ni de nombre de tickets.",
+    "col_collected": "Encaissé sur compte",
+    "detail_collected_note": "Réglé sur ce que ce client devait - ne fait pas partie des ventes du jour, mais c'est de l'argent réel en caisse."
   },
 
   "trend": {

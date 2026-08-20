@@ -29,6 +29,13 @@ THE RULES THIS FILE APPLIES, IN PLAIN LANGUAGE
 5. Customer number 1, "Client divers", is the anonymous walk-in till. The
    money counts as revenue but it is not treated as a customer, because it
    is really hundreds of different people.
+
+6. A "DV" ticket (`Receipt.ReceiptType == 1`) is a devis - a price quote the
+   customer reviewed, not a completed sale. No goods left the shop and no
+   money changed hands, so it is excluded from revenue, gross profit and
+   ticket counts everywhere, the same way a line with no real product is.
+   The ticket itself still shows up on the Tickets screen (so the owner can
+   still look it up), just clearly labelled and worth 0 DZD of sales.
 """
 
 from __future__ import annotations
@@ -140,11 +147,18 @@ class Metrics:
 
         df["item_id"] = pd.to_numeric(df["item_id"], errors="coerce").fillna(0).astype(int)
         df["customer_id"] = pd.to_numeric(df["customer_id"], errors="coerce").fillna(0).astype(int)
+        df["ticket_type"] = pd.to_numeric(df["ticket_type"], errors="coerce")
 
-        # Rule 1: a line with no real product is not a sale.
-        df["is_sale"] = df["item_id"] > 0
-        # A "collection" is a customer paying down their account balance.
-        df["is_collection"] = ~df["is_sale"]
+        # Rule 6: ReceiptType 1 is "DV" - a devis (quote), never a sale.
+        df["is_devis"] = df["ticket_type"] == 1
+
+        # Rule 1: a line with no real product is not a sale. A devis line
+        # has a real product but was never actually sold, so it is excluded
+        # the same way.
+        df["is_sale"] = (df["item_id"] > 0) & ~df["is_devis"]
+        # A "collection" is a customer paying down their account balance -
+        # defined by having no real product attached, independent of devis.
+        df["is_collection"] = df["item_id"] <= 0
 
         # Rule 4: is the cost of this line actually known?
         df["cost_known"] = df["unit_cost"].notna() & (df["unit_cost"] != 0)
@@ -168,7 +182,12 @@ class Metrics:
 
     @cached_property
     def sales(self) -> pd.DataFrame:
-        """Just the real product sales - the basis of every revenue figure."""
+        """
+        Just the real product sales - the basis of every revenue figure.
+
+        Devis (quote) lines are already excluded by `is_sale` (Rule 6): a
+        ticket that was only reviewed, never sold, contributes nothing here.
+        """
         return self.lines[self.lines["is_sale"]].copy()
 
     @cached_property
@@ -195,6 +214,9 @@ class Metrics:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df["customer_id"] = pd.to_numeric(df["customer_id"], errors="coerce").fillna(0).astype(int)
         df["batch_id"] = pd.to_numeric(df["batch_id"], errors="coerce")
+        df["ticket_type"] = pd.to_numeric(df["ticket_type"], errors="coerce")
+        # Rule 6: ReceiptType 1 is "DV" - a devis (quote), never a sale.
+        df["is_devis"] = df["ticket_type"] == 1
 
         # Attach the truth from the lines.
         agg = self.sales.groupby("receipt_id").agg(
@@ -233,6 +255,18 @@ class Metrics:
         df["cash_revenue"] = df["revenue"] * df["realized_share"]
         df["on_account_revenue"] = df["revenue"] - df["cash_revenue"]
         return df
+
+    @cached_property
+    def completed_tickets(self) -> pd.DataFrame:
+        """
+        `tickets`, minus devis (Rule 6) - quotes the customer reviewed but
+        never bought. Ticket counts and average-basket figures are built
+        from this, not `tickets` directly, so a devis does not inflate how
+        many transactions happened or drag the average sale down. `tickets`
+        itself keeps every receipt, devis included, because the Tickets
+        screen still needs to list and show them.
+        """
+        return self.tickets[~self.tickets["is_devis"]].copy()
 
     @cached_property
     def items(self) -> pd.DataFrame:
@@ -514,7 +548,7 @@ class Metrics:
         rev_known = float(known["amount"].sum())
         gp_known = float(known["gross_profit"].sum())
 
-        tk = self.tickets if days is None else self._window(self.tickets, days)
+        tk = self.completed_tickets if days is None else self._window(self.completed_tickets, days)
         n_tickets = int(tk["receipt_id"].nunique())
 
         coll = self.collections if days is None else self._window(self.collections, days)
@@ -554,6 +588,19 @@ class Metrics:
         suppliers-design.md for why this definition is scoped to this
         screen and the Tickets screen only.
 
+        The headline figure ("cash_in") is cash-realized sales PLUS account
+        payments collected that day - a customer paying down what they owe
+        is real cash landing in the till today, even though it is not a
+        sale (Rule 1). `cash_revenue` (sales only) and `collections`
+        (payments only) are still both returned on their own too, so the
+        breakdown is never hidden, only added together for the one figure
+        that answers "how much cash came in today".
+
+        Devis ("DV") tickets (Rule 6) never contribute to any figure here,
+        including the ticket count - `ticket_slice()` is built from
+        `completed_tickets`, not `tickets`, so a reviewed-but-unsold quote
+        cannot inflate today's ticket count or drag its average basket down.
+
         Comparisons are chosen to be fair rather than flattering:
           - the day before target_date, for a same-shape comparison
           - the same weekday the week before, because a Sunday is not a
@@ -581,10 +628,17 @@ class Metrics:
 
         def ticket_slice(d: datetime.date, until_time: datetime.time | None = None
                          ) -> pd.DataFrame:
-            tk = self.tickets[self.tickets["ticket_time"].dt.date == d]
+            tk = self.completed_tickets[self.completed_tickets["ticket_time"].dt.date == d]
             if until_time is not None:
                 tk = tk[tk["ticket_time"].dt.time <= until_time]
             return tk
+
+        def collection_slice(d: datetime.date, until_time: datetime.time | None = None
+                             ) -> pd.DataFrame:
+            c = self.collections[self.collections["ticket_time"].dt.date == d]
+            if until_time is not None:
+                c = c[c["ticket_time"].dt.time <= until_time]
+            return c
 
         def day_stats(d: datetime.date, clip: bool = False) -> dict[str, Any]:
             cut = cutoff_time if clip else None
@@ -593,11 +647,15 @@ class Metrics:
             known = s[s["cost_known"]]
             rev = float(s["amount"].sum())
             n = int(tk["receipt_id"].nunique())
+            cash_revenue = float(tk["cash_revenue"].sum())
+            collections = float(collection_slice(d, cut)["amount"].sum())
             return {
                 "date": d,
                 "revenue": rev,
-                "cash_revenue": float(tk["cash_revenue"].sum()),
+                "cash_revenue": cash_revenue,
                 "on_account_revenue": float(tk["on_account_revenue"].sum()),
+                "collections": collections,
+                "cash_in": cash_revenue + collections,
                 "gross_profit": float(s["gross_profit"].sum()),
                 "margin_pct": (float(known["gross_profit"].sum()) /
                                float(known["amount"].sum())) if float(known["amount"].sum()) else None,
@@ -610,15 +668,16 @@ class Metrics:
         yest = day_stats(day_before, clip=True)
         last_week = day_stats(same_day_last_week, clip=True)
 
-        # Average of the last 8 occurrences of this weekday, cash-realized,
-        # up to the same time of day, ignoring days the shop took nothing.
+        # Average of the last 8 occurrences of this weekday, cash in
+        # (sales + collections), up to the same time of day, ignoring days
+        # the shop took nothing.
         weekday = target.weekday()
         same_weekday_totals: list[float] = []
         d = target - datetime.timedelta(days=7)
         while len(same_weekday_totals) < 8 and d >= (self.data_range["first"].date()
                                                      if self.data_range["first"] is not None else target):
             tk = ticket_slice(d, cutoff_time)
-            v = float(tk["cash_revenue"].sum())
+            v = float(tk["cash_revenue"].sum()) + float(collection_slice(d, cutoff_time)["amount"].sum())
             if v > 0:
                 same_weekday_totals.append(v)
             d -= datetime.timedelta(days=7)
@@ -628,7 +687,7 @@ class Metrics:
         # clipped, since there is nothing "in progress" about a payments
         # breakdown for a day already being fully shown elsewhere on the
         # page.
-        tk_target = self.tickets[self.tickets["ticket_time"].dt.date == target]
+        tk_target = self.completed_tickets[self.completed_tickets["ticket_time"].dt.date == target]
         payments = {
             "cash": float(tk_target["cash"].sum()),
             "cheque": float(tk_target["cheque"].sum()),
@@ -665,9 +724,9 @@ class Metrics:
             "last_week_same_day": last_week,
             "weekday_average": weekday_avg,
             "weekday_sample": len(same_weekday_totals),
-            "vs_yesterday": delta(now_stats["cash_revenue"], yest["cash_revenue"]),
-            "vs_last_week": delta(now_stats["cash_revenue"], last_week["cash_revenue"]),
-            "vs_weekday_avg": delta(now_stats["cash_revenue"], weekday_avg),
+            "vs_yesterday": delta(now_stats["cash_in"], yest["cash_in"]),
+            "vs_last_week": delta(now_stats["cash_in"], last_week["cash_in"]),
+            "vs_weekday_avg": delta(now_stats["cash_in"], weekday_avg),
             "payments": payments,
             "collections_today": float(
                 self.collections[self.collections["ticket_time"].dt.date == target]["amount"].sum()),
@@ -687,7 +746,7 @@ class Metrics:
         single day. `end` is inclusive, matching `_window_range`.
         """
         s = self._window_range(self.sales, start, end)
-        tk = self._window_range(self.tickets, start, end)
+        tk = self._window_range(self.completed_tickets, start, end)
         coll = self._window_range(self.collections, start, end)
 
         revenue = float(s["amount"].sum())
@@ -695,6 +754,8 @@ class Metrics:
         rev_known = float(known["amount"].sum())
         gp_known = float(known["gross_profit"].sum())
         n_tickets = int(tk["receipt_id"].nunique())
+        cash_revenue = float(tk["cash_revenue"].sum())
+        collections = float(coll["amount"].sum())
 
         top_items = (s.groupby(["item_id", "item_name"], as_index=False)
                      .agg(qty=("qty", "sum"), revenue=("amount", "sum"),
@@ -714,14 +775,15 @@ class Metrics:
             "start": start,
             "end": end,
             "revenue": revenue,
-            "cash_revenue": float(tk["cash_revenue"].sum()),
+            "cash_revenue": cash_revenue,
             "on_account_revenue": float(tk["on_account_revenue"].sum()),
             "gross_profit": float(s["gross_profit"].sum()),
             "margin_pct": (gp_known / rev_known) if rev_known else None,
             "tickets": n_tickets,
             "avg_basket": (revenue / n_tickets) if n_tickets else 0.0,
             "units": float(s["qty"].sum()),
-            "collections": float(coll["amount"].sum()),
+            "collections": collections,
+            "cash_in": cash_revenue + collections,
             "top_items": top_items,
             "top_customers": top_customers,
         }
@@ -729,14 +791,17 @@ class Metrics:
     def daily_rollup(self) -> pd.DataFrame:
         """
         One row per calendar day for the whole history: revenue split into
-        cash-realized vs on-account, gross profit, tickets. This is
-        `period_stats()`'s inputs pre-aggregated to a day - built for the
+        cash-realized vs on-account, gross profit, tickets, and account
+        payments collected (so a client can add `cash_revenue` +
+        `collections` for the same "cash in" figure `today()` shows). This
+        is `period_stats()`'s inputs pre-aggregated to a day - built for the
         remote static export, which has no server to answer an arbitrary
         `?start=&end=` query, so the browser fetches this once as JSON and
         sums whatever range the visitor picks itself, client-side.
         """
         s = self.sales
-        tk_df = self.tickets
+        tk_df = self.completed_tickets
+        coll_df = self.collections
         if s.empty:
             return pd.DataFrame()
 
@@ -745,8 +810,10 @@ class Metrics:
         tk = tk_df.groupby("date")["receipt_id"].nunique().rename("tickets")
         cash = tk_df.groupby("date")["cash_revenue"].sum().rename("cash_revenue")
         on_account = tk_df.groupby("date")["on_account_revenue"].sum().rename("on_account_revenue")
+        coll = coll_df.groupby("date")["amount"].sum().rename("collections")
 
-        df = pd.concat([rev, gp, tk, cash, on_account], axis=1).fillna(0.0)
+        df = pd.concat([rev, gp, tk, cash, on_account, coll], axis=1).fillna(0.0)
+        df["cash_in"] = df["cash_revenue"] + df["collections"]
         return df.sort_index().reset_index()
 
     # =====================================================================
@@ -768,16 +835,16 @@ class Metrics:
         tk["customer_name"] = tk["customer_name"].fillna("—")
         return tk[["receipt_id", "ticket_no", "ticket_time", "customer_id",
                    "customer_name", "revenue", "cash_revenue", "on_account_revenue",
-                   "collected", "total", "n_lines"]].sort_values(
+                   "collected", "total", "n_lines", "is_devis"]].sort_values(
             "ticket_time", ascending=False).reset_index(drop=True)
 
     def ticket_detail(self, receipt_id: int) -> dict[str, Any] | None:
         """
         Everything on one ticket, for the drill-down page: its header
-        (customer, time, totals, cash-realized vs on-account) and every
-        line on it, sales and collections both - a collection line stays
-        labelled as a collection, never folded into "sale". Returns None
-        if the ticket does not exist.
+        (customer, time, totals, cash-realized vs on-account, `is_devis`,
+        `collected`) and every line on it, sales and collections both - a
+        collection line stays labelled as a collection, never folded into
+        "sale". Returns None if the ticket does not exist.
         """
         tk = self.tickets[self.tickets["receipt_id"] == receipt_id]
         if tk.empty:
@@ -812,7 +879,7 @@ class Metrics:
         None (the default), this is all-time, exactly as before.
         """
         s = self.sales
-        tk_df = self.tickets
+        tk_df = self.completed_tickets
         coll_df = self.collections
         if start is not None or end is not None:
             s = self._window_range(s, start, end)

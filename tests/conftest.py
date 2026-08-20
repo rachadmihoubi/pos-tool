@@ -99,6 +99,12 @@ def expected_totals() -> dict[str, float]:
     The all-time ones can only grow, by exactly the value of new sales. The
     point-in-time ones (stock, receivables) move in both directions as trade
     happens, so they are checked within a tolerance.
+
+    STALE as of the 2026-08-20 devis fix (CLAUDE.md discovery #13): "DV"
+    tickets are now correctly excluded from revenue/profit, so
+    revenue_all_time/gross_profit_all_time/revenue_12m/gross_profit_12m
+    below may need lowering the next time this is checked against the real
+    database - a small drop from that change is expected, not a bug.
     """
     return {
         "revenue_all_time": 266_299_322,

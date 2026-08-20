@@ -92,6 +92,25 @@ class TestHeadlineTotals:
         assert len(returns) > 50, "returns should be present in the data"
         assert returns["amount"].sum() < 0, "returns should pull revenue down"
 
+    def test_devis_tickets_excluded_from_sales(self, metrics: Metrics):
+        """
+        A "DV" ticket (ReceiptType 1) is a quote the customer reviewed, not
+        a completed sale - its lines must never show up in `sales`, however
+        real their product/price look.
+        """
+        devis_lines = metrics.lines[metrics.lines["is_devis"]]
+        if devis_lines.empty:
+            pytest.skip("no devis tickets in this database")
+        assert not devis_lines["is_sale"].any()
+        assert metrics.sales["receipt_id"].isin(
+            metrics.tickets.loc[metrics.tickets["is_devis"], "receipt_id"]).sum() == 0
+
+    def test_devis_tickets_excluded_from_ticket_counts(self, metrics: Metrics):
+        devis_ids = set(metrics.tickets.loc[metrics.tickets["is_devis"], "receipt_id"])
+        if not devis_ids:
+            pytest.skip("no devis tickets in this database")
+        assert not devis_ids & set(metrics.completed_tickets["receipt_id"])
+
     def test_trailing_12_months(self, metrics: Metrics, expected_totals):
         """A rolling window drifts, so this is checked loosely."""
         h12 = metrics.headline(days=365)
@@ -473,9 +492,35 @@ class TestTodayByDate:
     def test_daily_rollup_columns_and_no_duplicate_dates(self, metrics: Metrics):
         d = metrics.daily_rollup()
         for col in ("date", "revenue", "cash_revenue", "on_account_revenue",
-                    "gross_profit", "tickets"):
+                    "collections", "cash_in", "gross_profit", "tickets"):
             assert col in d.columns
         assert d["date"].is_unique
+
+    def test_daily_rollup_cash_in_adds_up(self, metrics: Metrics):
+        d = metrics.daily_rollup()
+        if d.empty:
+            pytest.skip("no sales in this database")
+        gap = (d["cash_in"] - (d["cash_revenue"] + d["collections"])).abs()
+        assert (gap < 0.01).all()
+
+    def test_today_cash_in_is_sales_plus_collections(self, metrics: Metrics):
+        """
+        The headline "cash in today" figure must be exactly cash-realized
+        sales plus account payments collected that day - a customer paying
+        down what they owe is real cash landing in the till today, even
+        though (correctly) it is never counted as a "sale".
+        """
+        d = metrics.today()
+        for bucket in ("today", "yesterday", "last_week_same_day"):
+            row = d[bucket]
+            assert abs(row["cash_in"] - (row["cash_revenue"] + row["collections"])) < 0.01
+
+    def test_period_stats_cash_in_is_sales_plus_collections(self, metrics: Metrics):
+        first = metrics.data_range["first"]
+        if first is None:
+            pytest.skip("no sales in this database")
+        p = metrics.period_stats(first.date(), first.date() + datetime.timedelta(days=30))
+        assert abs(p["cash_in"] - (p["cash_revenue"] + p["collections"])) < 0.01
 
     def test_daily_rollup_matches_period_stats_for_a_window(self, metrics: Metrics):
         first = metrics.data_range["first"]
@@ -541,6 +586,35 @@ class TestTickets:
         receipt_id = next(iter(mixed_receipt_ids))
         detail = metrics.ticket_detail(receipt_id)
         assert (~detail["lines"]["is_sale"]).any()
+
+    def test_ticket_detail_devis_is_labelled_and_worth_zero(self, metrics: Metrics):
+        """
+        A devis ticket must still be visible in the drill-down (so the
+        owner can look up what was quoted), but worth 0 DZD of sales.
+        """
+        devis_ids = metrics.tickets.loc[metrics.tickets["is_devis"], "receipt_id"]
+        if devis_ids.empty:
+            pytest.skip("no devis tickets in this database")
+        detail = metrics.ticket_detail(int(devis_ids.iloc[0]))
+        assert detail is not None
+        assert detail["header"]["is_devis"] is True or detail["header"]["is_devis"] == 1
+        assert detail["header"]["revenue"] == 0
+        assert not detail["lines"].empty, "the devis's own lines should still be listed"
+
+    def test_ticket_list_flags_devis(self, metrics: Metrics):
+        first = metrics.data_range["first"]
+        if first is None:
+            pytest.skip("no sales in this database")
+        devis_ids = set(metrics.tickets.loc[metrics.tickets["is_devis"], "receipt_id"])
+        if not devis_ids:
+            pytest.skip("no devis tickets in this database")
+        last = metrics.data_range["last"]
+        tl = metrics.ticket_list(first.date(), last.date())
+        matched = tl[tl["receipt_id"].isin(devis_ids)]
+        if matched.empty:
+            pytest.skip("no devis ticket falls in the full data range (unexpected but not this test's job)")
+        assert matched["is_devis"].all()
+        assert (matched["revenue"] == 0).all()
 
 
 class TestSupplierTransactions:
