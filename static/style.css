@@ -8,44 +8,60 @@
    ========================================================================== */
 
 :root {
-  /* Ink and paper */
-  --bg:        #f4f5f7;
+  /* Ink and paper - warmed slightly off pure neutral (a touch of red/
+     yellow, never blue) so the palette reads as considered rather than
+     the default cool-gray "enterprise SaaS" grid. Every pairing below is
+     contrast-checked against both --bg and --panel, not eyeballed. */
+  --bg:        #f8f5f3;
   --panel:     #ffffff;
-  --ink:       #16191d;
-  --ink-soft:  #5b6472;
-  /* #8b95a3 (the original value) reads as ~2.8:1 against --bg and ~3.0:1
-     against --panel - below WCAG AA's 4.5:1 for normal text. This is
-     darkened just enough to clear 4.5:1 on both while staying visibly
-     lighter than --ink-soft. */
-  --ink-faint: #636e7d;
-  --line:      #e2e6ec;
-  --line-firm: #cbd2dc;
+  --ink:       #201a1d;
+  --ink-soft:  #6b5c60;
+  --ink-faint: #776870;
+  --line:      #ece4e1;
+  --line-firm: #d9cbc7;
 
-  /* Meaning */
+  /* Meaning - kept as the same universal traffic-light hues (green/red/
+     amber) the P&L pages depend on to read correctly at a glance. Not
+     touched for "vibe": changing what these mean would be a real bug. */
   --good:      #14795a;
   --good-bg:   #e7f5ef;
   --bad:       #b3261e;
   --bad-bg:    #fdecea;
   --warn:      #9a6400;
   --warn-bg:   #fdf3e0;
-  --info:      #1f5fa8;
-  --info-bg:   #e9f1fb;
 
-  /* Chart series. Distinguishable in print and for colour-blind readers. */
-  --c1: #1f5fa8;   /* revenue      */
+  /* Brand accent - a deep wine/berry, the one confident colour on the
+     page: links, the active tab, the primary chart series, info notices.
+     Grounded in the shop's own trade (wholesale cosmetics) rather than
+     generic SaaS blue - see docs/superpowers if this needs revisiting.
+     7.1:1 on white, 6.6:1 on --bg, well past WCAG AA. */
+  --info:      #9c2f56;
+  --info-bg:   #fbeef2;
+
+  /* Chart series. Distinguishable in print and for colour-blind readers -
+     revenue takes the brand accent, profit/margin stay tied to --good/
+     --warn so their meaning matches the P&L pages; --c4 is a cooler,
+     darker plum kept well apart from --info in both hue and lightness. */
+  --c1: #9c2f56;   /* revenue      */
   --c2: #14795a;   /* profit       */
   --c3: #9a6400;   /* margin line  */
-  --c4: #6b4fa8;   /* fourth       */
+  --c4: #6d4a86;   /* fourth       */
   --c-dead:    #b3261e;
   --c-slow:    #d9a441;
   --c-healthy: #14795a;
 
-  --radius: 10px;
-  --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
+  --radius: 14px;
+  --shadow: 0 1px 2px rgba(32, 20, 23, .05), 0 8px 24px rgba(32, 20, 23, .07);
 
-  --font: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+  /* Inter carries the UI and every table/tile (it was built for exactly
+     this: dense data at small sizes). Playfair Display is used sparingly,
+     for the handful of headings that are read once per page rather than
+     scanned - see its three call sites below. Both fall back to a system
+     stack that renders correctly with no network at all. */
+  --font: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+  --font-display: "Playfair Display", Georgia, "Times New Roman", serif;
   --font-ar: "Cairo", "Tajawal", "Noto Sans Arabic", "Segoe UI", Tahoma, sans-serif;
-  --font-num: "Segoe UI", Roboto, Arial, sans-serif;
+  --font-num: "Inter", "Segoe UI", Roboto, Arial, sans-serif;
 }
 
 /* Arabic needs a face that shapes properly. These are loaded from the
@@ -88,7 +104,14 @@ body.rtl { font-family: var(--font-ar); }
    language is. */
 .name, td.name, .item-name { font-family: var(--font-ar); }
 
-a { color: var(--info); }
+a { color: var(--info); transition: color .15s ease; }
+
+/* Motion is kept to short hover/focus transitions on things you actually
+   click - this tool is opened dozens of times a day, so nothing animates
+   on load or scroll. Respected everywhere transition-duration is set. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.001ms !important; }
+}
 
 /* --------------------------------------------------------------- top bar */
 
@@ -102,7 +125,7 @@ a { color: var(--info); }
 
 .brand { display: flex; align-items: center; gap: 12px; }
 .brand-mark { font-size: 26px; line-height: 1; }
-.brand strong { display: block; font-size: 17px; }
+.brand strong { display: block; font-family: var(--font-display); font-size: 19px; font-weight: 700; }
 .brand small { display: block; color: var(--ink-faint); font-size: 12.5px; }
 
 .topbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -117,8 +140,9 @@ a { color: var(--info); }
   font: inherit; font-size: 14px;
   text-decoration: none;
   cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease;
 }
-.btn:hover { background: #f7f8fa; border-color: #aeb7c4; }
+.btn:hover { background: #f9f5f4; border-color: #c2b2ad; }
 .btn:disabled { opacity: .55; cursor: progress; }
 .btn-quiet { color: var(--ink-soft); }
 
@@ -135,9 +159,12 @@ a { color: var(--info); }
   color: var(--ink-soft);
   background: var(--panel);
   border-inline-end: 1px solid var(--line);
+  transition: background-color .15s ease, color .15s ease;
 }
 .lang:last-child { border-inline-end: 0; }
+.lang:hover { background: var(--bg); color: var(--ink); }
 .lang.on { background: var(--ink); color: #fff; font-weight: 600; }
+.lang.on:hover { background: var(--ink); color: #fff; }
 
 /* ------------------------------------------------------------------ tabs */
 
@@ -160,6 +187,7 @@ a { color: var(--info); }
   color: var(--ink-soft);
   border-bottom: 3px solid transparent;
   white-space: nowrap;
+  transition: color .15s ease, border-color .15s ease;
 }
 .tab:hover { color: var(--ink); }
 .tab.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--c1); }
@@ -206,7 +234,12 @@ a { color: var(--info); }
 main { padding: 22px; max-width: 1560px; margin: 0 auto; }
 
 .page-head { margin-bottom: 18px; }
-.page-head h1 { margin: 0 0 3px; font-size: 25px; letter-spacing: -.2px; }
+.page-head h1 {
+  margin: 0 0 3px;
+  font-family: var(--font-display);
+  font-size: 28px; font-weight: 700;
+  letter-spacing: -.2px;
+}
 .page-head p  { margin: 0; color: var(--ink-soft); font-size: 14.5px; }
 
 section { margin-bottom: 26px; }
@@ -289,7 +322,7 @@ thead th {
   background: var(--panel);
   position: sticky; top: 0;
 }
-.sortable-th { cursor: pointer; user-select: none; }
+.sortable-th { cursor: pointer; user-select: none; transition: color .15s ease; }
 .sortable-th:hover { color: var(--ink); }
 th[data-sort]::after { content: " ▾"; }
 th[data-sort="asc"]::after { content: " ▴"; }
@@ -299,7 +332,8 @@ tbody td {
   border-bottom: 1px solid var(--line);
   vertical-align: top;
 }
-tbody tr:hover { background: #fafbfc; }
+tbody tr { transition: background-color .1s ease; }
+tbody tr:hover { background: #fbf8f6; }
 
 td.num, th.num {
   text-align: end;
@@ -327,7 +361,7 @@ td.muted, .muted { color: var(--ink-faint); }
 .pill-bad  { background: var(--bad-bg);  color: var(--bad); }
 .pill-warn { background: var(--warn-bg); color: var(--warn); }
 .pill-info { background: var(--info-bg); color: var(--info); }
-.pill-flat { background: #eef0f3; color: var(--ink-soft); }
+.pill-flat { background: #f1ecea; color: var(--ink-soft); }
 
 /* Customer groups keep the same colour everywhere they appear. */
 .seg-champion  { background: var(--good-bg); color: var(--good); }
@@ -395,7 +429,12 @@ td.muted, .muted { color: var(--ink-faint); }
   display: flex; align-items: baseline; justify-content: space-between;
   gap: 14px; flex-wrap: wrap; margin-bottom: 8px;
 }
-.finding-head h3 { margin: 0; font-size: 16.5px; letter-spacing: -.1px; }
+.finding-head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 18.5px; font-weight: 700;
+  letter-spacing: -.1px;
+}
 .finding .money {
   font-family: var(--font-num);
   font-variant-numeric: tabular-nums;
@@ -415,7 +454,7 @@ td.muted, .muted { color: var(--ink-faint); }
 }
 .finding .workings {
   font-family: var(--font-num);
-  background: #f6f7f9;
+  background: #f7f3f1;
   border: 1px dashed var(--line-firm);
   border-radius: 6px;
   padding: 9px 12px;
@@ -444,11 +483,11 @@ td.muted, .muted { color: var(--ink-faint); }
 .banner-warn { background: var(--warn-bg); color: #6d4700; border-color: #f0d9a8; }
 .banner-bad  { background: var(--bad-bg);  color: #8f1d17; border-color: #f3c6c2; }
 .banner-good { background: var(--good-bg); color: #0e5b44; border-color: #b9e2d2; }
-.banner-info { background: var(--info-bg); color: #17457a; border-color: #c3dbf4; }
+.banner-info { background: var(--info-bg); color: #6b1638; border-color: #f3c7d4; }
 
 .empty {
   padding: 26px; text-align: center; color: var(--ink-faint);
-  background: #fafbfc; border: 1px dashed var(--line-firm); border-radius: 8px;
+  background: #fbf8f6; border: 1px dashed var(--line-firm); border-radius: 8px;
 }
 
 .toast {

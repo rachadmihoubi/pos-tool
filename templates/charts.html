@@ -149,7 +149,7 @@
     {% for cell in c.cells %}
       <rect class="heat-cell" x="{{ cell.x }}" y="{{ cell.y }}"
             width="{{ cell.w }}" height="{{ cell.h }}" rx="3"
-            fill="{{ 'var(--c1)' if cell.intensity > 0 else '#eef0f3' }}"
+            fill="{{ 'var(--c1)' if cell.intensity > 0 else '#f1ecea' }}"
             fill-opacity="{{ cell.intensity if cell.intensity > 0 else 1 }}">
         <title>{{ cell.row }} {{ cell.col }} — {{ t.money(cell.value) }}</title>
       </rect>
