@@ -15,7 +15,9 @@
     "print": "طباعة",
     "export": "تقرير إكسل",
     "export_running": "جارٍ إنشاء التقرير…",
-    "language": "اللغة"
+    "language": "اللغة",
+    "quick_nav": "الانتقال إلى صفحة",
+    "quick_nav_placeholder": "اكتب اسم صفحة…"
   },
 
   "nav": {

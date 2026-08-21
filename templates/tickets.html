@@ -46,7 +46,9 @@
         </thead>
         <tbody>
           {% for r in tickets %}
-          <tr data-date="{{ r.ticket_time.strftime('%Y-%m-%d') }}">
+          <tr data-date="{{ r.ticket_time.strftime('%Y-%m-%d') }}"
+              data-href="{{ url_for('page_ticket', receipt_id=r.receipt_id) }}"
+              class="row-link" tabindex="0">
             <td class="num" data-value="{{ r.ticket_time }}">{{ t.datetime(r.ticket_time) }}</td>
             <td class="num muted">{{ r.ticket_no }}</td>
             <td class="name">{{ r.customer_name }}</td>
@@ -67,6 +69,21 @@
     <div class="empty">{{ t('tickets.empty') }}</div>
   {% endif %}
 </section>
+
+{% block extra_script %}
+  // The whole row opens the ticket, not just the arrow - a click anywhere
+  // that isn't already a link, and Enter when a row has keyboard focus.
+  document.querySelectorAll("tr.row-link").forEach(function (row) {
+    function go() { window.location.href = row.getAttribute("data-href"); }
+    row.addEventListener("click", function (e) {
+      if (e.target.closest("a")) { return; }
+      go();
+    });
+    row.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.target.closest("a")) { go(); }
+    });
+  });
+{% endblock %}
 
 {% if is_static_export %}
 <script>

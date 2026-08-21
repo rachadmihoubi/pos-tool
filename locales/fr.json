@@ -15,7 +15,9 @@
     "print": "Imprimer",
     "export": "Rapport Excel",
     "export_running": "Création du rapport…",
-    "language": "Langue"
+    "language": "Langue",
+    "quick_nav": "Aller à une page",
+    "quick_nav_placeholder": "Tapez le nom d'une page…"
   },
 
   "nav": {

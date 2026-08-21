@@ -54,7 +54,7 @@
   <section class="tiles tiles-big">
     <div class="tile">
       <div class="label">{{ t('today.revenue') }}</div>
-      <div class="value">{{ t.money(d.today.cash_revenue) }}</div>
+      <div class="value" data-countup="{{ '%.2f'|format(d.today.cash_revenue) }}" data-countup-kind="money">{{ t.money(d.today.cash_revenue) }}</div>
       <div class="sub">
         {{ delta(d.vs_yesterday) }} {{ t('today.vs_yesterday') }}
       </div>
@@ -62,19 +62,19 @@
 
     <div class="tile">
       <div class="label">{{ t('today.on_account') }}</div>
-      <div class="value">{{ t.money(d.today.on_account_revenue) }}</div>
+      <div class="value" data-countup="{{ '%.2f'|format(d.today.on_account_revenue) }}" data-countup-kind="money">{{ t.money(d.today.on_account_revenue) }}</div>
       <div class="sub">{{ t('today.on_account_note') }}</div>
     </div>
 
     <div class="tile">
       <div class="label">{{ t('today.tickets') }}</div>
-      <div class="value">{{ t.number(d.today.tickets) }}</div>
+      <div class="value" data-countup="{{ d.today.tickets }}" data-countup-kind="number">{{ t.number(d.today.tickets) }}</div>
       <div class="sub">{{ t('today.avg_basket') }}: {{ t.money(d.today.avg_basket) }}</div>
     </div>
 
     <div class="tile">
       <div class="label">{{ t('today.gross_profit') }}</div>
-      <div class="value">{{ t.money(d.today.gross_profit) }}</div>
+      <div class="value" data-countup="{{ '%.2f'|format(d.today.gross_profit) }}" data-countup-kind="money">{{ t.money(d.today.gross_profit) }}</div>
       <div class="sub">
         {{ t('today.margin') }}:
         <strong>{{ t.percent(d.today.margin_pct) if d.today.margin_pct is not none else t('common.not_measurable') }}</strong>
@@ -267,6 +267,45 @@
   </a>
 </p>
 
+{% endblock %}
+
+{% block extra_script %}
+  // The headline numbers count up from 0 once, on load - not on every
+  // scroll or refresh, and not at all under prefers-reduced-motion (this
+  // is a JS-driven number, not a CSS transition, so it checks the media
+  // query itself rather than relying on the sitewide transition rule).
+  (function () {
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) { return; }
+    var fmt = {{ t.js_format() | tojson }};
+    function formatNumber(v, decimals) {
+      decimals = decimals || 0;
+      var s = Math.abs(v).toFixed(decimals);
+      var parts = s.split(".");
+      parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, "\x00");
+      var joined = parts.join(fmt.decimal).split("\x00").join(fmt.thousands);
+      return (v < 0 ? "-" : "") + joined;
+    }
+    function formatMoney(v) {
+      return fmt.money_format.replace("{amount}", formatNumber(v))
+                              .replace("{currency}", fmt.currency);
+    }
+    var duration = 700;
+    document.querySelectorAll("[data-countup]").forEach(function (el) {
+      var target = parseFloat(el.getAttribute("data-countup"));
+      if (isNaN(target)) { return; }
+      var kind = el.getAttribute("data-countup-kind");
+      var start = null;
+      function frame(now) {
+        if (start === null) { start = now; }
+        var p = Math.min(1, (now - start) / duration);
+        var eased = 1 - Math.pow(1 - p, 3);
+        var value = target * eased;
+        el.textContent = kind === "number" ? formatNumber(Math.round(value)) : formatMoney(value);
+        if (p < 1) { requestAnimationFrame(frame); }
+      }
+      requestAnimationFrame(frame);
+    });
+  })();
 {% endblock %}
 
 {% block autorefresh %}

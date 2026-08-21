@@ -24,12 +24,14 @@
     <line class="axis-line" x1="{{ c.x0 }}" y1="{{ c.y1 }}" x2="{{ c.x1 }}" y2="{{ c.y1 }}"/>
 
     {% for b in c.bars %}
-      <rect class="bar-1" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="2">
+      <rect class="bar-1" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="2"
+            data-tip="{{ b.label }} — {{ t.money(b.value) if money else t.number(b.value) }}">
         <title>{{ b.label }} — {{ t.money(b.value) if money else t.number(b.value) }}</title>
       </rect>
     {% endfor %}
     {% for b in c.bars2 %}
-      <rect class="bar-2" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="2">
+      <rect class="bar-2" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="2"
+            data-tip="{{ b.label }} — {{ t.money(b.value) if money else t.number(b.value) }}">
         <title>{{ b.label }} — {{ t.money(b.value) if money else t.number(b.value) }}</title>
       </rect>
     {% endfor %}
@@ -44,7 +46,11 @@
       {% endfor %}
       <polyline class="line-1" points="{{ c.polyline }}"/>
       {% for p in c.line_points %}
-        <circle class="line-dot" cx="{{ p.x }}" cy="{{ p.y }}" r="3.5">
+        {# A generous invisible hit-area sits under the small visible dot -
+           r="3.5" alone is fiddly to hover precisely. #}
+        <circle class="line-dot-hit" cx="{{ p.x }}" cy="{{ p.y }}" r="10"
+                data-tip="{{ p.label }} — {{ t.percent(p.value / 100) if c.line_is_percent else t.money(p.value) }}"/>
+        <circle class="line-dot" cx="{{ p.x }}" cy="{{ p.y }}" r="3.5" style="pointer-events: none;">
           <title>{{ p.label }} — {{ t.percent(p.value / 100) if c.line_is_percent else t.money(p.value) }}</title>
         </circle>
       {% endfor %}
@@ -66,7 +72,8 @@
   <svg class="chart" viewBox="0 0 {{ c.width }} {{ c.height }}"
        preserveAspectRatio="xMidYMid meet" role="img">
     {% for b in c.bars %}
-      <rect class="hbar" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="3">
+      <rect class="hbar" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="3"
+            data-tip="{{ b.label }} — {{ t.money(b.value) if money else t.number(b.value) }}">
         <title>{{ b.label }} — {{ t.money(b.value) if money else t.number(b.value) }}</title>
       </rect>
       <text class="hbar-label" x="{{ b.label_x }}" y="{{ b.text_y }}"
@@ -117,7 +124,8 @@
   <svg class="stack" viewBox="0 0 {{ c.width }} {{ c.height }}"
        preserveAspectRatio="none" role="img" style="height: {{ c.height }}px">
     {% for p in c.parts %}
-      <rect x="{{ p.x }}" y="0" width="{{ p.w }}" height="{{ c.height }}" fill="{{ p.colour }}">
+      <rect x="{{ p.x }}" y="0" width="{{ p.w }}" height="{{ c.height }}" fill="{{ p.colour }}"
+            data-tip="{{ p.label }} — {{ t.money(p.value) }} ({{ t.percent(p.share) }})">
         <title>{{ p.label }} — {{ t.money(p.value) }} ({{ t.percent(p.share) }})</title>
       </rect>
       {% if p.wide %}
@@ -150,7 +158,8 @@
       <rect class="heat-cell" x="{{ cell.x }}" y="{{ cell.y }}"
             width="{{ cell.w }}" height="{{ cell.h }}" rx="3"
             fill="{{ 'var(--c1)' if cell.intensity > 0 else '#f1ecea' }}"
-            fill-opacity="{{ cell.intensity if cell.intensity > 0 else 1 }}">
+            fill-opacity="{{ cell.intensity if cell.intensity > 0 else 1 }}"
+            data-tip="{{ cell.row }} {{ cell.col }} — {{ t.money(cell.value) }}">
         <title>{{ cell.row }} {{ cell.col }} — {{ t.money(cell.value) }}</title>
       </rect>
     {% endfor %}
@@ -174,7 +183,8 @@
     <line class="axis-line" x1="{{ c.x0 }}" y1="{{ c.zero_y }}" x2="{{ c.x1 }}" y2="{{ c.zero_y }}"/>
     {% for b in c.bars %}
       <rect class="{{ 'bar-pos' if b.positive else 'bar-neg' }}"
-            x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="2">
+            x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="2"
+            data-tip="{{ b.label }} — {{ t.signed_percent(b.value / 100) }}">
         <title>{{ b.label }} — {{ t.signed_percent(b.value / 100) }}</title>
       </rect>
       <text class="value-text" x="{{ b.text_x }}" y="{{ b.text_y }}"
