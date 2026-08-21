@@ -36,6 +36,13 @@
     "menu": "القائمة"
   },
 
+  "navgroup": {
+    "sales": "المبيعات",
+    "money": "الأموال",
+    "stock": "المخزون",
+    "health": "الفحص العام"
+  },
+
   "common": {
     "currency": "دج",
     "money_format": "{amount} {currency}",

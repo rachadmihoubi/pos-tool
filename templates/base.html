@@ -10,115 +10,133 @@
    graceful-degradation the self-hosted Arabic font already relies on. #}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📊</text></svg>">
 </head>
 <body class="{{ 'rtl' if is_rtl else 'ltr' }}">
 
-<header class="topbar">
-  <div class="brand">
-    <span class="brand-mark">📊</span>
-    <span>
-      <strong>{{ t('app.title') }}</strong>
-      <small>{{ cfg.get('business.name', '') }}</small>
-    </span>
-  </div>
+{% import "_icons.html" as icons %}
+{% set groups = [
+  ('sales', ['today', 'tickets', 'trend', 'customers']),
+  ('money', ['receivables', 'cash', 'suppliers']),
+  ('stock', ['inventory', 'catalog', 'products']),
+  ('health', ['diagnostics', 'dataquality']),
+] %}
+{% set href_of = {} %}
+{% for k, h in pages %}{% set _ = href_of.update({k: h}) %}{% endfor %}
 
-  <div class="topbar-actions">
-    <button type="button" class="btn btn-icon" id="cmdk-trigger"
-            title="{{ t('app.quick_nav') }} (/)" aria-label="{{ t('app.quick_nav') }}">
-      <span aria-hidden="true">🔍</span>
-    </button>
-    {% if not is_static_export %}
-      <button type="button" class="btn" id="refresh-btn" title="{{ t('app.refresh') }}">
-        <span id="refresh-label">{{ t('app.refresh') }}</span>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">📊</span>
+      <span class="sidebar-brand-text">
+        <strong>{{ t('app.title') }}</strong>
+        <small>{{ cfg.get('business.name', '') }}</small>
+      </span>
+    </div>
+
+    <nav class="sidebar-nav" aria-label="{{ t('app.quick_nav') }}">
+      {% for group_key, keys in groups %}
+        <div class="sidebar-group">
+          <div class="sidebar-group-label">{{ t('navgroup.' ~ group_key) }}</div>
+          {% for key in keys %}
+            <a href="{{ href_of[key] }}"
+               class="sidebar-link {{ 'on' if current_page == ('page_' ~ key) else '' }}">
+              {{ icons.icon(key) }}
+              <span>{{ t('nav.' ~ key) }}</span>
+            </a>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    </nav>
+  </aside>
+
+  <div class="sidebar-overlay" id="sidebar-overlay" hidden></div>
+
+  <div class="main-col">
+    <header class="topbar">
+      <button type="button" class="btn btn-icon sidebar-toggle" id="sidebar-toggle"
+              aria-label="{{ t('nav.menu') }}" aria-expanded="false" aria-controls="sidebar">
+        {{ icons.icon('menu') }}
       </button>
-      <a class="btn" href="{{ url_for('do_export') }}?lang={{ lang }}">{{ t('app.export') }}</a>
-    {% endif %}
-    <button type="button" class="btn btn-quiet" onclick="window.print()">{{ t('app.print') }}</button>
 
-    <div class="lang-switch" role="group" aria-label="{{ t('app.language') }}">
-      {% for l in languages %}
-        {% if is_static_export %}
-          <a href="/{{ l.code }}/{{ page_slug }}"
-             class="lang {{ 'on' if l.code == lang else '' }}"
-             lang="{{ l.code }}">{{ l.name }}</a>
-        {% else %}
-          <a href="?lang={{ l.code }}"
-             class="lang {{ 'on' if l.code == lang else '' }}"
-             lang="{{ l.code }}">{{ l.name }}</a>
+      <div class="topbar-actions">
+        <button type="button" class="btn btn-icon" id="cmdk-trigger"
+                title="{{ t('app.quick_nav') }} (/)" aria-label="{{ t('app.quick_nav') }}">
+          {{ icons.icon('search') }}
+        </button>
+        {% if not is_static_export %}
+          <button type="button" class="btn" id="refresh-btn" title="{{ t('app.refresh') }}">
+            <span id="refresh-label">{{ t('app.refresh') }}</span>
+          </button>
+          <a class="btn" href="{{ url_for('do_export') }}?lang={{ lang }}">{{ t('app.export') }}</a>
         {% endif %}
-      {% endfor %}
-    </div>
-  </div>
-</header>
+        <button type="button" class="btn btn-quiet" onclick="window.print()">{{ t('app.print') }}</button>
 
-{% if is_static_export %}
-  <div class="banner banner-info" style="margin: 12px 24px 0;">
-    {% if cache and cache.parsed_at %}
-      {{ t('remote.generated_note', when=t.datetime(cache.parsed_at)) }}
-    {% else %}
-      {{ t('app.no_data') }}
+        <div class="lang-switch" role="group" aria-label="{{ t('app.language') }}">
+          {% for l in languages %}
+            {% if is_static_export %}
+              <a href="/{{ l.code }}/{{ page_slug }}"
+                 class="lang {{ 'on' if l.code == lang else '' }}"
+                 lang="{{ l.code }}">{{ l.name }}</a>
+            {% else %}
+              <a href="?lang={{ l.code }}"
+                 class="lang {{ 'on' if l.code == lang else '' }}"
+                 lang="{{ l.code }}">{{ l.name }}</a>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+    </header>
+
+    {% if is_static_export %}
+      <div class="banner banner-info" style="margin: 12px 24px 0;">
+        {% if cache and cache.parsed_at %}
+          {{ t('remote.generated_note', when=t.datetime(cache.parsed_at)) }}
+        {% else %}
+          {{ t('app.no_data') }}
+        {% endif %}
+      </div>
     {% endif %}
-  </div>
-{% endif %}
 
-{% set active = namespace(label=t('nav.menu')) %}
-{% for key, href in pages %}
-  {% if current_page == ('page_' ~ key) or (key == 'dataquality' and current_page == 'page_dataquality') %}
-    {% set active.label = t('nav.' ~ key) %}
-  {% endif %}
-{% endfor %}
-<nav class="tabs">
-  <button type="button" class="tabs-toggle" id="tabs-toggle" aria-expanded="false" aria-controls="tabs-list">
-    <span>{{ active.label }}</span>
-    <span class="tabs-toggle-icon" aria-hidden="true">☰</span>
-  </button>
-  <div class="tabs-list" id="tabs-list">
-    {% for key, href in pages %}
-      <a href="{{ href }}"
-         class="tab {{ 'on' if current_page == ('page_' ~ key) or (key == 'dataquality' and current_page == 'page_dataquality') else '' }}">
-        {{ t('nav.' ~ key) }}
-      </a>
-    {% endfor %}
-  </div>
-</nav>
-
-{# Quick nav - press "/" anywhere (outside a text field) or click the
-   search button. Built from the same `pages` list the tab bar uses, so
-   there is one place that ever lists the site's pages. #}
-<div class="cmdk-overlay" id="cmdk-overlay" hidden>
-  <div class="cmdk" role="dialog" aria-modal="true" aria-label="{{ t('app.quick_nav') }}">
-    <input type="text" class="cmdk-input" id="cmdk-input" autocomplete="off"
-           placeholder="{{ t('app.quick_nav_placeholder') }}">
-    <div class="cmdk-list" id="cmdk-list">
-      {% for key, href in pages %}
-        <a href="{{ href }}" class="cmdk-item" data-label="{{ t('nav.' ~ key)|lower }}">
-          {{ t('nav.' ~ key) }}
-        </a>
-      {% endfor %}
+    {# Quick nav - press "/" anywhere (outside a text field) or click the
+       search button. Built from the same `pages` list the sidebar uses,
+       so there is one place that ever lists the site's pages. #}
+    <div class="cmdk-overlay" id="cmdk-overlay" hidden>
+      <div class="cmdk" role="dialog" aria-modal="true" aria-label="{{ t('app.quick_nav') }}">
+        <input type="text" class="cmdk-input" id="cmdk-input" autocomplete="off"
+               placeholder="{{ t('app.quick_nav_placeholder') }}">
+        <div class="cmdk-list" id="cmdk-list">
+          {% for key, href in pages %}
+            <a href="{{ href }}" class="cmdk-item" data-label="{{ t('nav.' ~ key)|lower }}">
+              {{ icons.icon(key, size=16) }}
+              <span>{{ t('nav.' ~ key) }}</span>
+            </a>
+          {% endfor %}
+        </div>
+        <div class="cmdk-empty" id="cmdk-empty" hidden>{{ t('common.no_results') }}</div>
+      </div>
     </div>
-    <div class="cmdk-empty" id="cmdk-empty" hidden>{{ t('common.no_results') }}</div>
+
+    {% block breadcrumb %}{% endblock %}
+
+    <main>
+    {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+      {% if cache and cache.parsed_at %}
+        <span>{{ t('app.last_refresh', when=t.datetime(cache.parsed_at)) }}</span>
+        <span class="sep">·</span>
+        <span>{{ t('dataquality.cache_modified') }}: {{ t.datetime(cache.source_modified) }}</span>
+        <span class="sep">·</span>
+        <span>{{ t('dataquality.cache_rows', rows=t.number(cache.row_counts.values()|sum),
+                    tables=t.number(cache.row_counts|length)) }}</span>
+      {% endif %}
+    </footer>
   </div>
 </div>
-
-{% block breadcrumb %}{% endblock %}
-
-<main>
-{% block content %}{% endblock %}
-</main>
-
-<footer class="footer">
-  {% if cache and cache.parsed_at %}
-    <span>{{ t('app.last_refresh', when=t.datetime(cache.parsed_at)) }}</span>
-    <span class="sep">·</span>
-    <span>{{ t('dataquality.cache_modified') }}: {{ t.datetime(cache.source_modified) }}</span>
-    <span class="sep">·</span>
-    <span>{{ t('dataquality.cache_rows', rows=t.number(cache.row_counts.values()|sum),
-                tables=t.number(cache.row_counts|length)) }}</span>
-  {% endif %}
-</footer>
 
 <div id="toast" class="toast" hidden></div>
 <div id="chart-tip" class="chart-tip" hidden></div>
@@ -158,13 +176,31 @@
     });
   }
 
-  // ----- collapsible nav on narrow screens ------------------------------
-  var tabsToggle = document.getElementById("tabs-toggle");
-  var tabsList = document.getElementById("tabs-list");
-  if (tabsToggle && tabsList) {
-    tabsToggle.addEventListener("click", function () {
-      var open = tabsList.classList.toggle("open");
-      tabsToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  // ----- collapsible sidebar on narrow screens --------------------------
+  var sidebar = document.getElementById("sidebar");
+  var sidebarToggle = document.getElementById("sidebar-toggle");
+  var sidebarOverlay = document.getElementById("sidebar-overlay");
+
+  function sidebarOpen() {
+    sidebar.classList.add("open");
+    sidebarOverlay.hidden = false;
+    sidebarToggle.setAttribute("aria-expanded", "true");
+  }
+  function sidebarClose() {
+    sidebar.classList.remove("open");
+    sidebarOverlay.hidden = true;
+    sidebarToggle.setAttribute("aria-expanded", "false");
+  }
+  if (sidebarToggle && sidebar) {
+    sidebarToggle.addEventListener("click", function () {
+      sidebar.classList.contains("open") ? sidebarClose() : sidebarOpen();
+    });
+    sidebarOverlay.addEventListener("click", sidebarClose);
+    sidebar.querySelectorAll(".sidebar-link").forEach(function (a) {
+      a.addEventListener("click", sidebarClose);
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && sidebar.classList.contains("open")) { sidebarClose(); }
     });
   }
 

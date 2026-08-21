@@ -36,6 +36,13 @@
     "menu": "Menu"
   },
 
+  "navgroup": {
+    "sales": "Sales",
+    "money": "Money",
+    "stock": "Stock",
+    "health": "Health check"
+  },
+
   "common": {
     "currency": "DZD",
     "money_format": "{amount} {currency}",

@@ -1,0 +1,74 @@
+{# =========================================================================
+   _icons.html - the sidebar's line icons.
+
+   Plain inline SVG, stroke-based, 20x20 viewBox, currentColor - no icon
+   font or library to download (this project has no build step), and they
+   recolor and resize with ordinary CSS like any other text. One macro,
+   one name per icon, imported wherever needed.
+   ========================================================================= #}
+
+{% macro icon(name, size=18) %}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 20 20" fill="none"
+     stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+     aria-hidden="true" class="icon">
+  {%- if name == 'today' -%}
+    <circle cx="10" cy="10" r="3.6"/>
+    <path d="M10 2.2v2.1M10 15.7v2.1M2.2 10h2.1M15.7 10h2.1M4.8 4.8l1.5 1.5M13.7 13.7l1.5 1.5M4.8 15.2l1.5-1.5M13.7 6.3l1.5-1.5"/>
+  {%- elif name == 'tickets' -%}
+    <rect x="4" y="3" width="12" height="14" rx="1.6"/>
+    <path d="M7 7.2h6M7 10h6M7 12.8h4"/>
+  {%- elif name == 'trend' -%}
+    <path d="M3.5 14.5l4.7-4.8 2.8 2.8 5.5-6.3"/>
+    <path d="M12.6 5.2h3.9v3.9"/>
+  {%- elif name == 'customers' -%}
+    <circle cx="7.4" cy="7.6" r="2.9"/>
+    <circle cx="14" cy="8.6" r="2.2"/>
+    <path d="M2.6 17c0-3.2 2.1-5.3 4.8-5.3s4.8 2.1 4.8 5.3"/>
+    <path d="M13 12.2c2.2 0 3.9 1.8 4.1 4.5"/>
+  {%- elif name == 'receivables' -%}
+    <circle cx="10" cy="10" r="7.2"/>
+    <path d="M10 6.2v4l2.8 1.8"/>
+  {%- elif name == 'stock' -%}
+    <path d="M3 6.3L10 2.8l7 3.5-7 3.5z"/>
+    <path d="M3 6.3v7.4L10 17.2V9.8"/>
+    <path d="M17 6.3v7.4L10 17.2"/>
+  {%- elif name == 'catalog' -%}
+    <circle cx="4" cy="5.2" r="1" fill="currentColor" stroke="none"/>
+    <path d="M7.2 5.2h9.3"/>
+    <circle cx="4" cy="10" r="1" fill="currentColor" stroke="none"/>
+    <path d="M7.2 10h9.3"/>
+    <circle cx="4" cy="14.8" r="1" fill="currentColor" stroke="none"/>
+    <path d="M7.2 14.8h9.3"/>
+  {%- elif name == 'products' -%}
+    <path d="M10.3 3H15a1.7 1.7 0 0 1 1.7 1.7v4.7L8.4 17.7a1.4 1.4 0 0 1-2 0l-3.1-3.1a1.4 1.4 0 0 1 0-2z"/>
+    <circle cx="13.3" cy="6.7" r="1.05" fill="currentColor" stroke="none"/>
+  {%- elif name == 'suppliers' -%}
+    <rect x="2.2" y="7.4" width="9" height="6.6"/>
+    <path d="M11.2 10h3.6l3 2.9v1.1h-6.6"/>
+    <circle cx="6.1" cy="16" r="1.55"/>
+    <circle cx="14.6" cy="16" r="1.55"/>
+  {%- elif name == 'cash' -%}
+    <circle cx="10" cy="10" r="7.2"/>
+    <path d="M10 6v8"/>
+    <path d="M12.4 8.1c-.3-.85-1.15-1.3-2.15-1.3-1.25 0-2.25.65-2.25 1.65 0 2.15 4.5 1 4.5 3.15 0 1-1 1.65-2.25 1.65-1 0-1.85-.45-2.15-1.3"/>
+  {%- elif name == 'diagnostics' -%}
+    <path d="M10 3.2L17.8 16.6H2.2z"/>
+    <path d="M10 8.4v3.7"/>
+    <circle cx="10" cy="14.4" r="0.95" fill="currentColor" stroke="none"/>
+  {%- elif name == 'dataquality' -%}
+    <path d="M10 2.6l6.4 2.3v4.6c0 4.3-2.8 6.8-6.4 7.3-3.6-.5-6.4-3-6.4-7.3V4.9z"/>
+    <path d="M6.9 9.8l2.1 2.1 4-4.6"/>
+  {%- elif name == 'search' -%}
+    <circle cx="8.8" cy="8.8" r="5.6"/>
+    <path d="M13.6 13.6L17.5 17.5"/>
+  {%- elif name == 'menu' -%}
+    <path d="M3 6h14M3 10h14M3 14h14"/>
+  {%- elif name == 'chevron-start' -%}
+    <path d="M12.5 4.5L7 10l5.5 5.5"/>
+  {%- elif name == 'up' -%}
+    <path d="M4 12l6-6 6 6"/>
+  {%- elif name == 'down' -%}
+    <path d="M4 8l6 6 6-6"/>
+  {%- endif -%}
+</svg>
+{%- endmacro %}

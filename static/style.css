@@ -53,6 +53,19 @@
   --radius: 14px;
   --shadow: 0 1px 2px rgba(32, 20, 23, .05), 0 8px 24px rgba(32, 20, 23, .07);
 
+  /* The sidebar is a deliberately dark surface against the light content
+     area - the single biggest lever for "this looks like a considered
+     product," not a recolored form. Every text tone here is
+     contrast-checked against --sidebar-bg the same way the light palette
+     above is checked against --bg/--panel. */
+  --sidebar-w: 250px;
+  --sidebar-bg: #201a1d;
+  --sidebar-ink: #f3ece9;
+  --sidebar-ink-soft: #d9cdd0;
+  --sidebar-ink-faint: #a89298;
+  --sidebar-hover-bg: rgba(255, 255, 255, .07);
+  --sidebar-line: rgba(255, 255, 255, .08);
+
   /* Inter carries the UI and every table/tile (it was built for exactly
      this: dense data at small sizes). Playfair Display is used sparingly,
      for the handful of headings that are read once per page rather than
@@ -106,6 +119,8 @@ body.rtl { font-family: var(--font-ar); }
 
 a { color: var(--info); transition: color .15s ease; }
 
+.icon { flex: none; vertical-align: -3px; }
+
 /* Motion stays short and purposeful - hover/focus feedback on things you
    click, a cross-fade between pages, a one-time count-up on Today's
    headline numbers. Nothing loops, nothing re-animates on scroll, and all
@@ -131,20 +146,75 @@ a { color: var(--info); transition: color .15s ease; }
   }
 }
 
-/* --------------------------------------------------------------- top bar */
+/* -------------------------------------------------------------- shell --- */
 
-.topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 16px; flex-wrap: wrap;
-  padding: 12px 22px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
+/* Two columns: a fixed dark sidebar and everything else. `main-col` is a
+   flex child that shrinks to fill the rest, so no width arithmetic is
+   needed against --sidebar-w anywhere else - and `inset-inline-start`
+   below means the sidebar sits on the correct edge for Arabic with no
+   separate rule. */
+.shell { display: flex; align-items: stretch; min-height: 100vh; }
+
+.sidebar {
+  width: var(--sidebar-w); flex: 0 0 var(--sidebar-w);
+  background: var(--sidebar-bg); color: var(--sidebar-ink);
+  display: flex; flex-direction: column;
+  position: sticky; inset-block-start: 0; block-size: 100vh; overflow-y: auto;
 }
 
-.brand { display: flex; align-items: center; gap: 12px; }
-.brand-mark { font-size: 26px; line-height: 1; }
-.brand strong { display: block; font-family: var(--font-display); font-size: 19px; font-weight: 700; }
-.brand small { display: block; color: var(--ink-faint); font-size: 12.5px; }
+.sidebar-brand {
+  display: flex; align-items: center; gap: 11px;
+  padding: 20px 20px 16px;
+}
+.sidebar-brand .brand-mark { font-size: 24px; line-height: 1; }
+.sidebar-brand-text strong {
+  display: block; font-family: var(--font-display);
+  font-size: 17.5px; font-weight: 700; color: var(--sidebar-ink);
+}
+.sidebar-brand-text small { display: block; color: var(--sidebar-ink-faint); font-size: 12px; }
+
+.sidebar-nav { padding: 4px 12px 20px; flex: 1; }
+.sidebar-group { margin-bottom: 18px; }
+.sidebar-group-label {
+  padding: 0 10px 6px;
+  font-size: 11px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--sidebar-ink-faint);
+}
+.sidebar-link {
+  display: flex; align-items: center; gap: 11px;
+  padding: 9px 10px; margin-bottom: 1px;
+  border-radius: 9px;
+  color: var(--sidebar-ink-soft); text-decoration: none;
+  font-size: 14px;
+  transition: background-color .12s ease, color .12s ease;
+}
+.sidebar-link .icon { flex: none; opacity: .85; }
+.sidebar-link:hover { background: var(--sidebar-hover-bg); color: var(--sidebar-ink); }
+.sidebar-link.on {
+  background: var(--info); color: #fff; font-weight: 600;
+}
+.sidebar-link.on .icon { opacity: 1; }
+
+.sidebar-overlay {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(20, 12, 14, .5);
+}
+.sidebar-overlay[hidden] { display: none; }
+
+.main-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+
+/* ---------------------------------------------------------------- topbar */
+
+.topbar {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 10px; flex-wrap: wrap;
+  padding: 14px 24px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: sticky; inset-block-start: 0; z-index: 20;
+}
+
+.sidebar-toggle { display: none; }
 
 .topbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
@@ -190,67 +260,36 @@ a { color: var(--info); transition: color .15s ease; }
 .lang.on { background: var(--ink); color: #fff; font-weight: 600; }
 .lang.on:hover { background: var(--ink); color: #fff; }
 
-/* ------------------------------------------------------------------ tabs */
-
-.tabs {
-  display: flex; flex-wrap: wrap;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
-  position: sticky; top: 0; z-index: 20;
-}
-.tabs-list {
-  display: flex; gap: 2px; flex-wrap: wrap;
-  padding: 0 18px;
-}
-/* Hidden on wide screens - the tab row is always shown in full there. */
-.tabs-toggle { display: none; }
-.tab {
-  padding: 11px 15px;
-  font-size: 14.5px;
-  text-decoration: none;
-  color: var(--ink-soft);
-  border-bottom: 3px solid transparent;
-  white-space: nowrap;
-  transition: color .15s ease, border-color .15s ease;
-}
-.tab:hover { color: var(--ink); }
-.tab.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--c1); }
-
-/* At this width the current tab set (11+ pages) wraps into a multi-row
-   grid that pushes all page content below the fold - verified against a
-   real phone screenshot of the remote dashboard. Below the breakpoint the
-   list collapses behind a toggle instead, matching the "drawer for
-   secondary navigation" pattern; nothing changes above it. */
-@media (max-width: 720px) {
-  .tabs { flex-direction: column; }
-  .tabs-toggle {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 10px; width: 100%; min-height: 44px;
-    padding: 12px 18px;
-    background: none; border: 0;
-    font: inherit; font-size: 14.5px; font-weight: 600; color: var(--ink);
-    cursor: pointer;
+/* At this width the sidebar becomes an off-canvas drawer instead of a
+   permanent column - verified against a real phone screenshot of the
+   remote dashboard showing how much vertical space 12 pages of top-tabs
+   used to cost before this redesign. Nothing below this query changes the
+   wide-screen layout above it. */
+@media (max-width: 900px) {
+  .shell { display: block; }
+  .sidebar {
+    position: fixed; inset-block: 0; inset-inline-start: 0; z-index: 100;
+    transform: translateX(-102%);
+    transition: transform .2s ease;
+    box-shadow: 0 0 40px rgba(0, 0, 0, .25);
   }
-  .tabs-toggle-icon { color: var(--ink-soft); font-size: 15px; }
-  .tabs-list {
-    display: none; flex-direction: column; gap: 0;
-    padding: 0 0 6px;
-    border-top: 1px solid var(--line);
+  body.rtl .sidebar { transform: translateX(102%); }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-toggle {
+    display: flex; align-items: center; justify-content: center;
+    min-width: 44px; min-height: 44px;
   }
-  .tabs-list.open { display: flex; }
-  .tab {
-    min-height: 44px; padding: 12px 18px;
-    display: flex; align-items: center;
-    border-bottom-color: transparent;
-    border-inline-start: 3px solid transparent;
-  }
-  .tab.on { border-inline-start-color: var(--c1); background: var(--bg); }
+  .main-col { width: 100%; }
 
   /* Priority-2 touch target guidance (min 44x44px) - only widened here,
      since the denser desktop sizing was a deliberate "shop counter"
      choice (see file header) that narrow screens don't share. */
   .btn { min-height: 44px; padding: 12px 16px; }
   .lang { min-height: 44px; padding: 0 14px; display: inline-flex; align-items: center; }
+  .sidebar-link { min-height: 44px; padding: 11px 10px; }
+}
+@media (min-width: 901px) {
+  .sidebar-overlay { display: none !important; }
 }
 
 /* ------------------------------------------------------------------ main */
@@ -308,6 +347,15 @@ section { margin-bottom: 26px; }
   box-shadow: var(--shadow);
   padding: 16px 18px;
 }
+.tile-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; margin-bottom: 12px;
+  border-radius: 10px;
+}
+.tile-icon.c-revenue { background: var(--info-bg); color: var(--info); }
+.tile-icon.c-account { background: var(--warn-bg); color: var(--warn); }
+.tile-icon.c-tickets { background: #eef0fb; color: #4a4fa8; }
+.tile-icon.c-profit  { background: var(--good-bg); color: var(--good); }
 .tile .label {
   color: var(--ink-soft);
   font-size: 13px;
@@ -327,7 +375,7 @@ section { margin-bottom: 26px; }
 .tiles-big .tile .value { font-size: 42px; }
 .tiles-big .tile { padding: 20px 22px; }
 
-.delta { font-weight: 600; font-size: 13.5px; }
+.delta { display: inline-flex; align-items: center; gap: 2px; font-weight: 600; font-size: 13.5px; }
 .delta.up   { color: var(--good); }
 .delta.down { color: var(--bad); }
 .delta.flat { color: var(--ink-faint); }
@@ -579,9 +627,12 @@ td.muted, .muted { color: var(--ink-faint); }
 .cmdk-input:focus { outline: none; }
 .cmdk-list { max-height: 50vh; overflow-y: auto; padding: 8px; }
 .cmdk-item {
-  display: block; padding: 10px 12px; border-radius: 8px;
+  display: flex; align-items: center; gap: 11px;
+  padding: 10px 12px; border-radius: 8px;
   color: var(--ink); text-decoration: none; font-size: 14.5px;
 }
+.cmdk-item .icon { color: var(--ink-faint); }
+.cmdk-item.active .icon { color: var(--info); }
 .cmdk-item[hidden] { display: none; }
 .cmdk-item.active { background: var(--info-bg); color: var(--info); }
 .cmdk-empty { padding: 18px; text-align: center; color: var(--ink-faint); font-size: 14px; }
@@ -617,7 +668,8 @@ td.muted, .muted { color: var(--ink-faint); }
 @media print {
   :root { --shadow: none; }
   body { background: #fff; font-size: 11.5pt; }
-  .topbar, .tabs, .topbar-actions, .toast, .filter-row, .footer { display: none !important; }
+  .sidebar, .sidebar-overlay, .topbar, .topbar-actions, .toast, .filter-row, .footer { display: none !important; }
+  .shell { display: block; }
   main { padding: 0; max-width: none; }
   .panel, .tile, .finding {
     box-shadow: none; border: 1px solid #999;

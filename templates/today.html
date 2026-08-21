@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "charts.html" as ch %}
+{% import "_icons.html" as icons %}
 {% block title %}{{ t('today.title') }}{% endblock %}
 
 {% macro delta(value) %}
@@ -7,6 +8,7 @@
     <span class="delta flat">—</span>
   {% else %}
     <span class="delta {{ 'up' if value > 0.005 else ('down' if value < -0.005 else 'flat') }}">
+      {% if value > 0.005 %}{{ icons.icon('up', size=13) }}{% elif value < -0.005 %}{{ icons.icon('down', size=13) }}{% endif %}
       {{ t.signed_percent(value) }}
     </span>
   {% endif %}
@@ -53,6 +55,7 @@
   {# ------------------------------------------------------- the big numbers #}
   <section class="tiles tiles-big">
     <div class="tile">
+      <div class="tile-icon c-revenue">{{ icons.icon('cash', size=17) }}</div>
       <div class="label">{{ t('today.revenue') }}</div>
       <div class="value" data-countup="{{ '%.2f'|format(d.today.cash_revenue) }}" data-countup-kind="money">{{ t.money(d.today.cash_revenue) }}</div>
       <div class="sub">
@@ -61,18 +64,21 @@
     </div>
 
     <div class="tile">
+      <div class="tile-icon c-account">{{ icons.icon('receivables', size=17) }}</div>
       <div class="label">{{ t('today.on_account') }}</div>
       <div class="value" data-countup="{{ '%.2f'|format(d.today.on_account_revenue) }}" data-countup-kind="money">{{ t.money(d.today.on_account_revenue) }}</div>
       <div class="sub">{{ t('today.on_account_note') }}</div>
     </div>
 
     <div class="tile">
+      <div class="tile-icon c-tickets">{{ icons.icon('tickets', size=17) }}</div>
       <div class="label">{{ t('today.tickets') }}</div>
       <div class="value" data-countup="{{ d.today.tickets }}" data-countup-kind="number">{{ t.number(d.today.tickets) }}</div>
       <div class="sub">{{ t('today.avg_basket') }}: {{ t.money(d.today.avg_basket) }}</div>
     </div>
 
     <div class="tile">
+      <div class="tile-icon c-profit">{{ icons.icon('trend', size=17) }}</div>
       <div class="label">{{ t('today.gross_profit') }}</div>
       <div class="value" data-countup="{{ '%.2f'|format(d.today.gross_profit) }}" data-countup-kind="money">{{ t.money(d.today.gross_profit) }}</div>
       <div class="sub">
