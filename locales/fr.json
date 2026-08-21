@@ -30,7 +30,8 @@
     "tickets": "Tickets",
     "cash": "Trésorerie",
     "diagnostics": "À corriger",
-    "dataquality": "Qualité des données"
+    "dataquality": "Qualité des données",
+    "menu": "Menu"
   },
 
   "common": {

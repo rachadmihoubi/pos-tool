@@ -53,13 +53,25 @@
   </div>
 {% endif %}
 
+{% set active = namespace(label=t('nav.menu')) %}
+{% for key, href in pages %}
+  {% if current_page == ('page_' ~ key) or (key == 'dataquality' and current_page == 'page_dataquality') %}
+    {% set active.label = t('nav.' ~ key) %}
+  {% endif %}
+{% endfor %}
 <nav class="tabs">
-  {% for key, href in pages %}
-    <a href="{{ href }}"
-       class="tab {{ 'on' if current_page == ('page_' ~ key) or (key == 'dataquality' and current_page == 'page_dataquality') else '' }}">
-      {{ t('nav.' ~ key) }}
-    </a>
-  {% endfor %}
+  <button type="button" class="tabs-toggle" id="tabs-toggle" aria-expanded="false" aria-controls="tabs-list">
+    <span>{{ active.label }}</span>
+    <span class="tabs-toggle-icon" aria-hidden="true">☰</span>
+  </button>
+  <div class="tabs-list" id="tabs-list">
+    {% for key, href in pages %}
+      <a href="{{ href }}"
+         class="tab {{ 'on' if current_page == ('page_' ~ key) or (key == 'dataquality' and current_page == 'page_dataquality') else '' }}">
+        {{ t('nav.' ~ key) }}
+      </a>
+    {% endfor %}
+  </div>
 </nav>
 
 {% block breadcrumb %}{% endblock %}
@@ -113,6 +125,16 @@
           btn.disabled = false;
           label.textContent = {{ t('app.refresh')|tojson }};
         });
+    });
+  }
+
+  // ----- collapsible nav on narrow screens ------------------------------
+  var tabsToggle = document.getElementById("tabs-toggle");
+  var tabsList = document.getElementById("tabs-list");
+  if (tabsToggle && tabsList) {
+    tabsToggle.addEventListener("click", function () {
+      var open = tabsList.classList.toggle("open");
+      tabsToggle.setAttribute("aria-expanded", open ? "true" : "false");
     });
   }
 

@@ -13,7 +13,11 @@
   --panel:     #ffffff;
   --ink:       #16191d;
   --ink-soft:  #5b6472;
-  --ink-faint: #8b95a3;
+  /* #8b95a3 (the original value) reads as ~2.8:1 against --bg and ~3.0:1
+     against --panel - below WCAG AA's 4.5:1 for normal text. This is
+     darkened just enough to clear 4.5:1 on both while staying visibly
+     lighter than --ink-soft. */
+  --ink-faint: #636e7d;
   --line:      #e2e6ec;
   --line-firm: #cbd2dc;
 
@@ -138,12 +142,17 @@ a { color: var(--info); }
 /* ------------------------------------------------------------------ tabs */
 
 .tabs {
-  display: flex; gap: 2px; flex-wrap: wrap;
-  padding: 0 18px;
+  display: flex; flex-wrap: wrap;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 20;
 }
+.tabs-list {
+  display: flex; gap: 2px; flex-wrap: wrap;
+  padding: 0 18px;
+}
+/* Hidden on wide screens - the tab row is always shown in full there. */
+.tabs-toggle { display: none; }
 .tab {
   padding: 11px 15px;
   font-size: 14.5px;
@@ -154,6 +163,43 @@ a { color: var(--info); }
 }
 .tab:hover { color: var(--ink); }
 .tab.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--c1); }
+
+/* At this width the current tab set (11+ pages) wraps into a multi-row
+   grid that pushes all page content below the fold - verified against a
+   real phone screenshot of the remote dashboard. Below the breakpoint the
+   list collapses behind a toggle instead, matching the "drawer for
+   secondary navigation" pattern; nothing changes above it. */
+@media (max-width: 720px) {
+  .tabs { flex-direction: column; }
+  .tabs-toggle {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; width: 100%; min-height: 44px;
+    padding: 12px 18px;
+    background: none; border: 0;
+    font: inherit; font-size: 14.5px; font-weight: 600; color: var(--ink);
+    cursor: pointer;
+  }
+  .tabs-toggle-icon { color: var(--ink-soft); font-size: 15px; }
+  .tabs-list {
+    display: none; flex-direction: column; gap: 0;
+    padding: 0 0 6px;
+    border-top: 1px solid var(--line);
+  }
+  .tabs-list.open { display: flex; }
+  .tab {
+    min-height: 44px; padding: 12px 18px;
+    display: flex; align-items: center;
+    border-bottom-color: transparent;
+    border-inline-start: 3px solid transparent;
+  }
+  .tab.on { border-inline-start-color: var(--c1); background: var(--bg); }
+
+  /* Priority-2 touch target guidance (min 44x44px) - only widened here,
+     since the denser desktop sizing was a deliberate "shop counter"
+     choice (see file header) that narrow screens don't share. */
+  .btn { min-height: 44px; padding: 12px 16px; }
+  .lang { min-height: 44px; padding: 0 14px; display: inline-flex; align-items: center; }
+}
 
 /* ------------------------------------------------------------------ main */
 
