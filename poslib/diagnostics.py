@@ -310,6 +310,34 @@ def _revenue_vs_profit(c: Context) -> list[Finding]:
     return []
 
 
+@rule("negative_period")
+def _negative_period(c: Context) -> list[Finding]:
+    """A recent month where the goods sold cost more than they sold for."""
+    df = c.m.complete_months()
+    if df.empty:
+        return []
+
+    recent = df.tail(3)
+    bad = recent[recent["gross_profit"] < 0]
+    if bad.empty:
+        return []
+
+    worst = bad.sort_values("gross_profit").iloc[0]
+    loss = abs(float(worst["gross_profit"]))
+
+    return [Finding(
+        id="negative_gross_profit_month",
+        kind="failing",
+        severity=c.severity_for(loss),
+        money=loss,
+        page="trend",
+        params={"month": ("month", worst["month"]),
+                "revenue": ("money", worst["revenue"]),
+                "loss": ("money", loss),
+                "count": ("number", len(bad))},
+    )]
+
+
 @rule("silent_margin_erosion")
 def _silent_erosion(c: Context) -> list[Finding]:
     """Cost went up, price did not follow, product still sells."""

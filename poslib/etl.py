@@ -284,6 +284,26 @@ class ETL:
         work_copy = copy_database_readonly(self.source)
         fingerprint = file_fingerprint(work_copy)
 
+        # Size or mtime looked different, but the bytes might not actually
+        # be - Access can rewrite a file with the same content, or a backup
+        # tool can touch its timestamp. Skip the (expensive) parse in that
+        # case. Guarded on tool_version matching too, so a tool update still
+        # gets its one guaranteed re-read even if nothing else changed.
+        stored = self._read_meta() or {}
+        if (stored.get("tool_version") == _tool_version()
+                and stored.get("sha256") == fingerprint["sha256"]):
+            res = RefreshResult(rebuilt=False,
+                                reason="The database's size or timestamp changed, but "
+                                       "the contents are identical - nothing to re-read.")
+            res.source_path = str(self.source)
+            res.source_size = fingerprint["size"]
+            res.source_modified = datetime.datetime.fromtimestamp(
+                self.source.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            res.table_rows = json.loads(stored.get("row_counts", "{}") or "{}")
+            res.finished_at = str(stored.get("parsed_at", ""))
+            res.duration_seconds = time.time() - started
+            return res
+
         result = RefreshResult(rebuilt=True, reason=reason)
         result.source_path = str(self.source)
         result.source_size = fingerprint["size"]

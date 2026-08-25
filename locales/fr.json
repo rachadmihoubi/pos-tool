@@ -556,6 +556,13 @@
       "fix": "À ce rythme, les 12 prochains mois ajoutent {gain} de marge brute.",
       "workings": "{profit} × 4 trimestres = {gain}"
     },
+    "negative_gross_profit_month": {
+      "title": "Un mois a fini en perte sèche : {month}",
+      "statement": "En {month} vous avez vendu {revenue}, mais cela a coûté plus cher que ça de mettre ces produits en rayon - une perte brute de {loss}. Ce n'est pas une marge faible, c'est le mois qui finit dans le rouge avant même de compter le loyer ou les salaires.",
+      "action": "Vérifiez les retours de ce mois-là et les prix passés sous le coût, en commençant par vos meilleures ventes - un coût mal enregistré sur un seul produit à fort volume peut suffire à faire basculer tout un mois en négatif.",
+      "fix": "Ramener ce seul mois à l'équilibre aurait gardé {loss}.",
+      "workings": "{revenue} − coût des marchandises vendues = −{loss}"
+    },
     "receivable_concentration": {
       "title": "Un seul client détient l'essentiel de vos créances",
       "statement": "{name} vous doit {amount}, soit {share} des {total} que l'ensemble de vos clients vous doivent. Son dernier achat remonte à {last_purchase}.",

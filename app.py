@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import datetime
 import logging
+import secrets
 import sqlite3
 import threading
+import time
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -48,6 +50,41 @@ COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 # Rebuilding the cache from two browser tabs at once would be wasteful, so
 # only one refresh runs at a time.
 _refresh_lock = threading.Lock()
+
+# The button can only force a rebuild this often. Without a cooldown, a
+# stuck browser tab (or someone leaning on the button) could force a full
+# copy-and-parse of the database over and over with no benefit.
+_MIN_SECONDS_BETWEEN_MANUAL_REFRESHES = 10
+_last_manual_refresh = 0.0
+
+# /api/status is polled every few seconds by the Today page. It only reads
+# cache metadata, so one ETL is reused instead of building a new one - and
+# doing all the config/path lookups in its constructor - on every poll.
+_status_etl: ETL | None = None
+
+
+# ---------------------------------------------------------------------------
+# Optional password
+# ---------------------------------------------------------------------------
+# Off by default, because the normal setup is this server bound to
+# 127.0.0.1 - reachable only from this one computer, where Windows'
+# own login already gates who gets to it. Setting 'interface.password' in
+# config.yaml only matters if the dashboard is ever bound to something more
+# than localhost (see the loud warning about that in main(), below).
+
+@app.before_request
+def _require_password() -> Response | None:
+    if request.path.startswith("/static/"):
+        return None
+    password = str(get_config().get("interface.password", "") or "")
+    if not password:
+        return None
+    auth = request.authorization
+    if not auth or not secrets.compare_digest(auth.password or "", password):
+        return Response(
+            "A password is set in config.yaml for this dashboard.", 401,
+            {"WWW-Authenticate": 'Basic realm="Shop Analysis"'})
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -875,9 +912,10 @@ def api_status() -> Response:
     the data has changed, so the page can reload itself without the whole
     screen flashing.
     """
-    cfg = get_config()
-    etl = ETL(cfg)
-    info = etl.cache_info()
+    global _status_etl
+    if _status_etl is None:
+        _status_etl = ETL(get_config())
+    info = _status_etl.cache_info()
     return jsonify({
         "parsed_at": info.get("parsed_at", ""),
         "source_modified": info.get("source_modified", ""),
@@ -888,9 +926,20 @@ def api_status() -> Response:
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh() -> Response:
     """Read the POS database again, now, because the button was pressed."""
+    global _last_manual_refresh
+
+    since = time.time() - _last_manual_refresh
+    if since < _MIN_SECONDS_BETWEEN_MANUAL_REFRESHES:
+        return jsonify({
+            "ok": True,
+            "busy": True,
+            "cooldown_seconds": round(_MIN_SECONDS_BETWEEN_MANUAL_REFRESHES - since, 1),
+        })
+
     if not _refresh_lock.acquire(blocking=False):
         return jsonify({"ok": True, "busy": True})
     try:
+        _last_manual_refresh = time.time()
         etl = ETL(get_config())
         result = etl.refresh(force=True)
         return jsonify({
@@ -981,6 +1030,17 @@ def main() -> int:
 
     host = args.host or str(cfg.get("interface.host", "127.0.0.1"))
     port = args.port or int(cfg.get("interface.port", 8777))
+
+    # Fails loudly, not silently: the default (127.0.0.1) is only reachable
+    # from this computer, so there is nothing to protect. Anything else
+    # means the dashboard - and the shop's sales figures - are reachable
+    # from other devices, with no password unless one is set.
+    if host not in ("127.0.0.1", "localhost", "::1") and not cfg.get("interface.password"):
+        log.warning(
+            "The dashboard is bound to %s, not just this computer, but "
+            "'interface.password' is not set in config.yaml. Anyone who can "
+            "reach %s:%s on the network can open it. Set interface.password "
+            "to protect it.", host, host, port)
 
     try:
         ensure_cache_ready()

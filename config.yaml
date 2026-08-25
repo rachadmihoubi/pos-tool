@@ -45,6 +45,14 @@ interface:
   host: "127.0.0.1"
   port: 8777
 
+  # Only matters if 'host' above is ever changed away from 127.0.0.1 (for
+  # example to let a phone on the same wifi open it). Leave blank while
+  # 'host' stays 127.0.0.1 - there is nothing to protect from other devices
+  # if only this computer can reach it. If you do change 'host', set a
+  # password here too, or the dashboard - and the shop's sales figures -
+  # are open to anyone on that network.
+  password: ""
+
   # How often the Today screen quietly refreshes itself, in seconds.
   auto_refresh_seconds: 30
 

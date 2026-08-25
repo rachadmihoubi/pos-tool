@@ -556,6 +556,13 @@
       "fix": "At this rate the next 12 months adds {gain} of gross profit.",
       "workings": "{profit} × 4 quarters = {gain}"
     },
+    "negative_gross_profit_month": {
+      "title": "A month lost money outright: {month}",
+      "statement": "In {month} you sold {revenue}, but it cost more than that to put those goods on the shelf - a gross loss of {loss}. That is not thin margin, that is the month finishing in the red before rent or wages are even counted.",
+      "action": "Check that month's returns and any prices that slipped below cost, starting with your fastest sellers - a wrongly recorded cost on one high-volume product can tip a whole month negative on its own.",
+      "fix": "Getting that month back to break-even alone would have kept {loss}.",
+      "workings": "{revenue} − cost of goods sold = −{loss}"
+    },
     "receivable_concentration": {
       "title": "One customer holds most of what you are owed",
       "statement": "{name} owes you {amount}, which is {share} of the {total} owed to you by everyone. They last bought {last_purchase}.",

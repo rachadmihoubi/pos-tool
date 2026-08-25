@@ -513,27 +513,50 @@ def _urgent_items(m: Metrics, cfg: Config) -> list[dict[str, Any]]:
     return out[:6]
 
 
+# How long a finding is still considered "already reported" after the last
+# day it showed up. Comparing against only the single previous digest would
+# call a finding "new" again the moment it disappears for one day and comes
+# back - a rounding blip in the numbers, not a fresh problem.
+_RECENTLY_SEEN_DAYS = 7
+
+
 def _find_new(cfg: Config, current_ids: list[str]) -> list[str]:
     """
-    Which findings were not in the last digest.
+    Which findings have not been reported in the last week.
 
     Repeating the same six problems every single morning trains somebody to
-    stop reading. What has just appeared is what deserves attention.
+    stop reading. What has just appeared - or come back after a real gap -
+    is what deserves attention.
     """
     path = cfg.digest_dir / STATE_FILE
-    previous: list[str] = []
+    last_seen: dict[str, str] = {}
     try:
         if path.is_file():
-            previous = json.loads(path.read_text(encoding="utf-8")).get("finding_ids", [])
+            last_seen = json.loads(path.read_text(encoding="utf-8")).get("last_seen", {})
     except (OSError, ValueError):
-        previous = []
+        last_seen = {}
 
-    new_ids = [i for i in current_ids if i not in previous]
+    today = datetime.date.today()
+    cutoff = today - datetime.timedelta(days=_RECENTLY_SEEN_DAYS)
+
+    def recently_seen(finding_id: str) -> bool:
+        raw = last_seen.get(finding_id)
+        if not raw:
+            return False
+        try:
+            return datetime.date.fromisoformat(raw) >= cutoff
+        except ValueError:
+            return False
+
+    new_ids = [i for i in current_ids if not recently_seen(i)]
+
+    for finding_id in current_ids:
+        last_seen[finding_id] = today.isoformat()
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
-            "finding_ids": current_ids,
+            "last_seen": last_seen,
             "written_at": datetime.datetime.now().isoformat(timespec="seconds"),
         }, indent=2), encoding="utf-8")
     except OSError:

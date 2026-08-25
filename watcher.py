@@ -143,7 +143,10 @@ class Watcher:
         else:
             log.debug("Nothing new. %s", result.reason)
 
-        if self._remote_push_due():
+        # No point deploying a new snapshot when nothing in the cache
+        # actually changed - that would burn through Cloudflare's quota for
+        # a no-op.
+        if result.rebuilt and self._remote_push_due():
             self._run_remote_push()
 
     # -- the daily digest --------------------------------------------------
