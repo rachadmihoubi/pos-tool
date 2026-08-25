@@ -237,6 +237,16 @@ Cloudflare accounts per store** — accepted elsewhere in this spec as a
 reasonable amount of manual setup at 3 stores. Whether to do this is a
 decision for the owner/rachad, not assumed by this document.
 
+**Decision (2026-08-25):** ship v1 with one Cloudflare account and one
+account-wide `Pages:Edit` token shared by all 3 store projects + the hub.
+Separate accounts per store is a future option only, to revisit if the
+owner ever wants stronger isolation — it needs no code changes now, only
+new Cloudflare accounts and re-pointed tokens later. This does not change
+how the push itself runs: `watcher.py` already fires it automatically on a
+timer with no human interaction (see `_run_remote_push`/
+`_remote_push_due`); this component only changes what credential
+`wrangler` authenticates with.
+
 This credential swap is a prerequisite for shipping to any customer PC
 regardless of how many stores are involved — flagged as its own component
 because it's a real deviation from how the code works today, not a detail
