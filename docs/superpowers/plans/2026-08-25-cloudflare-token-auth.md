@@ -293,9 +293,13 @@ This step needs the Cloudflare account login (`rachadm23@gmail.com`), which only
 
 Follow the 7 steps written into `.env.example` in Task 1 (dash.cloudflare.com/profile/api-tokens -> Create Custom Token -> Account -> Cloudflare Pages -> Edit). Paste the resulting token into this dev PC's `.env` as `CLOUDFLARE_API_TOKEN=<token>`.
 
-- [ ] **Step 2: Verify wrangler actually uses it**
+- [ ] **Step 2: Verify wrangler actually uses it (non-destructive — do not run `wrangler logout`)**
 
-Trigger a push (either wait for the watcher's normal cycle, or run the export + `push_remote` manually in a Python shell) and confirm it succeeds. Check `wrangler`'s own output/behavior for evidence it used the token rather than the OAuth session — e.g., temporarily run `wrangler logout` first (removing the OAuth session entirely) and confirm the push still succeeds purely off `CLOUDFLARE_API_TOKEN`. If it fails once logged out, the token isn't actually being picked up — stop and debug before trusting this is done.
+The live OAuth session is the working fallback for the remote push that already runs automatically every 90 seconds — do not remove it to test this; if the new token turns out to be wrong, that leaves the push broken until someone re-logs in.
+
+Instead, prove precedence without touching the OAuth session: temporarily set `CLOUDFLARE_API_TOKEN` in `.env` to an obviously invalid value (e.g. `CLOUDFLARE_API_TOKEN=invalid-test-token`) and trigger a push (`python -c "from poslib.config import get_config; from poslib import remote; print(remote.push_remote(get_config()))"`). Expect it to **fail** (`False`, wrangler reports an auth error) — if it still succeeds, wrangler is silently ignoring the bad token and falling back to OAuth, meaning the env var isn't actually taking effect and needs debugging before going further.
+
+Once the deliberately-invalid token demonstrably breaks the push, replace it in `.env` with the real token from Step 1 and re-run the same command — confirm it now returns `True`. This proves the token is both being read and being preferred over OAuth, without ever revoking the working OAuth session.
 
 - [ ] **Step 3: Verify the token's actual scope**
 
