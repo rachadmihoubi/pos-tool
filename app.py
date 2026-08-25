@@ -35,13 +35,15 @@ from poslib.config import (REMOTE_TICKET_WINDOW_DAYS, ConfigError, get_config,
                            setup_logging)
 from poslib.diagnostics import Diagnostics
 from poslib.etl import ETL, ETLError
-from poslib.photos import get_item_photo
 from poslib.i18n import available_languages, get_translator, normalise
 from poslib.metrics import Metrics
+from poslib.paths import app_root
 
 log = logging.getLogger(__name__)
 
-app = Flask(__name__, template_folder="templates", static_folder="static")
+app = Flask(__name__,
+            template_folder=str(app_root() / "templates"),
+            static_folder=str(app_root() / "static"))
 
 # The chosen language is remembered in a cookie for this long.
 LANGUAGE_COOKIE = "pos_lang"

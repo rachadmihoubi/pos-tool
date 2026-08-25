@@ -28,9 +28,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from poslib.paths import app_root
+
 log = logging.getLogger(__name__)
 
-LOCALES_DIR = Path(__file__).resolve().parent.parent / "locales"
+LOCALES_DIR = app_root() / "locales"
 
 # The languages the tool ships with. English is the fallback for anything
 # that is somehow missing.

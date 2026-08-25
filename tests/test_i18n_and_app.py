@@ -13,6 +13,7 @@ import re
 
 import pytest
 
+from poslib import paths
 from poslib.diagnostics import Diagnostics
 from poslib.i18n import (LANGUAGES, LOCALES_DIR, all_keys, check_locales,
                          get_translator, normalise)
@@ -484,3 +485,8 @@ class TestChannels:
             assert f"import {banned}" not in source
             assert f"from {banned}" not in source
         assert "graph.facebook.com" in source
+
+
+def test_locales_dir_resolves_from_app_root():
+    from poslib import i18n, paths
+    assert i18n.LOCALES_DIR == paths.app_root() / "locales"
