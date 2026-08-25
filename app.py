@@ -38,6 +38,7 @@ from poslib.etl import ETL, ETLError
 from poslib.i18n import available_languages, get_translator, normalise
 from poslib.metrics import Metrics
 from poslib.paths import app_root
+from poslib.photos import get_item_photo
 
 log = logging.getLogger(__name__)
 
