@@ -1,0 +1,4 @@
+# requirements-build.txt
+# Only needed to build the Windows installer - never installed on a
+# customer's machine, and never required to run the tool from source.
+pyinstaller==6.11.1

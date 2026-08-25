@@ -71,3 +71,9 @@ node_modules/
 
 # Local analysis output from the graphify skill - not project source.
 graphify-out/
+
+# PyInstaller build output (packaging/pos-tool.spec builds these). Both are
+# regenerated from source on every build; only the spec file itself and
+# requirements-build.txt are committed, never the built exe/bundle.
+dist/
+build/
