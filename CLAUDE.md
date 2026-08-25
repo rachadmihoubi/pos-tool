@@ -246,6 +246,40 @@ Sync mechanism: the `SessionStart` hook in `.claude/settings.json` (see that
 file). Sync exclusions and why: see `.gitignore`'s own comments. This file
 (`CLAUDE.md`) plus the git history are the actual continuity mechanism.
 
+## Customer distribution — design approved, not yet built (2026-08-25)
+
+The tool is about to go from "single dev-PC project" to "installed on a
+real customer's till PCs." First customer: one owner with **3 separate
+stores**, each its own PC and its own independent `.dblx` database. Full
+design (installer packaging, silent auto-updates via GitHub Releases,
+replacing the `wrangler`/Node.js Cloudflare push with a scoped REST API
+token, and a shared "hub" page for switching between stores plus a
+side-by-side cross-store stock search) is written up in
+`docs/superpowers/specs/2026-08-25-installer-updates-multistore-design.md`
+— read that file before touching packaging, `poslib/remote.py`, or
+anything related to updates or multi-store hosting.
+
+Key decisions worth knowing without re-reading the whole spec:
+- **This dev PC is not one of the 3 customer stores** — it stays on the
+  existing git-based setup unchanged. The new installer is only for
+  customer PCs.
+- **No merged/summed numbers across the 3 stores** — the owner explicitly
+  wants each store's performance reviewed separately; the hub is a shared
+  front door, not a data-merging layer.
+- **No auto-matching for cross-store stock** — product codes/names aren't
+  guaranteed consistent across the 3 independent R.Lynx databases
+  (confirmed with the owner, not assumed). Auto-matching risks a wrong
+  number feeding a real buying decision — same class of mistake as
+  discovery #11 below. V1 shows matching rows side by side and lets the
+  owner's own eyes do the matching; a real combined total would need a
+  manual product-linking step, not built.
+- The spec's "Suggested build order" section sequences this into 5
+  independently-testable steps, starting with the Cloudflare REST API
+  swap (testable on this dev PC, no customer PC needed yet). Not started
+  as of this writing — next session should invoke the writing-plans skill
+  against the spec to turn it into an actual implementation plan, one step
+  at a time, rather than re-deriving the design from scratch.
+
 ## What's left (optional, not blocking)
 
 - **`.env` is empty on every machine** (gitignored, by design). Email and
