@@ -15,16 +15,21 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-# The folder this project lives in (the parent of poslib/).
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+from poslib import paths
 
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
-DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
+# Kept for existing importers (export_static.py uses PROJECT_ROOT to find
+# bundled read-only assets like static/style.css) - now backed by
+# poslib.paths.app_root() so it resolves correctly in a frozen build too.
+PROJECT_ROOT = paths.app_root()
+
+DEFAULT_CONFIG_PATH = paths.user_data_dir() / "config.yaml"
+DEFAULT_ENV_PATH = paths.user_data_dir() / ".env"
 
 # How many days back the remote static export renders ticket drill-downs
 # (see export_static.py's module docstring). Shared here, not just defined
@@ -80,8 +85,21 @@ class Config:
 
     def __init__(self, config_path: str | Path | None = None,
                  env_path: str | Path | None = None):
-        self.config_path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
-        self.env_path = Path(env_path) if env_path else DEFAULT_ENV_PATH
+        # Computed fresh here (not read from the DEFAULT_CONFIG_PATH/
+        # DEFAULT_ENV_PATH module constants) so construction reflects
+        # paths.user_data_dir() at call time. Behavior-identical to reading
+        # the module constants in every real run - frozen-ness never
+        # changes mid-process, so app_root()/user_data_dir() return the
+        # same thing at import time and at Config() time. The difference
+        # only shows up under pytest, where tests monkeypatch
+        # poslib.paths.user_data_dir() per-test after config.py has already
+        # been imported once for the whole session; reading it fresh here
+        # is what lets that monkeypatching actually take effect.
+        self.config_path = Path(config_path) if config_path else paths.user_data_dir() / "config.yaml"
+        self.env_path = Path(env_path) if env_path else paths.user_data_dir() / ".env"
+
+        if config_path is None and env_path is None:
+            self._bootstrap_if_frozen()
 
         if not self.config_path.is_file():
             raise ConfigError(
@@ -104,6 +122,29 @@ class Config:
         self._env: dict[str, str] = _load_env(self.env_path)
 
         self._validate()
+
+    def _bootstrap_if_frozen(self) -> None:
+        """
+        First run of a packaged build: copy the bundled config template and
+        .env.example into the writable user-data folder if nothing is there
+        yet. Never touches an existing config.yaml/.env - a customer's real
+        settings are never overwritten by an update.
+        """
+        if not paths.is_frozen():
+            return
+
+        data_dir = paths.user_data_dir()
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        if not self.config_path.is_file():
+            template = paths.app_root() / "config.template.yaml"
+            if template.is_file():
+                shutil.copy2(template, self.config_path)
+
+        if not self.env_path.is_file():
+            example = paths.app_root() / ".env.example"
+            if example.is_file():
+                shutil.copy2(example, self.env_path)
 
     # -- reading values ----------------------------------------------------
 
@@ -141,13 +182,15 @@ class Config:
     def path(self, dotted: str, default: str = "") -> Path:
         """
         Read a setting that is a file or folder path and turn it into a full
-        path. Relative paths are taken as relative to the project folder, so
-        the tool works the same however it is started.
+        path. Relative paths are taken as relative to the writable user-data
+        folder, so the tool works the same however it is started, and every
+        piece of data it writes lands somewhere it's actually allowed to
+        write in a packaged install.
         """
         raw = str(self.get(dotted, default) or default)
         p = Path(raw)
         if not p.is_absolute():
-            p = PROJECT_ROOT / p
+            p = paths.user_data_dir() / p
         return p
 
     @property
