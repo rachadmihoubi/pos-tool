@@ -298,7 +298,8 @@ backup:
 # -----------------------------------------------------------------------------
 #  REMOTE VIEWING - a lean, read-only snapshot pushed to Cloudflare Pages so
 #  you can check the shop from your phone. Off by default - turning it on
-#  needs a one-time Cloudflare account and `wrangler login` (see SETUP.md).
+#  needs a one-time Cloudflare account and a Pages-scoped API token (see
+#  .env.example and .claude/skills/cloudflare-remote-debug/SKILL.md).
 #  Only summaries leave this computer; the real database never does.
 # -----------------------------------------------------------------------------
 remote:

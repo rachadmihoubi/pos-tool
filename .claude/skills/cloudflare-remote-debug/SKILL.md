@@ -14,8 +14,15 @@ description: Cloudflare Pages/Access setup notes and gotchas for pos-tool's remo
   that crash the default-codepage decode on Windows otherwise (this crashes
   a background reader thread, not the main call, so it doesn't fail the
   push, but it does spam a traceback into the logs).
-- Authenticated via `wrangler login` (OAuth, browser-based — cannot be
-  scripted; the account is `rachadm23@gmail.com`).
+- Authenticated via a `CLOUDFLARE_API_TOKEN` in `.env`, scoped to the
+  `Pages:Edit` permission only (created at
+  https://dash.cloudflare.com/profile/api-tokens — see `.env.example` for
+  the exact steps). `poslib/remote.py:push_remote()` sets this on the
+  `wrangler` subprocess's environment when the secret is configured; it
+  falls back to a `wrangler login` OAuth session otherwise. Cloudflare does
+  not support scoping a Pages token to a single project — this token can
+  edit every Pages project on the account (`rachadm23@gmail.com`), not
+  DNS/Workers/zones/billing.
 - Cloudflare Pages project `promakeupmihoubipos` created via
   `wrangler pages project create`.
 - Cloudflare Access application configured through the Zero Trust dashboard

@@ -11,6 +11,7 @@ export in poslib/present.py's payload does.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -72,6 +73,18 @@ def push_remote(cfg: Config) -> bool:
 
     command = [wrangler, "pages", "deploy", str(export_dir),
               "--project-name", project, "--commit-dirty=true"]
+
+    # wrangler reads CLOUDFLARE_API_TOKEN from the environment and prefers
+    # it over a stored `wrangler login` OAuth session when present. Only
+    # override it when a token is actually configured - leaving it unset
+    # falls back to whatever OAuth login already exists, so this stays
+    # backward compatible until the scoped token is created and dropped
+    # into .env (see .claude/skills/cloudflare-remote-debug/SKILL.md).
+    env = os.environ.copy()
+    token = cfg.secret("CLOUDFLARE_API_TOKEN")
+    if token:
+        env["CLOUDFLARE_API_TOKEN"] = token
+
     try:
         # wrangler prints UTF-8 (including emoji) regardless of the
         # Windows console's own codepage - decoding with that codepage
@@ -83,7 +96,7 @@ def push_remote(cfg: Config) -> bool:
             command, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             timeout=_WRANGLER_TIMEOUT_SECONDS, check=False,
-            creationflags=_NO_WINDOW)
+            creationflags=_NO_WINDOW, env=env)
     except (subprocess.TimeoutExpired, OSError) as exc:
         log.warning("Could not run wrangler: %s", exc)
         return False

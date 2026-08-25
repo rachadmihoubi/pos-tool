@@ -15,9 +15,10 @@ from poslib import remote
 
 
 class FakeConfig:
-    def __init__(self, project="", export_dir_exists=True):
+    def __init__(self, project="", export_dir_exists=True, cloudflare_api_token=""):
         self._project = project
         self._export_dir_exists = export_dir_exists
+        self._cloudflare_api_token = cloudflare_api_token
 
     def get(self, key, default=None):
         if key == "remote.cloudflare_project_name":
@@ -37,6 +38,11 @@ class FakeConfig:
                     return "remote-site"
 
             return FakeDir(self._export_dir_exists)
+        return default
+
+    def secret(self, name, default=""):
+        if name == "CLOUDFLARE_API_TOKEN":
+            return self._cloudflare_api_token
         return default
 
 
@@ -120,6 +126,54 @@ class TestPushRemoteSubprocess:
 
         monkeypatch.setattr(remote.subprocess, "run", fake_run)
         assert remote.push_remote(cfg) is False
+
+
+class TestPushRemoteCredential:
+
+    def test_passes_cloudflare_api_token_to_subprocess_env_when_configured(self, monkeypatch):
+        cfg = FakeConfig(project="my-shop", export_dir_exists=True,
+                          cloudflare_api_token="fake-scoped-token")
+        monkeypatch.setattr(remote, "_wrangler_path", lambda: "C:/fake/wrangler.CMD")
+
+        seen_kwargs = {}
+
+        def fake_run(command, **kwargs):
+            seen_kwargs.update(kwargs)
+            return subprocess.CompletedProcess(command, returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(remote.subprocess, "run", fake_run)
+        assert remote.push_remote(cfg) is True
+        assert seen_kwargs["env"]["CLOUDFLARE_API_TOKEN"] == "fake-scoped-token"
+
+    def test_does_not_set_cloudflare_api_token_when_not_configured(self, monkeypatch):
+        cfg = FakeConfig(project="my-shop", export_dir_exists=True, cloudflare_api_token="")
+        monkeypatch.setattr(remote, "_wrangler_path", lambda: "C:/fake/wrangler.CMD")
+
+        seen_kwargs = {}
+
+        def fake_run(command, **kwargs):
+            seen_kwargs.update(kwargs)
+            return subprocess.CompletedProcess(command, returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(remote.subprocess, "run", fake_run)
+        assert remote.push_remote(cfg) is True
+        assert "CLOUDFLARE_API_TOKEN" not in seen_kwargs["env"]
+
+    def test_still_passes_rest_of_the_process_environment(self, monkeypatch):
+        cfg = FakeConfig(project="my-shop", export_dir_exists=True,
+                          cloudflare_api_token="fake-token")
+        monkeypatch.setattr(remote, "_wrangler_path", lambda: "C:/fake/wrangler.CMD")
+        monkeypatch.setenv("PATH_MARKER_FOR_TEST", "still-here")
+
+        seen_kwargs = {}
+
+        def fake_run(command, **kwargs):
+            seen_kwargs.update(kwargs)
+            return subprocess.CompletedProcess(command, returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(remote.subprocess, "run", fake_run)
+        assert remote.push_remote(cfg) is True
+        assert seen_kwargs["env"].get("PATH_MARKER_FOR_TEST") == "still-here"
 
 
 class TestWranglerAvailable:
