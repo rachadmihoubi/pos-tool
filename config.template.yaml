@@ -1,0 +1,340 @@
+# =============================================================================
+#  POS Analysis Tool - settings
+# =============================================================================
+#  This is the one file you edit to change how the tool behaves.
+#  It is plain text. Change a number, save, and restart the tool.
+#
+#  PASSWORDS DO NOT GO IN THIS FILE. They go in the file called ".env"
+#  next to this one. See .env.example.
+# =============================================================================
+
+database:
+  # Where your POS database lives.
+  #
+  # IMPORTANT: point this at the file your POS software actually writes to.
+  # The tool NEVER writes to this file - it copies it somewhere temporary
+  # first and reads the copy. Your live data cannot be touched.
+  path: "C:/CHANGE-ME/point-this-at-your-database.dblx"
+
+  # Where the fast local copy of your data is kept. You can delete this file
+  # any time; the tool simply rebuilds it.
+  cache: "cache.db"
+
+
+business:
+  # Shown on screen and in reports.
+  currency: "DZD"
+  currency_symbol: "DA"
+  name: "My Shop"
+
+  # Your working week. Used for the "same weekday average" comparison on the
+  # Today screen. 0 = Monday ... 6 = Sunday.
+  closed_weekdays: []
+
+
+interface:
+  # Language the dashboard opens in: en (English), fr (French), ar (Arabic).
+  # Each person's choice is remembered in their browser after they switch.
+  default_language: "fr"
+
+  # Which screen the tool opens on.
+  default_page: "today"
+
+  # Web address the dashboard is served on. Keep it on 127.0.0.1 so it is
+  # reachable only from this computer and never from the internet.
+  host: "127.0.0.1"
+  port: 8777
+
+  # Only matters if 'host' above is ever changed away from 127.0.0.1 (for
+  # example to let a phone on the same wifi open it). Leave blank while
+  # 'host' stays 127.0.0.1 - there is nothing to protect from other devices
+  # if only this computer can reach it. If you do change 'host', set a
+  # password here too, or the dashboard - and the shop's sales figures -
+  # are open to anyone on that network.
+  password: ""
+
+  # How often the Today screen quietly refreshes itself, in seconds.
+  auto_refresh_seconds: 30
+
+
+# -----------------------------------------------------------------------------
+#  THRESHOLDS - the numbers that decide what counts as a problem.
+#  Every one of these is used by the diagnostics engine. Nothing is hidden
+#  in the code.
+# -----------------------------------------------------------------------------
+thresholds:
+
+  inventory:
+    # A product with stock that has not sold for this many days is "dead
+    # stock" - money sitting on a shelf.
+    dead_stock_days: 120
+
+    # A product is "slow" past this many days without a sale, but not yet dead.
+    slow_stock_days: 60
+
+    # How far back we look to work out how fast something sells.
+    run_rate_days: 90
+
+    # Less than this many months of stock left = at risk of running out.
+    stockout_cover_months: 0.75
+
+    # More than this many months of stock = too much money tied up.
+    overstock_cover_months: 12.0
+
+    # Warn when dead stock is more than this share of total stock value.
+    dead_stock_share_warn: 0.15      # 15%
+
+  customers:
+    # No purchase for this many days = the customer has lapsed.
+    lapsed_days: 90
+
+    # A customer needs at least this many past visits before "lapsed" means
+    # anything - a single one-off buyer is not a lost regular.
+    lapsed_min_visits: 2
+
+    # A customer who owes money and has not bought for this long is a
+    # collection risk.
+    collection_risk_days: 60
+
+    # Warn when one customer holds more than this share of all money owed.
+    receivable_concentration_warn: 0.25    # 25%
+
+    # Warn when the top 10 customers are more than this share of revenue.
+    top10_revenue_concentration_warn: 0.50 # 50%
+
+    # A customer counts as "high revenue" for the low-margin rule once they
+    # pass this much in the trailing year.
+    high_revenue_floor: 500000       # DZD
+
+    # Serving a big customer below this margin means working for nothing.
+    low_margin_warn: 0.04            # 4%
+
+    # Credit-risk tier for customers who currently owe money (shown on the
+    # customer profile and the receivables report). A balance at or above
+    # this is "big enough to matter on its own", regardless of how recently
+    # they paid or bought.
+    credit_risk_balance_floor: 100000     # DZD
+
+    # Days since their last payment or last purchase (whichever is worse)
+    # before a debtor moves from low to medium risk, and medium to high.
+    credit_risk_medium_days: 30
+    credit_risk_high_days: 90
+
+  margin:
+    # A healthy gross margin for wholesale cosmetics. Below this we flag it.
+    healthy_gross_margin: 0.10       # 10%
+
+    # Flag when margin has fallen for this many months in a row.
+    declining_months: 3
+
+    # How much of a fall counts, so normal wobble is ignored.
+    declining_min_drop: 0.005        # half a percentage point
+
+    # "Revenue up but profit flat" rule: revenue must grow at least this much
+    # while gross profit grows less than the second number.
+    revenue_growth_floor: 0.05       # revenue +5%
+    profit_growth_ceiling: 0.0       # but profit 0% or worse
+
+    # A product priced fine "in isolation" can still be an outlier next to
+    # its own brand/category. Flag it once its margin trails its family's
+    # average by at least this many percentage points.
+    family_benchmark_pp: 15
+
+  working_capital:
+    # (stock value + money owed) divided by last year's gross profit.
+    # Above this, too much cash is locked up for what the business earns.
+    ratio_warn: 3.0
+
+  pricing:
+    # Flag a product when its cost has risen by this much but its selling
+    # price has not moved.
+    cost_creep_warn: 0.05            # cost up 5%+
+
+
+# -----------------------------------------------------------------------------
+#  DATA RULES - how the tool reads your POS data.
+#  These reflect real quirks in how the POS records things. Changing them
+#  changes what the numbers mean, so leave them alone unless you know why.
+# -----------------------------------------------------------------------------
+data_rules:
+  # Sale lines with no real product attached (ItemID 0 or less) are not sales.
+  # They are almost all customers paying down their account. Counted as
+  # "collections", never as revenue.
+  exclude_non_item_lines: true
+
+  # The customer record used for anonymous walk-in trade. Their money counts
+  # as revenue, but they are not treated as a real named customer.
+  walkin_customer_id: 1
+
+  # The catch-all product used for one-off manual lines with a typed-in price.
+  # These have no cost recorded, so their margin is unknowable.
+  misc_item_id: 1
+
+
+# -----------------------------------------------------------------------------
+#  THE CATALOGUE - display defaults, not diagnostics thresholds.
+# -----------------------------------------------------------------------------
+catalog:
+  # The "new arrivals" panel on the Products page shows items added to the
+  # catalogue in the last this-many days.
+  new_arrivals_days: 7
+
+  # Where item photos are cached after being read from the source database.
+  # Safe to delete any time - it rebuilds itself as products are viewed.
+  photo_cache_dir: "static/photo-cache"
+
+  # Data typed in by the owner (competitor prices, and anything similar
+  # added later) - never overwritten by an ETL cache rebuild, unlike
+  # everything else the tool reads. Back this up; it cannot be rebuilt from
+  # the POS database.
+  owner_data_db: "data/owner.db"
+
+
+# -----------------------------------------------------------------------------
+#  THE DAILY DIGEST - the one-page summary of yesterday.
+# -----------------------------------------------------------------------------
+digest:
+  # Time of day to send it, 24-hour clock, this computer's local time.
+  hour: 20
+  minute: 0
+
+  # Language the digest is written in. "follow_interface" uses the setting
+  # under `interface` above; or set it explicitly to en / fr / ar.
+  language: "follow_interface"
+
+  # Where the saved copies go.
+  output_dir: "digests"
+
+  # How many days of saved digests to keep.
+  keep_days: 400
+
+  channels:
+    # ---------------------------------------------------------------------
+    # FILE - always on. Writes an HTML page and a PDF to the folder above.
+    # This one cannot be switched off; it is the fallback that always works
+    # even when the internet is down.
+    # ---------------------------------------------------------------------
+    file:
+      enabled: true
+      write_pdf: true
+
+    # ---------------------------------------------------------------------
+    # EMAIL - sends the digest as an email with the Excel report attached.
+    # Fill in the addresses here; the PASSWORD goes in the .env file.
+    # For Gmail you need an "app password", not your normal password.
+    # See .env.example for step-by-step instructions.
+    # ---------------------------------------------------------------------
+    email:
+      enabled: false
+      smtp_host: "smtp.gmail.com"
+      smtp_port: 587
+      use_tls: true
+      from_address: ""
+      to_addresses: []
+      attach_excel: true
+      retry_attempts: 3
+      retry_delay_seconds: 30
+
+    # ---------------------------------------------------------------------
+    # TELEGRAM - free, no approval needed, about five minutes to set up.
+    # Message @BotFather on Telegram, send /newbot, and it gives you a token.
+    # Put the token in .env. See the README for the two-step setup.
+    # ---------------------------------------------------------------------
+    telegram:
+      enabled: false
+      # Send the digest as a readable message, and optionally the PDF too.
+      send_pdf: true
+      retry_attempts: 3
+      retry_delay_seconds: 15
+
+    # ---------------------------------------------------------------------
+    # WHATSAPP - official Meta WhatsApp Business Cloud API only.
+    #
+    # READ THIS BEFORE TURNING IT ON. It is not free and not instant:
+    #   - you need a Meta Business account and a verified business
+    #   - you need a phone number dedicated to the API (it can no longer be
+    #     used in the normal WhatsApp app)
+    #   - because the digest is a message YOU start, it must use a message
+    #     template that Meta approves first, which takes a few days
+    #   - Meta charges per conversation
+    #
+    # Any library that logs into WhatsApp Web instead is against WhatsApp's
+    # terms and gets numbers banned. This tool does not contain one.
+    #
+    # Telegram above does the same job, free, today. Use that while the
+    # WhatsApp approval is in progress.
+    # ---------------------------------------------------------------------
+    whatsapp:
+      enabled: false
+      api_version: "v21.0"
+      phone_number_id: ""
+      to_numbers: []
+      # The template you registered with Meta, and its language code.
+      template_name: "daily_digest"
+      template_language: "ar"
+      retry_attempts: 2
+      retry_delay_seconds: 30
+
+
+# -----------------------------------------------------------------------------
+#  DAILY BACKUP - cheap insurance against this computer's disk failing.
+#  Copies the source database, the local cache and your competitor-price
+#  log into backups/YYYY-MM-DD/ once a day, and deletes old copies.
+# -----------------------------------------------------------------------------
+backup:
+  enabled: true
+
+  # Time of day to run it, 24-hour clock, this computer's local time.
+  hour: 3
+  minute: 0
+
+  # Where the dated backup folders go.
+  output_dir: "backups"
+
+  # How many days of backups to keep.
+  keep_days: 30
+
+
+# -----------------------------------------------------------------------------
+#  REMOTE VIEWING - a lean, read-only snapshot pushed to Cloudflare Pages so
+#  you can check the shop from your phone. Off by default - turning it on
+#  needs a one-time Cloudflare account and a Pages-scoped API token (see
+#  .env.example and .claude/skills/cloudflare-remote-debug/SKILL.md).
+#  Only summaries leave this computer; the real database never does.
+# -----------------------------------------------------------------------------
+remote:
+  enabled: false
+
+  # The Cloudflare Pages project name you created (see SETUP.md).
+  cloudflare_project_name: ""
+
+  # Don't push more often than this, even if the cache refreshes faster -
+  # keeps uploads small and infrequent on a home connection.
+  push_interval_seconds: 90
+
+  # Where the exported static files are written before being uploaded.
+  export_dir: "remote-site"
+
+
+# -----------------------------------------------------------------------------
+#  THE WATCHER - notices when the POS saves new sales and refreshes the tool.
+# -----------------------------------------------------------------------------
+watcher:
+  enabled: true
+
+  # After the file changes, wait until it has stopped changing for this many
+  # seconds before reading it. The POS may still be part-way through writing.
+  quiet_seconds: 5
+
+  # Never rebuild more often than this, so a busy afternoon does not cause
+  # constant rebuilding.
+  min_seconds_between_rebuilds: 60
+
+  # Safety net: rebuild at least this often even if no change was noticed.
+  poll_seconds: 120
+
+
+logging:
+  level: "INFO"
+  file: "logs/pos-tool.log"
+  keep_days: 30
