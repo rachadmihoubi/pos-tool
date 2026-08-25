@@ -45,12 +45,15 @@ change to how this machine works.
   automatically, with a manual fallback.
 - A silent, automatic update mechanism — checked once daily, applied with
   no customer interaction, no dialogs.
-- Replacing the current Cloudflare push mechanism (`wrangler`/Node.js, a
-  broad account credential) with a direct Cloudflare Pages API call from
-  Python, using a narrowly-scoped per-project token — needed regardless of
-  the store count, because shipping a broad Cloudflare credential to a
-  customer's PC is the actual thing that made this design need a rethink,
-  not just "how do we bundle Node.js."
+- Replacing wrangler's broad account-wide OAuth credential (full access to
+  every Cloudflare product: Pages, Workers, DNS, zones, billing) with a
+  Cloudflare API token restricted to the `Pages:Edit` permission only —
+  needed regardless of store count, because shipping wrangler's current
+  OAuth credential to a customer PC is the actual thing that made this
+  design need a rethink. **Note:** Cloudflare does not support scoping a
+  Pages:Edit token to a single project — the token is account-wide across
+  all Pages projects. See Component 4 for the corrected claim and the
+  resulting decision.
 - One Cloudflare Pages project per store (same Access-gated-by-owner-email
   pattern the tool already uses today for the dev PC), plus one small
   shared "hub" project: links to each store's dashboard, and a cross-store
@@ -177,26 +180,67 @@ The repo is already public on GitHub (verified: `gh repo view` →
 in the shipped app — this was chosen specifically to avoid shipping any
 GitHub token to a customer PC.
 
-## Component 4 — Cloudflare push without Node.js or a broad credential
+## Component 4 — Narrowing the Cloudflare credential shipped to a store PC
 
 Today, the remote push (`poslib/remote.py`) shells out to `wrangler`, a
-Node.js CLI, authenticated with a Cloudflare credential capable of managing
-the whole account. Shipping that to a customer PC means shipping a
-master key onto a machine outside rachad's control — if that PC is ever
-compromised, the blast radius is not "that one store's public dashboard,"
-it's the whole Cloudflare account, every store, every project.
+Node.js CLI, authenticated via `wrangler login` — an OAuth credential
+capable of managing the *entire* Cloudflare account: every Pages project,
+Workers, DNS, zones, billing. Shipping that to a customer PC means shipping
+a master key onto a machine outside rachad's control.
 
-Replacement: call Cloudflare's Pages **direct-upload REST API** over HTTPS
-using Python's `requests` (no Node.js, no `wrangler`, one less bundled
-dependency), authenticated with an API token scoped to **Pages:Edit on one
-project only**. Each store's installed app carries only the token for its
-own project. A compromised store PC can, at worst, deface that one store's
-own public dashboard — nothing else.
+**Correction (2026-08-25, after implementation research):** this section
+originally proposed replacing wrangler with a direct Python `requests` call
+to Cloudflare's Pages direct-upload REST API, authenticated with a token
+"scoped to Pages:Edit on one project only," claiming a compromised store PC
+could at worst deface that one store's own dashboard. Both parts turned out
+to be wrong:
 
-This is a prerequisite for shipping to any customer PC regardless of how
-many stores are involved — flagged as its own component because it's a
-real deviation from how the code works today, not a detail of the
-multi-store piece.
+1. **Cloudflare Pages API tokens cannot be scoped to a single project.**
+   Confirmed against Cloudflare's own permission-groups documentation: the
+   `Pages:Edit` permission is account-wide — it grants edit access to every
+   Pages project in the account, with no per-project resource restriction
+   available. So even the REST rewrite would not have delivered "blast
+   radius limited to one store" — a token capable of pushing to Store A's
+   dashboard is equally capable of pushing to Store B's, Store C's, and the
+   shared hub's.
+2. **The Pages direct-upload REST flow is not officially documented.**
+   Cloudflare's own docs (`developers.cloudflare.com/pages/get-started/
+   direct-upload/`) state there are exactly two ways to do a direct upload:
+   Wrangler, or drag-and-drop in the dashboard. The REST endpoints wrangler
+   uses internally are unofficial and reverse-engineered; two third-party
+   writeups found describe conflicting file-hashing schemes (MD5 vs.
+   BLAKE3) and note that malformed requests can return HTTP 200 while
+   silently uploading nothing, serving stale or 404 content. (Cloudflare
+   Workers has a separate, officially documented direct-upload REST API —
+   `workers/static-assets/direct-upload/` — but that's a different product
+   from Pages and doesn't apply to what this tool deploys today.)
+
+**Revised plan:** keep `wrangler`, but stop authenticating it with the
+account-owner's OAuth login. Wrangler reads a `CLOUDFLARE_API_TOKEN`
+environment variable directly, so `poslib/remote.py` can set that (sourced
+via `Config.secret()`, same as every other credential in this codebase)
+from a token restricted to the `Pages:Edit` permission group only — no DNS,
+no Workers, no zones, no billing access. This is a genuine, real blast
+radius reduction (whole account → Pages product only) even though it isn't
+the "one project only" isolation originally claimed. It requires no change
+to the upload mechanism, no new dependency, and no reverse-engineered API —
+only a credential swap in how `wrangler` is invoked.
+
+Node.js remains a bundled dependency of the installer as a result of
+keeping wrangler. Revisit only if Cloudflare later ships per-project Pages
+token scoping, or if the installer's Node.js bundle size/reliability
+becomes a real problem in practice — not assumed up front.
+
+True per-store isolation (a compromised Store A PC cannot touch Store B's
+or the hub's Cloudflare project) is only achievable today with **separate
+Cloudflare accounts per store** — accepted elsewhere in this spec as a
+reasonable amount of manual setup at 3 stores. Whether to do this is a
+decision for the owner/rachad, not assumed by this document.
+
+This credential swap is a prerequisite for shipping to any customer PC
+regardless of how many stores are involved — flagged as its own component
+because it's a real deviation from how the code works today, not a detail
+of the multi-store piece.
 
 ## Component 5 — The hub: store switcher + cross-store stock search
 
@@ -228,9 +272,10 @@ only). Two things live there:
 
 Each piece below is independently testable before the next depends on it:
 
-1. **Cloudflare REST push** — replace `wrangler` with a direct API call.
-   Testable entirely on this dev PC against the existing single Cloudflare
-   project; no customer or new store needed yet.
+1. **Cloudflare credential swap** — keep `wrangler`, switch it from
+   `wrangler login` OAuth to a scoped `CLOUDFLARE_API_TOKEN`
+   (`Pages:Edit` only). Testable entirely on this dev PC against the
+   existing single Cloudflare project; no customer or new store needed yet.
 2. **Packaging** — PyInstaller `--onedir` + Inno Setup, tested by
    installing on this dev PC (or a clean VM) as if it were a customer.
 3. **DB auto-detect setup screen** — added to the Inno Setup wizard.
@@ -251,10 +296,15 @@ Each piece below is independently testable before the next depends on it:
   already-installed instance detects it, downloads, silently installs, and
   restarts cleanly — including the case where the machine is mid-`rebuild()`
   when the check fires.
-- Cloudflare REST push: confirm a scoped Pages:Edit token can successfully
-  deploy, and confirm it **cannot** do anything else (e.g. list/modify other
-  Cloudflare projects) — this is a security property, worth actually
-  checking, not just assuming from the token's stated scope.
+- Cloudflare credential swap: confirm `wrangler` successfully deploys when
+  authenticated via `CLOUDFLARE_API_TOKEN` (Pages:Edit only) instead of
+  `wrangler login`, and confirm the token **cannot** do anything else
+  (e.g. manage DNS, Workers, or other zones) — this is a security property,
+  worth actually checking, not just assuming from the token's stated
+  permission group. Also confirm, and document plainly for the owner, that
+  this token still allows editing *every* Pages project in the account
+  (not just one) — true per-project isolation is out of reach without
+  separate Cloudflare accounts.
 - Hub stock search: confirm it degrades sanely when one store's
   `stock.json` hasn't pushed yet (stale or missing) — should show what it
   has, clearly marked, never silently omit a store without saying so.
