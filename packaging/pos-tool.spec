@@ -40,7 +40,51 @@ datas = [
 # not print anywhere, it only shows as a MessageBox). Confirmed empirically
 # on this dev PC (2026-08-26): the first Step 5 run hit exactly this. Explicit
 # collect_submodules() for both packages fixes it.
-hiddenimports = collect_submodules("numpy") + collect_submodules("pandas")
+#
+# filter=... excludes each package's own test suite (numpy.tests.*,
+# pandas.tests.*, and nested test dirs like pandas.core.tests.* /
+# numpy.linalg.tests.*): a first version of this without the filter passed
+# review-clean at build time but a follow-up review caught it bloating the
+# bundle with ~2,250 pandas.tests/numpy.tests entries and a stray top-level
+# pytest, which PyInstaller's own bundled hook-numpy.py deliberately
+# excludes for the same reason (it excludes scipy/pytest/nose/setuptools/
+# numpy.distutils). Only the non-test submodules are actually needed to fix
+# the ImportError above.
+_not_test = lambda name: ".tests" not in name
+hiddenimports = (
+    collect_submodules("numpy", filter=_not_test)
+    + collect_submodules("pandas", filter=_not_test)
+)
+
+# The .tests filter above only strips each package's own unit-test tree
+# (the plural "*.tests.*" packages). It does not touch numpy.testing /
+# pandas.testing / pandas._testing - the singular "testing" assertion-
+# helper modules, which are real public submodules collect_submodules()
+# still picks up. Those modules have a handful of *function-local* (not
+# module-level) `import pytest` statements deep inside rarely-used helpers
+# (e.g. pandas._testing._io.round_trip_localpath,
+# pandas._testing.__init__.external_error_raised) - PyInstaller's static
+# scan follows those and pulls all of pytest into the bundle as a
+# hiddenimport, even though our app never calls those specific helpers
+# (checked: only tests/*.py does, nothing under poslib/, app.py, main.py,
+# watcher.py or export_static.py). Confirmed via PYZ-00.toc: one top-level
+# 'pytest' entry remained with only the .tests filter applied.
+#
+# The fix is to exclude `pytest` itself, NOT numpy.testing/pandas.testing/
+# pandas._testing wholesale - a first attempt at the latter broke the
+# build differently: pandas/__init__.py itself does `from pandas import
+# testing` at its own top level (confirmed in warn-pos-tool.txt: "excluded
+# module named pandas.testing - imported by pandas (top-level)"), so
+# excluding pandas.testing crashed the frozen exe at launch with
+# "cannot import name 'testing' from partially initialized module
+# 'pandas' (most likely due to a circular import)" - a real regression,
+# caught by re-running Step 5 after the first excludes attempt, not
+# assumed safe. `nose` is included too, matching PyInstaller's own bundled
+# hook-numpy.py (which excludes scipy/pytest/nose/setuptools/
+# numpy.distutils for the same "not needed by the shipped app" reason);
+# `pytest` is the only one of that list this project's dependency tree
+# actually pulled in, so it is the only one that mattered here.
+excludes = ["pytest", "nose"]
 
 a = Analysis(
     [str(PROJECT_ROOT / "main.py")],
@@ -51,7 +95,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=excludes,
     noarchive=False,
 )
 pyz = PYZ(a.pure)
