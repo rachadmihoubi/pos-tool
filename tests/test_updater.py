@@ -279,3 +279,81 @@ class FakeResponse2:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise requests.HTTPError(f"status {self.status_code}")
+
+
+class TestLaunchSilentInstall:
+
+    def test_launches_installer_with_silent_flags(self, monkeypatch, tmp_path):
+        installer = tmp_path / "Setup.exe"
+        installer.write_bytes(b"fake")
+        seen = {}
+
+        class FakePopen:
+            def __init__(self, cmd, **kwargs):
+                seen["cmd"] = cmd
+                seen["kwargs"] = kwargs
+        monkeypatch.setattr(updater.subprocess, "Popen", FakePopen)
+
+        assert updater.launch_silent_install(installer) is True
+        assert seen["cmd"][0] == str(installer)
+        assert "/VERYSILENT" in seen["cmd"]
+        assert "/NORESTART" in seen["cmd"]
+        assert "/SUPPRESSMSGBOXES" in seen["cmd"]
+
+    def test_returns_false_when_spawning_fails(self, monkeypatch, tmp_path):
+        installer = tmp_path / "Setup.exe"
+        installer.write_bytes(b"fake")
+
+        def _raise(*a, **k):
+            raise OSError("cannot launch")
+        monkeypatch.setattr(updater.subprocess, "Popen", _raise)
+
+        assert updater.launch_silent_install(installer) is False
+
+
+class TestCheckAndApplyUpdate:
+
+    def test_returns_false_when_no_update_available(self, monkeypatch):
+        monkeypatch.setattr(updater, "check_for_update", lambda cfg: None)
+
+        assert updater.check_and_apply_update(FakeConfig()) is False
+
+    def test_returns_false_when_download_fails(self, monkeypatch):
+        release = updater.ReleaseInfo(version=(9, 9, 9), tag_name="v9.9.9",
+                                       installer_url="https://x/Setup.exe",
+                                       checksum_url="https://x/Setup.exe.sha256")
+        monkeypatch.setattr(updater, "check_for_update", lambda cfg: release)
+        monkeypatch.setattr(updater, "download_and_verify", lambda release, dest_dir: None)
+
+        assert updater.check_and_apply_update(FakeConfig()) is False
+
+    def test_returns_true_and_launches_installer_on_success(self, monkeypatch, tmp_path):
+        release = updater.ReleaseInfo(version=(9, 9, 9), tag_name="v9.9.9",
+                                       installer_url="https://x/Setup.exe",
+                                       checksum_url="https://x/Setup.exe.sha256")
+        installer_path = tmp_path / "Setup.exe"
+        installer_path.write_bytes(b"fake")
+        launched = []
+
+        monkeypatch.setattr(updater, "check_for_update", lambda cfg: release)
+        monkeypatch.setattr(updater, "download_and_verify",
+                            lambda release, dest_dir: installer_path)
+        monkeypatch.setattr(updater, "launch_silent_install",
+                            lambda path: launched.append(path) or True)
+
+        assert updater.check_and_apply_update(FakeConfig()) is True
+        assert launched == [installer_path]
+
+    def test_returns_false_when_launch_fails(self, monkeypatch, tmp_path):
+        release = updater.ReleaseInfo(version=(9, 9, 9), tag_name="v9.9.9",
+                                       installer_url="https://x/Setup.exe",
+                                       checksum_url="https://x/Setup.exe.sha256")
+        installer_path = tmp_path / "Setup.exe"
+        installer_path.write_bytes(b"fake")
+
+        monkeypatch.setattr(updater, "check_for_update", lambda cfg: release)
+        monkeypatch.setattr(updater, "download_and_verify",
+                            lambda release, dest_dir: installer_path)
+        monkeypatch.setattr(updater, "launch_silent_install", lambda path: False)
+
+        assert updater.check_and_apply_update(FakeConfig()) is False

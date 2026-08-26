@@ -18,6 +18,8 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import logging
+import subprocess
+import tempfile
 from pathlib import Path
 
 import requests
@@ -184,3 +186,51 @@ def download_and_verify(release: ReleaseInfo, dest_dir: Path) -> Path | None:
         return None
 
     return installer_path
+
+
+def launch_silent_install(installer_path: Path) -> bool:
+    """
+    Spawns the installer detached and returns immediately without waiting
+    for it to finish - the caller must stop and exit right after this so
+    the installer can replace this process's own files once the OS
+    releases the lock. Returns True if the process was launched, False if
+    spawning itself failed. Never raises.
+    """
+    try:
+        subprocess.Popen(
+            [str(installer_path), "/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES"],
+            close_fds=True,
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
+        return True
+    except OSError as exc:
+        log.error("Could not launch the installer: %s", exc)
+        return False
+
+
+def check_and_apply_update(cfg: Config) -> bool:
+    """
+    The one entry point watcher.py calls. Checks for a newer release and,
+    if everything checks out (found, downloaded, checksum verified,
+    installer launched), returns True - the caller must stop and exit
+    immediately so the installer can replace the running files. Returns
+    False if there's no update or any step failed; the next attempt is the
+    next watcher startup. Never raises.
+    """
+    release = check_for_update(cfg)
+    if release is None:
+        return False
+
+    log.info("Update found: %s - downloading and verifying.", release.tag_name)
+    dest_dir = Path(tempfile.mkdtemp(prefix="shop-analysis-update-"))
+    installer_path = download_and_verify(release, dest_dir)
+    if installer_path is None:
+        log.warning("Update download/verification failed - will try again next login.")
+        return False
+
+    if not launch_silent_install(installer_path):
+        return False
+
+    log.info("Installer launched for %s - stopping so it can replace running files.",
+              release.tag_name)
+    return True
