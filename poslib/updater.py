@@ -217,20 +217,25 @@ def check_and_apply_update(cfg: Config) -> bool:
     False if there's no update or any step failed; the next attempt is the
     next watcher startup. Never raises.
     """
-    release = check_for_update(cfg)
-    if release is None:
-        return False
+    try:
+        release = check_for_update(cfg)
+        if release is None:
+            return False
 
-    log.info("Update found: %s - downloading and verifying.", release.tag_name)
-    dest_dir = Path(tempfile.mkdtemp(prefix="shop-analysis-update-"))
-    installer_path = download_and_verify(release, dest_dir)
-    if installer_path is None:
-        log.warning("Update download/verification failed - will try again next login.")
-        return False
+        log.info("Update found: %s - downloading and verifying.", release.tag_name)
+        dest_dir = Path(tempfile.mkdtemp(prefix="shop-analysis-update-"))
+        installer_path = download_and_verify(release, dest_dir)
+        if installer_path is None:
+            log.warning("Update download/verification failed - will try again next login.")
+            return False
 
-    if not launch_silent_install(installer_path):
-        return False
+        if not launch_silent_install(installer_path):
+            return False
 
-    log.info("Installer launched for %s - stopping so it can replace running files.",
-              release.tag_name)
-    return True
+        log.info("Installer launched for %s - stopping so it can replace running files.",
+                  release.tag_name)
+        return True
+
+    except OSError as exc:
+        log.warning("Could not apply update: %s", exc)
+        return False

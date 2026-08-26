@@ -357,3 +357,15 @@ class TestCheckAndApplyUpdate:
         monkeypatch.setattr(updater, "launch_silent_install", lambda path: False)
 
         assert updater.check_and_apply_update(FakeConfig()) is False
+
+    def test_returns_false_when_tempdir_creation_fails(self, monkeypatch):
+        release = updater.ReleaseInfo(version=(9, 9, 9), tag_name="v9.9.9",
+                                       installer_url="https://x/Setup.exe",
+                                       checksum_url="https://x/Setup.exe.sha256")
+
+        def _raise(*a, **k):
+            raise OSError("temp directory unavailable")
+        monkeypatch.setattr(updater, "check_for_update", lambda cfg: release)
+        monkeypatch.setattr(updater.tempfile, "mkdtemp", _raise)
+
+        assert updater.check_and_apply_update(FakeConfig()) is False
