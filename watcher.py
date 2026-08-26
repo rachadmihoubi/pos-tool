@@ -78,6 +78,22 @@ class Watcher:
     def mark_dirty(self) -> None:
         self._dirty.set()
 
+    # -- silent auto-update --------------------------------------------------
+
+    def _check_for_update(self) -> bool:
+        """
+        Returns True if an update was found and its silent install was
+        launched - the caller must stop and exit immediately so the
+        installer can replace the running files. A failure here must
+        never crash the watcher, same as the digest/backup/remote jobs.
+        """
+        try:
+            from poslib.updater import check_and_apply_update
+            return check_and_apply_update(self.cfg)
+        except Exception:                                # noqa: BLE001
+            log.exception("The update check failed")
+            return False
+
     # -- waiting for the POS to finish writing -----------------------------
 
     def _wait_until_settled(self) -> bool:
@@ -234,6 +250,10 @@ class Watcher:
     # -- the loop ----------------------------------------------------------
 
     def run(self) -> None:
+        if self._check_for_update():
+            log.info("Stopping for the update to install.")
+            return
+
         folder = self.source.parent
         if not folder.is_dir():
             log.error("The folder to watch does not exist: %s", folder)

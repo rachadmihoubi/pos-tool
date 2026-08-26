@@ -334,6 +334,18 @@ watcher:
   poll_seconds: 120
 
 
+# -----------------------------------------------------------------------------
+#  AUTO-UPDATE - checks GitHub Releases once, at startup, for a newer
+#  version and installs it silently if found. Only ever active in a
+#  packaged install - has no effect when run from a git clone.
+# -----------------------------------------------------------------------------
+update:
+  enabled: true
+
+  # The GitHub repo releases are published to.
+  github_repo: "rachadmihoubi/pos-tool"
+
+
 logging:
   level: "INFO"
   file: "logs/pos-tool.log"
