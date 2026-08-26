@@ -175,3 +175,79 @@ class TestCheckForUpdate:
             lambda url, **k: FakeResponse(_release_json("v1.2.0", with_assets=False)))
 
         assert updater.check_for_update(FakeConfig()) is None
+
+
+import hashlib
+
+
+class TestDownloadAndVerify:
+
+    def _release(self):
+        return updater.ReleaseInfo(
+            version=(1, 2, 0), tag_name="v1.2.0",
+            installer_url="https://example.test/Setup.exe",
+            checksum_url="https://example.test/Setup.exe.sha256")
+
+    def test_downloads_and_returns_installer_path_on_matching_checksum(
+            self, monkeypatch, tmp_path):
+        installer_bytes = b"fake installer bytes"
+        digest = hashlib.sha256(installer_bytes).hexdigest()
+
+        def _fake_get(url, **kwargs):
+            if url.endswith(".sha256"):
+                return FakeResponse2(f"{digest}  Setup.exe\n".encode("ascii"))
+            return FakeResponse2(installer_bytes)
+        monkeypatch.setattr(updater.requests, "get", _fake_get)
+
+        result = updater.download_and_verify(self._release(), tmp_path)
+
+        assert result == tmp_path / "Setup.exe"
+        assert result.read_bytes() == installer_bytes
+
+    def test_returns_none_and_cleans_up_on_checksum_mismatch(self, monkeypatch, tmp_path):
+        installer_bytes = b"fake installer bytes"
+        wrong_digest = "0" * 64
+
+        def _fake_get(url, **kwargs):
+            if url.endswith(".sha256"):
+                return FakeResponse2(f"{wrong_digest}  Setup.exe\n".encode("ascii"))
+            return FakeResponse2(installer_bytes)
+        monkeypatch.setattr(updater.requests, "get", _fake_get)
+
+        result = updater.download_and_verify(self._release(), tmp_path)
+
+        assert result is None
+        assert not (tmp_path / "Setup.exe").exists()
+        assert not (tmp_path / "Setup.exe.sha256").exists()
+
+    def test_returns_none_when_checksum_download_fails(self, monkeypatch, tmp_path):
+        def _fake_get(url, **kwargs):
+            if url.endswith(".sha256"):
+                raise requests.ConnectionError("offline")
+            return FakeResponse2(b"unused")
+        monkeypatch.setattr(updater.requests, "get", _fake_get)
+
+        assert updater.download_and_verify(self._release(), tmp_path) is None
+
+    def test_returns_none_when_installer_download_fails(self, monkeypatch, tmp_path):
+        digest = hashlib.sha256(b"x").hexdigest()
+
+        def _fake_get(url, **kwargs):
+            if url.endswith(".sha256"):
+                return FakeResponse2(f"{digest}  Setup.exe\n".encode("ascii"))
+            raise requests.ConnectionError("offline")
+        monkeypatch.setattr(updater.requests, "get", _fake_get)
+
+        assert updater.download_and_verify(self._release(), tmp_path) is None
+
+
+class FakeResponse2:
+    """Like FakeResponse, but carries raw bytes for downloads instead of JSON."""
+
+    def __init__(self, content: bytes, status_code=200):
+        self.content = content
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"status {self.status_code}")

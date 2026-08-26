@@ -16,6 +16,7 @@ the full design.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import logging
 from pathlib import Path
 
@@ -125,3 +126,49 @@ def check_for_update(cfg: Config) -> ReleaseInfo | None:
 
     return ReleaseInfo(version=remote_version, tag_name=tag_name,
                         installer_url=installer_url, checksum_url=checksum_url)
+
+
+_DOWNLOAD_TIMEOUT_SECONDS = 120
+
+
+def _download(url: str, dest: Path) -> bool:
+    try:
+        resp = requests.get(url, timeout=_DOWNLOAD_TIMEOUT_SECONDS)
+        resp.raise_for_status()
+        dest.write_bytes(resp.content)
+        return True
+    except (requests.RequestException, OSError) as exc:
+        log.warning("Could not download %s: %s", url, exc)
+        return False
+
+
+def _sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def download_and_verify(release: ReleaseInfo, dest_dir: Path) -> Path | None:
+    """
+    Downloads Setup.exe and its .sha256 into dest_dir and verifies the
+    hash. Returns the path to the verified installer, or None on any
+    failure (download error or checksum mismatch) - the caller must not
+    run an installer this returns None for. Never raises.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    installer_path = dest_dir / "Setup.exe"
+    checksum_path = dest_dir / "Setup.exe.sha256"
+
+    if not _download(release.checksum_url, checksum_path):
+        return None
+    if not _download(release.installer_url, installer_path):
+        return None
+
+    expected = checksum_path.read_text(encoding="utf-8").strip().split()[0].lower()
+    actual = _sha256_of(installer_path)
+    if actual.lower() != expected:
+        log.error("Checksum mismatch for %s: expected %s, got %s",
+                   release.tag_name, expected, actual)
+        installer_path.unlink(missing_ok=True)
+        checksum_path.unlink(missing_ok=True)
+        return None
+
+    return installer_path
