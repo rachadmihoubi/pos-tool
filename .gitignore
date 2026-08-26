@@ -81,3 +81,4 @@ build/
 # Inno Setup build output (packaging/setup.iss builds this). Regenerated
 # from dist/ShopAnalysis/ on every build; only the .iss script is committed.
 dist-installer/
+.gstack/
