@@ -158,12 +158,24 @@ def download_and_verify(release: ReleaseInfo, dest_dir: Path) -> Path | None:
     checksum_path = dest_dir / "Setup.exe.sha256"
 
     if not _download(release.checksum_url, checksum_path):
+        installer_path.unlink(missing_ok=True)
+        checksum_path.unlink(missing_ok=True)
         return None
     if not _download(release.installer_url, installer_path):
+        installer_path.unlink(missing_ok=True)
+        checksum_path.unlink(missing_ok=True)
         return None
 
-    expected = checksum_path.read_text(encoding="utf-8").strip().split()[0].lower()
-    actual = _sha256_of(installer_path)
+    try:
+        expected = checksum_path.read_text(encoding="utf-8").strip().split()[0].lower()
+        actual = _sha256_of(installer_path)
+    except (OSError, UnicodeDecodeError, IndexError) as exc:
+        log.error("Could not read or parse checksum for %s: %s",
+                   release.tag_name, exc)
+        installer_path.unlink(missing_ok=True)
+        checksum_path.unlink(missing_ok=True)
+        return None
+
     if actual.lower() != expected:
         log.error("Checksum mismatch for %s: expected %s, got %s",
                    release.tag_name, expected, actual)

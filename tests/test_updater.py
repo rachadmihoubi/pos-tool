@@ -8,7 +8,9 @@ for the design this implements.
 
 from __future__ import annotations
 
+import hashlib
 import pytest
+import requests
 
 from poslib import updater
 
@@ -59,9 +61,6 @@ def test_current_version_catches_decode_failures(monkeypatch, tmp_path):
 
     # This should catch UnicodeDecodeError (a ValueError) and return (0, 0, 0)
     assert updater.current_version() == (0, 0, 0)
-
-
-import requests
 
 
 class FakeConfig:
@@ -177,9 +176,6 @@ class TestCheckForUpdate:
         assert updater.check_for_update(FakeConfig()) is None
 
 
-import hashlib
-
-
 class TestDownloadAndVerify:
 
     def _release(self):
@@ -239,6 +235,38 @@ class TestDownloadAndVerify:
         monkeypatch.setattr(updater.requests, "get", _fake_get)
 
         assert updater.download_and_verify(self._release(), tmp_path) is None
+
+    def test_returns_none_and_cleans_up_on_empty_checksum_file(
+            self, monkeypatch, tmp_path):
+        installer_bytes = b"fake installer bytes"
+
+        def _fake_get(url, **kwargs):
+            if url.endswith(".sha256"):
+                return FakeResponse2(b"")  # Empty checksum response
+            return FakeResponse2(installer_bytes)
+        monkeypatch.setattr(updater.requests, "get", _fake_get)
+
+        result = updater.download_and_verify(self._release(), tmp_path)
+
+        assert result is None
+        assert not (tmp_path / "Setup.exe").exists()
+        assert not (tmp_path / "Setup.exe.sha256").exists()
+
+    def test_returns_none_and_cleans_up_on_corrupt_checksum_file(
+            self, monkeypatch, tmp_path):
+        installer_bytes = b"fake installer bytes"
+
+        def _fake_get(url, **kwargs):
+            if url.endswith(".sha256"):
+                return FakeResponse2(b"\xff\xfe")  # Invalid UTF-8
+            return FakeResponse2(installer_bytes)
+        monkeypatch.setattr(updater.requests, "get", _fake_get)
+
+        result = updater.download_and_verify(self._release(), tmp_path)
+
+        assert result is None
+        assert not (tmp_path / "Setup.exe").exists()
+        assert not (tmp_path / "Setup.exe.sha256").exists()
 
 
 class FakeResponse2:
