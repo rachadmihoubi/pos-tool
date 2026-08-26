@@ -77,3 +77,7 @@ graphify-out/
 # requirements-build.txt are committed, never the built exe/bundle.
 dist/
 build/
+
+# Inno Setup build output (packaging/setup.iss builds this). Regenerated
+# from dist/ShopAnalysis/ on every build; only the .iss script is committed.
+dist-installer/
