@@ -27,10 +27,10 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Open Shop Analysis now"; Flags: nowait postinstall skipifsilent
-Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Watcher"" /tr ""\""{app}\{#MyAppExeName}\"" --watcher"" /sc onlogon /rl limited /delay 0000:30"; Flags: runhidden
+Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Watcher"" /tr ""\""{app}\{#MyAppExeName}\"" --watcher"" /sc onlogon /rl limited /delay 0000:30"; Flags: runhidden runasoriginaluser
 
 [UninstallRun]
-Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""Shop Analysis - Watcher"""; Flags: runhidden
+Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""Shop Analysis - Watcher"""; Flags: runhidden; RunOnceId: "DeleteWatcherTask"
 
 [Code]
 var
@@ -157,6 +157,34 @@ begin
   end;
 end;
 
+// FileExists alone isn't enough: watcher.py can create a placeholder
+// config.yaml (still containing the CHANGE-ME sentinel path) entirely on
+// its own before the installer ever runs. Treat that placeholder as "not
+// configured yet" so the installer can still patch a real path into it.
+function ConfigIsConfigured(): Boolean;
+var
+  ConfigFile: String;
+  Lines: TArrayOfString;
+  I: Integer;
+begin
+  Result := False;
+  ConfigFile := ExpandConstant('{localappdata}\Shop Analysis\config.yaml');
+  if not FileExists(ConfigFile) then
+    Exit;
+  Result := True;
+  if LoadStringsFromFile(ConfigFile, Lines) then
+  begin
+    for I := 0 to GetArrayLength(Lines) - 1 do
+    begin
+      if Pos('CHANGE-ME/point-this-at-your-database.dblx', Lines[I]) > 0 then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+  end;
+end;
+
 procedure WriteDatabaseConfig(const DBPath: String);
 var
   ConfigDir, ConfigFile, TemplateFile, EscapedPath: String;
@@ -167,13 +195,16 @@ begin
   ConfigFile := ConfigDir + '\config.yaml';
   TemplateFile := ExpandConstant('{app}\config.template.yaml');
 
-  if FileExists(ConfigFile) then
+  if ConfigIsConfigured() then
     Exit; // never overwrite an existing, already-configured store
 
-  ForceDirectories(ConfigDir);
+  if not FileExists(ConfigFile) then
+  begin
+    ForceDirectories(ConfigDir);
 
-  if not FileCopy(TemplateFile, ConfigFile, False) then
-    Exit; // nothing more we can do here; app's own bootstrap remains the fallback
+    if not FileCopy(TemplateFile, ConfigFile, False) then
+      Exit; // nothing more we can do here; app's own bootstrap remains the fallback
+  end;
 
   EscapedPath := DBPath;
   StringChangeEx(EscapedPath, '\', '/', True);
@@ -192,12 +223,26 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
-    WriteDatabaseConfig(DatabaseEdit.Text);
+  begin
+    if Assigned(DatabaseEdit) and (DatabaseEdit.Text <> '') and FileExists(DatabaseEdit.Text) then
+      WriteDatabaseConfig(DatabaseEdit.Text);
+
+    if IsAdminInstallMode() then
+      MsgBox(
+        'Shop Analysis saves its settings under the current Windows user''s ' +
+        'own account, and the background updater that keeps your numbers ' +
+        'current only starts automatically when that same person logs in.' + #13#10#13#10 +
+        'If someone else normally uses this computer day to day (not the ' +
+        'account you just installed as), please log off, log back in as ' +
+        'that person, and run Setup.exe again. It is safe to run more than ' +
+        'once.',
+        mbInformation, MB_OK);
+  end;
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
   if PageID = DatabasePage.ID then
-    Result := FileExists(ExpandConstant('{localappdata}\Shop Analysis\config.yaml'));
+    Result := ConfigIsConfigured();
 end;
