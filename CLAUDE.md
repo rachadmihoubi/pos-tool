@@ -261,7 +261,7 @@ order" section sequences the work into the 5 components below.
 
 | # | Component | Status | Plan / where the detail lives |
 |---|---|---|---|
-| 1 | Packaging: PyInstaller onedir + Inno Setup `Setup.exe` | **DONE** | `docs/superpowers/plans/2026-08-25-packaging-installer.md` (status banner + SDD ledger at `.superpowers/sdd/2026-08-25-packaging-installer/progress.md`). Two carried-forward items: a leftover test install at `C:\Program Files\Shop Analysis\` still needs manual uninstall (needs explicit go-ahead — was blocked by the permission classifier); the `console=False` crash-visibility gap was accepted as-is by the user, candidate to revisit alongside Component 3. |
+| 1 | Packaging: PyInstaller onedir + Inno Setup `Setup.exe` | **DONE** | `docs/superpowers/plans/2026-08-25-packaging-installer.md` (status banner + SDD ledger at `.superpowers/sdd/2026-08-25-packaging-installer/progress.md`). One carried-forward item remains: the `console=False` crash-visibility gap was accepted as-is by the user, candidate to revisit alongside Component 3. (The leftover test install at `C:\Program Files\Shop Analysis\` was manually removed 2026-08-26.) |
 | 2 | DB auto-detect wizard page + silent watcher auto-start (`schtasks /sc onlogon`) | **NOT STARTED** | `docs/superpowers/plans/2026-08-26-db-autodetect-watcher-autostart.md` — plan fully written, zero tasks executed (`packaging/setup.iss` has no diff yet). This is the next thing to build. |
 | 3 | Silent auto-update via GitHub Releases | **NOT STARTED** | No plan written yet. Depends on Component 2 being done first (same build-order reasoning as the spec). |
 | 4 | Cloudflare Pages push over direct REST API (no `wrangler`/Node.js) | **DONE, committed, phone-verified** | `poslib/remote.py`, commit `5df4d73` (2026-08-26), superseding the scoped-token approach in `docs/superpowers/plans/2026-08-25-cloudflare-token-auth.md` (see that file's status banner). Verified by pushing to a disposable throwaway Cloudflare Pages project (created and deleted via the API — the real store project `promakeupmihoubipos` was never touched) and confirming it loaded correctly from an actual phone, not just a "success" API response. 25 unit tests passing (`tests/test_remote.py`). |
@@ -351,12 +351,6 @@ which has a plan written yet.
   `poslib/metrics.py`, new diagnostic rules in `poslib/diagnostics.py`, new
   owner-entered data in `poslib/ownerdata.py` (never in a file `etl.py`
   rebuilds) — see the architecture rules at the bottom of `README.md`.
-- **A test install from packaging verification is still on this dev PC**
-  at `C:\Program Files\Shop Analysis\` (with `unins000.exe`) — uninstall
-  needs the user's explicit go-ahead (system-modifying action outside the
-  repo, was blocked by the permission classifier when first attempted).
-  Not urgent, not touched by anything else here, but don't forget it's
-  there. See Component 1 in "Customer distribution" above.
 - **Work tree cleaned 2026-08-26**: removed `build/`, `dist/`,
   `dist-installer/` (regenerable PyInstaller/Inno Setup output),
   `.wrangler/` (stale, wrangler no longer used), `__pycache__`/
