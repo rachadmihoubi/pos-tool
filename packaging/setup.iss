@@ -17,6 +17,9 @@ OutputBaseFilename=Setup
 Compression=lzma
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
+CloseApplications=force
+CloseApplicationsFilter={#MyAppExeName}
+RestartApplications=no
 
 [Files]
 Source: "..\dist\ShopAnalysis\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -28,6 +31,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Open Shop Analysis now"; Flags: nowait postinstall skipifsilent
 Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Watcher"" /tr ""\""{app}\{#MyAppExeName}\"" --watcher"" /sc onlogon /rl limited /delay 0000:30"; Flags: runhidden
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--watcher"; Flags: nowait runhidden
 
 [UninstallRun]
 Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""Shop Analysis - Watcher"""; Flags: runhidden; RunOnceId: "DeleteWatcherTask"
