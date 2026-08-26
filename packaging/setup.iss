@@ -181,7 +181,7 @@ begin
       if Pos('CHANGE-ME/point-this-at-your-database.dblx', Lines[I]) > 0 then
         Lines[I] := '  path: "' + EscapedPath + '"';
     end;
-    SaveStringsToFile(ConfigFile, Lines, False);
+    SaveStringsToUTF8FileWithoutBOM(ConfigFile, Lines, False);
   end;
 end;
 
@@ -189,4 +189,11 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
     WriteDatabaseConfig(DatabaseEdit.Text);
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  if PageID = DatabasePage.ID then
+    Result := FileExists(ExpandConstant('{localappdata}\Shop Analysis\config.yaml'));
 end;
