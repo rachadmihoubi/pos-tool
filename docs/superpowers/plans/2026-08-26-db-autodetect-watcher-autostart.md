@@ -1,8 +1,32 @@
 # DB Auto-Detect + Silent Watcher Auto-Start Implementation Plan
 
-> **STATUS: NOT STARTED.** This is the next active plan — Component 2 of
-> CLAUDE.md's "Customer distribution" build order. `packaging/setup.iss`
-> has no diff yet; none of Task 1/2's steps below have been executed.
+> **STATUS: CODE COMPLETE, INTERACTIVE VERIFICATION STILL OPEN (2026-08-26).**
+> Both tasks are implemented and committed to `packaging/setup.iss`: Task 1
+> (DB auto-detect wizard page + config write) in `eb22bfb`, `bf7ffbc`,
+> `9ff43a1`; Task 2 (watcher auto-start via Task Scheduler) in `d9b7e5a`,
+> `9ff43a1`, `10deb48` — five commits total, including two real fixes found
+> along the way that weren't in the original plan text: `9ff43a1` makes the
+> installer treat a placeholder `config.yaml` (one `watcher.py` can create on
+> its own with the `CHANGE-ME` sentinel still in it) as "not configured yet"
+> rather than skipping the DB page just because the file exists, and warns
+> when Setup.exe is run elevated as a different Windows account than the one
+> that will actually log in day to day (since `{localappdata}` and the
+> watcher's `/sc onlogon` task both bind to whichever account is active at
+> the time). `10deb48` reverted a `runasoriginaluser` flag added by `9ff43a1`
+> after it caused a problem — check `git show 10deb48` if this needs
+> revisiting.
+>
+> **What's actually still open:** an `iscc` compile was re-verified clean on
+> 2026-08-26 (one cosmetic deprecation hint: `FileCopy` → `CopyFile`, not
+> functional) and `dist-installer\Setup.exe` now exists. But Steps 2-6 of
+> Task 1 and Steps 2-5 of Task 2 — actually running that `Setup.exe`, clicking
+> through the wizard, confirming the written `config.yaml`'s `path:` line,
+> confirming the "Shop Analysis - Watcher" scheduled task gets created,
+> testing the no-overwrite guard on a second install, and uninstalling
+> cleanly — have **not** been done. This is a GUI wizard + UAC-elevation
+> walkthrough; it needs a human at the keyboard, not something scriptable
+> from a terminal. `schtasks /query /tn "Shop Analysis - Watcher"` currently
+> returns nothing on this dev PC, confirming no real install has run yet.
 > Prerequisites (Component 1 packaging, Component 4 Cloudflare REST push)
 > are both done — see the other two plan files in this directory.
 
