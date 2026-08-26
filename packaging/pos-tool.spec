@@ -27,6 +27,7 @@ datas = [
     (str(PROJECT_ROOT / "locales" / "ar.json"), "locales"),
     (str(PROJECT_ROOT / "config.template.yaml"), "."),
     (str(PROJECT_ROOT / ".env.example"), "."),
+    (str(PROJECT_ROOT / "VERSION"), "."),
 ]
 
 # numpy/pandas C-extension gotcha (named in advance in this task's own
