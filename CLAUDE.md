@@ -246,18 +246,26 @@ Sync mechanism: the `SessionStart` hook in `.claude/settings.json` (see that
 file). Sync exclusions and why: see `.gitignore`'s own comments. This file
 (`CLAUDE.md`) plus the git history are the actual continuity mechanism.
 
-## Customer distribution — design approved, not yet built (2026-08-25)
+## Customer distribution — status as of 2026-08-26
 
-The tool is about to go from "single dev-PC project" to "installed on a
-real customer's till PCs." First customer: one owner with **3 separate
+The tool is going from "single dev-PC project" to "installed on a real
+customer's till PCs." First customer: one owner with **3 separate
 stores**, each its own PC and its own independent `.dblx` database. Full
-design (installer packaging, silent auto-updates via GitHub Releases,
-replacing the `wrangler`/Node.js Cloudflare push with a scoped REST API
-token, and a shared "hub" page for switching between stores plus a
-side-by-side cross-store stock search) is written up in
+design is written up in
 `docs/superpowers/specs/2026-08-25-installer-updates-multistore-design.md`
 — read that file before touching packaging, `poslib/remote.py`, or
-anything related to updates or multi-store hosting.
+anything related to updates or multi-store hosting. Its "Suggested build
+order" section sequences the work into the 5 components below.
+
+### Component checklist (read this first — it's the current source of truth)
+
+| # | Component | Status | Plan / where the detail lives |
+|---|---|---|---|
+| 1 | Packaging: PyInstaller onedir + Inno Setup `Setup.exe` | **DONE** | `docs/superpowers/plans/2026-08-25-packaging-installer.md` (status banner + SDD ledger at `.superpowers/sdd/2026-08-25-packaging-installer/progress.md`). Two carried-forward items: a leftover test install at `C:\Program Files\Shop Analysis\` still needs manual uninstall (needs explicit go-ahead — was blocked by the permission classifier); the `console=False` crash-visibility gap was accepted as-is by the user, candidate to revisit alongside Component 3. |
+| 2 | DB auto-detect wizard page + silent watcher auto-start (`schtasks /sc onlogon`) | **NOT STARTED** | `docs/superpowers/plans/2026-08-26-db-autodetect-watcher-autostart.md` — plan fully written, zero tasks executed (`packaging/setup.iss` has no diff yet). This is the next thing to build. |
+| 3 | Silent auto-update via GitHub Releases | **NOT STARTED** | No plan written yet. Depends on Component 2 being done first (same build-order reasoning as the spec). |
+| 4 | Cloudflare Pages push over direct REST API (no `wrangler`/Node.js) | **DONE, committed, phone-verified** | `poslib/remote.py`, commit `5df4d73` (2026-08-26), superseding the scoped-token approach in `docs/superpowers/plans/2026-08-25-cloudflare-token-auth.md` (see that file's status banner). Verified by pushing to a disposable throwaway Cloudflare Pages project (created and deleted via the API — the real store project `promakeupmihoubipos` was never touched) and confirming it loaded correctly from an actual phone, not just a "success" API response. 25 unit tests passing (`tests/test_remote.py`). |
+| 5 | Multi-store hub page + cross-store stock search | **NOT STARTED** | No plan written yet. No auto-matching, per the decision below — V1 shows matching rows side by side. |
 
 Key decisions worth knowing without re-reading the whole spec:
 - **This dev PC is not one of the 3 customer stores** — it stays on the
@@ -273,12 +281,6 @@ Key decisions worth knowing without re-reading the whole spec:
   discovery #11 below. V1 shows matching rows side by side and lets the
   owner's own eyes do the matching; a real combined total would need a
   manual product-linking step, not built.
-- The spec's "Suggested build order" section sequences this into 5
-  independently-testable steps, starting with the Cloudflare REST API
-  swap (testable on this dev PC, no customer PC needed yet). Component 4
-  (that Cloudflare credential swap) and Component 1 (PyInstaller +
-  Inno Setup packaging, `Setup.exe`) are done and committed — see
-  `docs/superpowers/plans/2026-08-25-packaging-installer.md`'s ledger.
 
 ### The actual product goal (owner's own words, 2026-08-26) — read this before prioritizing anything
 
@@ -299,17 +301,19 @@ everything not yet built:
    "already running continuously via the existing Task Scheduler entries"
    as a given, but nothing in `packaging/setup.iss` actually creates that
    entry — today it only exists on this dev PC because `install-startup.bat`
-   was run by hand. **Closed 2026-08-26:** `packaging/setup.iss` should
-   bake in the exact same `schtasks /create ... /sc onlogon` call that
-   `install-startup.bat` already uses for "Shop Analysis - Dashboard" (the
-   proven, already-working mechanism — not a new one), but pointed at
-   `ShopAnalysis.exe --watcher` instead of `start-quiet.bat`, run as an
-   Inno Setup `[Run]`/`[UninstallRun]` step so it's installed and removed
-   automatically, no separate `.bat` the owner has to run. **Only the
-   watcher needs to auto-start — not `app.py`'s Flask server.**
-   `watcher.py` rebuilds the cache and pushes to Cloudflare entirely on
-   its own timer (`_remote_push_due`/`_run_remote_push`); a local browser
-   dashboard is not required for remote viewing to work at all.
+   was run by hand. **Planned but not yet built** (Component 2 above,
+   `docs/superpowers/plans/2026-08-26-db-autodetect-watcher-autostart.md`):
+   `packaging/setup.iss` should bake in the exact same
+   `schtasks /create ... /sc onlogon` call that `install-startup.bat`
+   already uses for "Shop Analysis - Dashboard" (the proven, already-working
+   mechanism — not a new one), but pointed at `ShopAnalysis.exe --watcher`
+   instead of `start-quiet.bat`, run as an Inno Setup `[Run]`/
+   `[UninstallRun]` step so it's installed and removed automatically, no
+   separate `.bat` the owner has to run. **Only the watcher needs to
+   auto-start — not `app.py`'s Flask server.** `watcher.py` rebuilds the
+   cache and pushes to Cloudflare entirely on its own timer
+   (`_remote_push_due`/`_run_remote_push`); a local browser dashboard is
+   not required for remote viewing to work at all.
 3. **`remote.enabled: true` plus a real Cloudflare Pages project per store
    is what makes "viewable from his phone" actually true** — this piece
    is inherently a one-time technical setup (a Cloudflare API token,
@@ -322,10 +326,11 @@ everything not yet built:
    design effort making the local dashboard experience nicer; spend it on
    auto-start reliability and the remote/hub experience instead.
 
-Next build-order step per this reframing: Component 2 (DB auto-detect)
-+ the baked-in silent watcher auto-start above, as one implementation
-plan — then Component 3 (auto-update mechanism) and Component 5 (hub +
-cross-store stock search).
+Next build-order step per this reframing: execute Component 2's plan
+(`docs/superpowers/plans/2026-08-26-db-autodetect-watcher-autostart.md`,
+already written, not yet started) — then Component 3 (auto-update
+mechanism) and Component 5 (hub + cross-store stock search), neither of
+which has a plan written yet.
 
 ## What's left (optional, not blocking)
 
@@ -346,13 +351,31 @@ cross-store stock search).
   `poslib/metrics.py`, new diagnostic rules in `poslib/diagnostics.py`, new
   owner-entered data in `poslib/ownerdata.py` (never in a file `etl.py`
   rebuilds) — see the architecture rules at the bottom of `README.md`.
+- **A test install from packaging verification is still on this dev PC**
+  at `C:\Program Files\Shop Analysis\` (with `unins000.exe`) — uninstall
+  needs the user's explicit go-ahead (system-modifying action outside the
+  repo, was blocked by the permission classifier when first attempted).
+  Not urgent, not touched by anything else here, but don't forget it's
+  there. See Component 1 in "Customer distribution" above.
+- **Work tree cleaned 2026-08-26**: removed `build/`, `dist/`,
+  `dist-installer/` (regenerable PyInstaller/Inno Setup output),
+  `.wrangler/` (stale, wrangler no longer used), `__pycache__`/
+  `.pytest_cache` (regenerable), and `graphify-out/` (stray unrelated
+  `/graphify` skill output). All were already gitignored — nothing tracked
+  changed. Real data (`data/`, `digests/`, `backups/`, `cache.db`,
+  `logs/`, `remote-site/`, `static/photo-cache/`) was left untouched.
 
 ## Environment note
 
 Python and Git are on PATH via winget installs
 (`%LOCALAPPDATA%\Programs\Python\Python312`, `C:\Program Files\Git\bin`).
 Node.js is present via a "pi-node" managed install; `wrangler` was added
-globally on top of it. `.venv` is gitignored and rebuilt with `setup.bat`.
+globally on top of it but is **no longer used by pos-tool itself** —
+`poslib/remote.py` pushes to Cloudflare Pages over direct REST calls as of
+2026-08-26 (see "Customer distribution" above), precisely so customer
+installs don't need Node.js/wrangler at all. `.wrangler/`'s local cache
+dir was removed from this dev PC as stale for the same reason. `.venv` is
+gitignored and rebuilt with `setup.bat`.
 
 ## gstack (REQUIRED — global install)
 

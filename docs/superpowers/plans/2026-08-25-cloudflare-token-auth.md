@@ -1,5 +1,16 @@
 # Cloudflare Scoped Token Auth Implementation Plan
 
+> **STATUS: COMPLETE, then SUPERSEDED.** This plan's approach (authenticate
+> `wrangler` with a scoped `CLOUDFLARE_API_TOKEN` instead of an OAuth login)
+> shipped as commit `24b1755`. It was fully replaced on 2026-08-26 by a
+> direct Cloudflare REST API implementation in `poslib/remote.py` (commit
+> `5df4d73`) that drops the `wrangler`/Node.js dependency entirely — needed
+> because frozen customer installs (Component 1/4, see
+> `2026-08-25-packaging-installer.md` and CLAUDE.md's "Customer
+> distribution" section) have no Node.js. The scoped-token *credential*
+> this plan introduced is still what's used; only the CLI-shelling
+> mechanism it authenticated is gone. Kept here as historical record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stop authenticating `wrangler` with the account-owner's broad `wrangler login` OAuth credential; authenticate it instead with a `CLOUDFLARE_API_TOKEN` restricted to the `Pages:Edit` permission group, read the same way every other secret in this codebase is read (`Config.secret()`, sourced from `.env`).

@@ -1,5 +1,11 @@
 # DB Auto-Detect + Silent Watcher Auto-Start Implementation Plan
 
+> **STATUS: NOT STARTED.** This is the next active plan — Component 2 of
+> CLAUDE.md's "Customer distribution" build order. `packaging/setup.iss`
+> has no diff yet; none of Task 1/2's steps below have been executed.
+> Prerequisites (Component 1 packaging, Component 4 Cloudflare REST push)
+> are both done — see the other two plan files in this directory.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make `Setup.exe` produce a fully working, silently-running, remote-publishing install with zero typed/edited configuration from a non-technical shop owner — closing the two gaps the prior packaging plan left open: the database path still requires hand-editing `config.yaml`, and nothing auto-starts at boot.

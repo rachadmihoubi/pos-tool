@@ -1,5 +1,12 @@
 # Today Drill-Down, Cash-Realized Sales, Stock Catalog, Supplier Drill-Down Implementation Plan
 
+> **STATUS: COMPLETE — shipped as Patch #4.** All features here are built,
+> tested, and live. Checkboxes below were never ticked during execution
+> (this plan predates that convention being followed strictly), but the
+> work is done — see CLAUDE.md's "Patch #4 session discoveries" and
+> "Remote-parity follow-up" sections for what actually shipped. Kept here
+> as historical record of the original design, not an active task list.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the Today screen into a period-selectable view with a real

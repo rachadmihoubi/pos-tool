@@ -1,5 +1,27 @@
 # Packaging & Installer Implementation Plan
 
+> **STATUS: COMPLETE.** All 7 tasks done and committed (`a66bc3d`,
+> `13377a1`, `584bc26`, `817e4fd`, `d2f5560`, `ce5b8c7`, `2eb2543`,
+> `3f8c69a`, `f8cb8ec`). Full task-by-task history, deviations, and
+> deferred findings are in the SDD ledger at
+> `.superpowers/sdd/2026-08-25-packaging-installer/progress.md` (not
+> committed to git, local-machine only). Two things carried forward from
+> that ledger, not yet resolved:
+> 1. **A test install from Task 7's verification is still on this dev
+>    PC** at `C:\Program Files\Shop Analysis\` (with `unins000.exe`) —
+>    uninstall was blocked pending explicit user go-ahead (a
+>    system-modifying action outside the repo). Still sitting there as of
+>    2026-08-26.
+> 2. **A plan-mandated risk was accepted, not fixed:** `console=False` +
+>    `disable_windowed_traceback=False` in `packaging/pos-tool.spec` means
+>    an unhandled exception on a customer's unattended till PC would hang
+>    invisibly with no console and no crash log. User ruling: "Accept
+>    as-is for now" — candidate to revisit alongside Component 3
+>    (auto-update/health-check work), not forgotten.
+>
+> Component 1 (packaging) in CLAUDE.md's "Customer distribution" section
+> refers to this plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Package pos-tool as a normal Windows installer (`Setup.exe`) that a non-technical shop owner can run — Next → Next → Install → desktop shortcut — with no Python, Node, git, or terminal window ever visible, and reach a working dashboard on a clean machine.
