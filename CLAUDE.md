@@ -275,10 +275,57 @@ Key decisions worth knowing without re-reading the whole spec:
   manual product-linking step, not built.
 - The spec's "Suggested build order" section sequences this into 5
   independently-testable steps, starting with the Cloudflare REST API
-  swap (testable on this dev PC, no customer PC needed yet). Not started
-  as of this writing — next session should invoke the writing-plans skill
-  against the spec to turn it into an actual implementation plan, one step
-  at a time, rather than re-deriving the design from scratch.
+  swap (testable on this dev PC, no customer PC needed yet). Component 4
+  (that Cloudflare credential swap) and Component 1 (PyInstaller +
+  Inno Setup packaging, `Setup.exe`) are done and committed — see
+  `docs/superpowers/plans/2026-08-25-packaging-installer.md`'s ledger.
+
+### The actual product goal (owner's own words, 2026-08-26) — read this before prioritizing anything
+
+The owner does not want a local dashboard. He already has R.Lynx's own POS
+screen at the till for local use — **the entire reason this tool exists is
+so he (or each store's owner) can check that store's numbers on his phone
+when he isn't physically at the shop.** This reframes priority for
+everything not yet built:
+
+1. **Install must need zero technical steps** — no terminal, no typed
+   config, ideally not even the DB path (Component 2, DB auto-detect,
+   still not built — first-run today still needs someone to hand-edit
+   `config.yaml`'s `database.path`, which fails this bar).
+2. **The background watcher must start itself, silently, on its own, the
+   moment the store PC is turned on — invisible to the till workers.**
+   This is the one piece the approved spec assumed rather than designed:
+   Component 3 ("Silent, automatic updates") talks about the watcher
+   "already running continuously via the existing Task Scheduler entries"
+   as a given, but nothing in `packaging/setup.iss` actually creates that
+   entry — today it only exists on this dev PC because `install-startup.bat`
+   was run by hand. **Closed 2026-08-26:** `packaging/setup.iss` should
+   bake in the exact same `schtasks /create ... /sc onlogon` call that
+   `install-startup.bat` already uses for "Shop Analysis - Dashboard" (the
+   proven, already-working mechanism — not a new one), but pointed at
+   `ShopAnalysis.exe --watcher` instead of `start-quiet.bat`, run as an
+   Inno Setup `[Run]`/`[UninstallRun]` step so it's installed and removed
+   automatically, no separate `.bat` the owner has to run. **Only the
+   watcher needs to auto-start — not `app.py`'s Flask server.**
+   `watcher.py` rebuilds the cache and pushes to Cloudflare entirely on
+   its own timer (`_remote_push_due`/`_run_remote_push`); a local browser
+   dashboard is not required for remote viewing to work at all.
+3. **`remote.enabled: true` plus a real Cloudflare Pages project per store
+   is what makes "viewable from his phone" actually true** — this piece
+   is inherently a one-time technical setup (a Cloudflare API token,
+   `Pages:Edit`-scoped, shared across the account per Component 4's
+   decision) that rachad does once per store when installing, not
+   something the non-technical owner ever sees or types.
+4. Local dashboard viewing (the whole original single-shop build) still
+   works and isn't being removed — it's just explicitly **not** the
+   priority for the 3-store customer rollout. Don't spend customer-facing
+   design effort making the local dashboard experience nicer; spend it on
+   auto-start reliability and the remote/hub experience instead.
+
+Next build-order step per this reframing: Component 2 (DB auto-detect)
++ the baked-in silent watcher auto-start above, as one implementation
+plan — then Component 3 (auto-update mechanism) and Component 5 (hub +
+cross-store stock search).
 
 ## What's left (optional, not blocking)
 
