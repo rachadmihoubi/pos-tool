@@ -8,8 +8,6 @@ for the design this implements.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from poslib import updater
@@ -41,3 +39,23 @@ def test_current_version_falls_back_to_zero_when_missing(monkeypatch, tmp_path):
 ])
 def test_parse_version(text, expected):
     assert updater._parse_version(text) == expected
+
+
+def test_current_version_catches_read_failures(monkeypatch, tmp_path):
+    # Create VERSION as a directory instead of a file to trigger IsADirectoryError
+    # when read_text() is called (IsADirectoryError is a subclass of OSError)
+    version_dir = tmp_path / "VERSION"
+    version_dir.mkdir()
+    monkeypatch.setattr(updater, "app_root", lambda: tmp_path)
+
+    # Attempting to read a directory as text will raise OSError
+    assert updater.current_version() == (0, 0, 0)
+
+
+def test_current_version_catches_decode_failures(monkeypatch, tmp_path):
+    version_file = tmp_path / "VERSION"
+    version_file.write_bytes(b"\xff\xfe")  # Invalid UTF-8
+    monkeypatch.setattr(updater, "app_root", lambda: tmp_path)
+
+    # This should catch UnicodeDecodeError (a ValueError) and return (0, 0, 0)
+    assert updater.current_version() == (0, 0, 0)

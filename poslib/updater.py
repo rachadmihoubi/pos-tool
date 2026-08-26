@@ -16,7 +16,6 @@ the full design.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from .paths import app_root
 
@@ -40,10 +39,15 @@ def current_version() -> tuple[int, int, int]:
     """
     This build's own version, read from the bundled VERSION file. Returns
     (0, 0, 0) if the file is missing or unparseable, which safely never
-    compares as newer than a real release.
+    compares as newer than a real release. Never raises - all I/O failures
+    are caught and treated the same as a missing file.
     """
     version_file = app_root() / "VERSION"
-    if not version_file.is_file():
+    try:
+        if not version_file.is_file():
+            return (0, 0, 0)
+        text = version_file.read_text(encoding="utf-8")
+    except (OSError, ValueError):
         return (0, 0, 0)
-    parsed = _parse_version(version_file.read_text(encoding="utf-8"))
+    parsed = _parse_version(text)
     return parsed or (0, 0, 0)
