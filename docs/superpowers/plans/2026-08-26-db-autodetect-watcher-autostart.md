@@ -16,17 +16,29 @@
 > after it caused a problem — check `git show 10deb48` if this needs
 > revisiting.
 >
-> **What's actually still open:** an `iscc` compile was re-verified clean on
-> 2026-08-26 (one cosmetic deprecation hint: `FileCopy` → `CopyFile`, not
-> functional) and `dist-installer\Setup.exe` now exists. But Steps 2-6 of
-> Task 1 and Steps 2-5 of Task 2 — actually running that `Setup.exe`, clicking
-> through the wizard, confirming the written `config.yaml`'s `path:` line,
-> confirming the "Shop Analysis - Watcher" scheduled task gets created,
-> testing the no-overwrite guard on a second install, and uninstalling
-> cleanly — have **not** been done. This is a GUI wizard + UAC-elevation
-> walkthrough; it needs a human at the keyboard, not something scriptable
-> from a terminal. `schtasks /query /tn "Shop Analysis - Watcher"` currently
-> returns nothing on this dev PC, confirming no real install has run yet.
+> **Interactive install verification: DONE 2026-08-26.** Rebuilt
+> `dist/ShopAnalysis` and `dist-installer\Setup.exe` (both gitignored and
+> periodically cleaned, so they didn't exist going in), re-verified `iscc`
+> compiles clean (one cosmetic hint: `FileCopy` → `CopyFile`, not
+> functional), then ran the real installer on this dev PC with the user's
+> hands on the UAC prompt and wizard. Confirmed: the no-overwrite guard
+> correctly left the dev PC's real, already-configured `config.yaml`
+> untouched (this box already had one from Component 1's earlier test
+> install, so the DB wizard page itself got skipped by design — that page's
+> own auto-detect/Browse flow is still unexercised by a real click-through,
+> a residual gap, though the underlying Pascal Script already went through
+> a review + fix cycle in `bf7ffbc`/`9ff43a1`); the "Shop Analysis - Watcher"
+> scheduled task was created with the right target
+> (`"C:\Program Files\Shop Analysis\ShopAnalysis.exe" --watcher`), right
+> user (`RACHAD`, not the elevated installer account), and right trigger
+> (`At logon time`); triggering it via `schtasks /run` (the plan's own
+> logoff-avoidance proxy) produced a process with no window title and a
+> log line confirming it watched the correct real database file and ran
+> its digest job; `/VERYSILENT` uninstall — after stopping the running
+> processes first, learned from this session's earlier leftover-install
+> cleanup — removed both the scheduled task and the entire install folder
+> with no locked files left behind. Test install fully cleaned up
+> afterward; this dev PC is back to its normal state.
 > Prerequisites (Component 1 packaging, Component 4 Cloudflare REST push)
 > are both done — see the other two plan files in this directory.
 

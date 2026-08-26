@@ -262,7 +262,7 @@ order" section sequences the work into the 5 components below.
 | # | Component | Status | Plan / where the detail lives |
 |---|---|---|---|
 | 1 | Packaging: PyInstaller onedir + Inno Setup `Setup.exe` | **DONE** | `docs/superpowers/plans/2026-08-25-packaging-installer.md` (status banner + SDD ledger at `.superpowers/sdd/2026-08-25-packaging-installer/progress.md`). One carried-forward item remains: the `console=False` crash-visibility gap was accepted as-is by the user, candidate to revisit alongside Component 3. (The leftover test install at `C:\Program Files\Shop Analysis\` was manually removed 2026-08-26.) |
-| 2 | DB auto-detect wizard page + silent watcher auto-start (`schtasks /sc onlogon`) | **CODE COMPLETE, INTERACTIVE VERIFICATION OPEN** | `docs/superpowers/plans/2026-08-26-db-autodetect-watcher-autostart.md` (status banner has the detail). Both tasks committed (`eb22bfb`..`10deb48`, 5 commits incl. two real fixes: placeholder-config detection, admin/user-account mismatch warning). `iscc` compile re-verified clean 2026-08-26. **Not yet done: an actual interactive install** — run `Setup.exe`, click through the wizard, confirm `config.yaml` and the "Shop Analysis - Watcher" scheduled task, test the no-overwrite guard, uninstall. Needs a human at the keyboard (UAC + GUI clicks aren't scriptable); `schtasks /query /tn "Shop Analysis - Watcher"` currently finds nothing on this dev PC. |
+| 2 | DB auto-detect wizard page + silent watcher auto-start (`schtasks /sc onlogon`) | **DONE, interactively verified 2026-08-26** | `docs/superpowers/plans/2026-08-26-db-autodetect-watcher-autostart.md` (status banner has the full detail). Both tasks committed (`eb22bfb`..`10deb48`, 5 commits incl. two real fixes: placeholder-config detection, admin/user-account mismatch warning). Real install on this dev PC confirmed: no-overwrite guard, correct scheduled-task target/user/trigger, headless watcher run (no window, correct DB file watched, digest job ran), clean `/VERYSILENT` uninstall (task + folder both removed). One residual gap: the DB wizard page's own auto-detect/Browse flow wasn't click-through-exercised (this dev PC already had a configured `config.yaml` so the page was skipped by design) — the underlying code did go through a review + fix cycle already. |
 | 3 | Silent auto-update via GitHub Releases | **NOT STARTED** | No plan written yet. Depends on Component 2 being done first (same build-order reasoning as the spec). |
 | 4 | Cloudflare Pages push over direct REST API (no `wrangler`/Node.js) | **DONE, committed, phone-verified** | `poslib/remote.py`, commit `5df4d73` (2026-08-26), superseding the scoped-token approach in `docs/superpowers/plans/2026-08-25-cloudflare-token-auth.md` (see that file's status banner). Verified by pushing to a disposable throwaway Cloudflare Pages project (created and deleted via the API — the real store project `promakeupmihoubipos` was never touched) and confirming it loaded correctly from an actual phone, not just a "success" API response. 25 unit tests passing (`tests/test_remote.py`). |
 | 5 | Multi-store hub page + cross-store stock search | **NOT STARTED** | No plan written yet. No auto-matching, per the decision below — V1 shows matching rows side by side. |
@@ -291,12 +291,14 @@ when he isn't physically at the shop.** This reframes priority for
 everything not yet built:
 
 1. **Install must need zero technical steps** — no terminal, no typed
-   config, ideally not even the DB path. **Built** (Component 2, code
-   complete 2026-08-26): the installer's wizard page auto-detects a
+   config, ideally not even the DB path. **Built and verified**
+   (Component 2, 2026-08-26): the installer's wizard page auto-detects a
    `.dblx` file in common R.Lynx locations or lets the owner click Browse
    for a native file picker, then writes it into `config.yaml` itself —
-   see the component table above. Interactive install verification is
-   the one piece still open.
+   see the component table above. The auto-detect/Browse page itself
+   wasn't click-through-exercised on this dev PC (it already had a
+   configured `config.yaml`, so the page was correctly skipped) — a small
+   residual gap, not a known bug.
 2. **The background watcher must start itself, silently, on its own, the
    moment the store PC is turned on — invisible to the till workers.**
    This is the one piece the approved spec assumed rather than designed:
@@ -329,16 +331,8 @@ everything not yet built:
    design effort making the local dashboard experience nicer; spend it on
    auto-start reliability and the remote/hub experience instead.
 
-Next build-order step per this reframing: finish Component 2 by actually
-running `dist-installer\Setup.exe` interactively on this dev PC (build it
-first — `dist/`, `build/`, `dist-installer/` are gitignored and get cleaned
-periodically, so rebuild with `.venv\Scripts\pyinstaller.exe
-packaging\pos-tool.spec --distpath dist --workpath build` then `iscc
-packaging\setup.iss` if they're missing) and clicking through the wizard —
-see the status banner in
-`docs/superpowers/plans/2026-08-26-db-autodetect-watcher-autostart.md` for
-exactly what to check. Needs a human at the keyboard for the UAC prompt and
-wizard clicks. Then Component 3 (auto-update mechanism) and Component 5
+Component 2 is now fully done, code and interactive verification both.
+Next build-order step: Component 3 (auto-update mechanism) and Component 5
 (hub + cross-store stock search), neither of which has a plan written yet.
 
 ## What's left (optional, not blocking)
