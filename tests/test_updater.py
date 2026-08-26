@@ -59,3 +59,119 @@ def test_current_version_catches_decode_failures(monkeypatch, tmp_path):
 
     # This should catch UnicodeDecodeError (a ValueError) and return (0, 0, 0)
     assert updater.current_version() == (0, 0, 0)
+
+
+import requests
+
+
+class FakeConfig:
+    def __init__(self, enabled=True, repo="rachadmihoubi/pos-tool"):
+        self._enabled = enabled
+        self._repo = repo
+
+    def get(self, key, default=None):
+        if key == "update.enabled":
+            return self._enabled
+        if key == "update.github_repo":
+            return self._repo
+        return default
+
+
+class FakeResponse:
+    def __init__(self, json_data=None, status_code=200):
+        self._json_data = json_data or {}
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"status {self.status_code}")
+
+    def json(self):
+        return self._json_data
+
+
+def _release_json(tag_name, with_assets=True):
+    assets = []
+    if with_assets:
+        assets = [
+            {"name": "Setup.exe", "browser_download_url": "https://example.test/Setup.exe"},
+            {"name": "Setup.exe.sha256",
+             "browser_download_url": "https://example.test/Setup.exe.sha256"},
+        ]
+    return {"tag_name": tag_name, "assets": assets}
+
+
+class TestCheckForUpdate:
+
+    def test_skips_when_not_frozen(self, monkeypatch):
+        monkeypatch.setattr(updater, "is_frozen", lambda: False)
+
+        def _fail_if_called(*a, **k):
+            raise AssertionError("must not make a network call when not frozen")
+        monkeypatch.setattr(updater.requests, "get", _fail_if_called)
+
+        assert updater.check_for_update(FakeConfig()) is None
+
+    def test_skips_when_disabled_in_config(self, monkeypatch):
+        monkeypatch.setattr(updater, "is_frozen", lambda: True)
+
+        def _fail_if_called(*a, **k):
+            raise AssertionError("must not make a network call when disabled")
+        monkeypatch.setattr(updater.requests, "get", _fail_if_called)
+
+        assert updater.check_for_update(FakeConfig(enabled=False)) is None
+
+    def test_returns_release_info_when_newer_version_available(self, monkeypatch):
+        monkeypatch.setattr(updater, "is_frozen", lambda: True)
+        monkeypatch.setattr(updater, "current_version", lambda: (1, 0, 0))
+        monkeypatch.setattr(updater.requests, "get",
+                            lambda url, **k: FakeResponse(_release_json("v1.2.0")))
+
+        result = updater.check_for_update(FakeConfig())
+
+        assert result == updater.ReleaseInfo(
+            version=(1, 2, 0), tag_name="v1.2.0",
+            installer_url="https://example.test/Setup.exe",
+            checksum_url="https://example.test/Setup.exe.sha256")
+
+    def test_returns_none_when_not_newer(self, monkeypatch):
+        monkeypatch.setattr(updater, "is_frozen", lambda: True)
+        monkeypatch.setattr(updater, "current_version", lambda: (1, 2, 0))
+        monkeypatch.setattr(updater.requests, "get",
+                            lambda url, **k: FakeResponse(_release_json("v1.2.0")))
+
+        assert updater.check_for_update(FakeConfig()) is None
+
+    def test_returns_none_when_equal_version(self, monkeypatch):
+        monkeypatch.setattr(updater, "is_frozen", lambda: True)
+        monkeypatch.setattr(updater, "current_version", lambda: (1, 2, 0))
+        monkeypatch.setattr(updater.requests, "get",
+                            lambda url, **k: FakeResponse(_release_json("v1.1.9")))
+
+        assert updater.check_for_update(FakeConfig()) is None
+
+    def test_returns_none_on_request_failure(self, monkeypatch):
+        monkeypatch.setattr(updater, "is_frozen", lambda: True)
+
+        def _raise(*a, **k):
+            raise requests.ConnectionError("offline")
+        monkeypatch.setattr(updater.requests, "get", _raise)
+
+        assert updater.check_for_update(FakeConfig()) is None
+
+    def test_returns_none_on_unparseable_tag(self, monkeypatch):
+        monkeypatch.setattr(updater, "is_frozen", lambda: True)
+        monkeypatch.setattr(updater, "current_version", lambda: (1, 0, 0))
+        monkeypatch.setattr(updater.requests, "get",
+                            lambda url, **k: FakeResponse(_release_json("not-a-version")))
+
+        assert updater.check_for_update(FakeConfig()) is None
+
+    def test_returns_none_when_assets_missing(self, monkeypatch):
+        monkeypatch.setattr(updater, "is_frozen", lambda: True)
+        monkeypatch.setattr(updater, "current_version", lambda: (1, 0, 0))
+        monkeypatch.setattr(
+            updater.requests, "get",
+            lambda url, **k: FakeResponse(_release_json("v1.2.0", with_assets=False)))
+
+        assert updater.check_for_update(FakeConfig()) is None
