@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shop Analysis - Store Hub</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Store Hub</h1>
+  <p>Pick a store's own dashboard, or search stock across every store.</p>
+</header>
+
+<section id="store-links" aria-label="Store dashboards"></section>
+
+<section id="stock-search">
+  <h2>Search stock across stores</h2>
+  <input id="search-box" type="search" placeholder="Item name or code...">
+  <div id="store-status"></div>
+  <table id="results-table">
+    <thead>
+      <tr><th>Store</th><th>Item #</th><th>Name</th><th>Stock</th><th>Price</th></tr>
+    </thead>
+    <tbody id="results-body"></tbody>
+  </table>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>
