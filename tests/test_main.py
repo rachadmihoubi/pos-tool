@@ -9,6 +9,8 @@ start-quiet.bat in the dev workflow) - this file only tests the dispatch.
 
 from __future__ import annotations
 
+import os
+
 import main as main_module
 
 
@@ -105,8 +107,21 @@ class TestApplyUpdateDispatch:
         monkeypatch.setattr(config_module, "setup_logging", lambda cfg: None)
         monkeypatch.setattr(updater_module, "check_and_apply_update", lambda cfg: False)
 
-        assert main_module.main(["--apply-update", "--data-dir", r"C:\Users\owner\AppData\Local\Shop Analysis"]) == 0
-        assert seen["env"] == r"C:\Users\owner\AppData\Local\Shop Analysis"
+        try:
+            assert main_module.main(["--apply-update", "--data-dir", r"C:\Users\owner\AppData\Local\Shop Analysis"]) == 0
+            assert seen["env"] == r"C:\Users\owner\AppData\Local\Shop Analysis"
+        finally:
+            # main._apply_update() sets this via plain os.environ[...] = ...
+            # (correct in the real one-shot elevated process it's meant for -
+            # it just exits right after). A monkeypatch.delenv() here would
+            # NOT actually clean up: monkeypatch's own teardown restores
+            # whatever value was present at the moment of ITS call - which
+            # by then is this test's own leaked value - putting it right
+            # back after the test "cleans up". Popping os.environ directly
+            # bypasses that tracking entirely. Caught for real when the
+            # leak made an unrelated test (test_photos.py) fail trying to
+            # write to this bogus path during a full-suite run.
+            os.environ.pop("SHOP_ANALYSIS_DATA_DIR", None)
 
     def test_no_data_dir_leaves_the_override_env_var_untouched(self, monkeypatch):
         monkeypatch.delenv("SHOP_ANALYSIS_DATA_DIR", raising=False)
