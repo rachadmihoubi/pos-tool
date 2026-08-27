@@ -240,20 +240,32 @@ attempted here.
    `export_static.py` now emit `stock.json` (item code, name, quantity,
    price - cost/margin stays out of this public file) into each store's
    own export directory.
-2. **Documentation research done (2026-08-27, see above); empirical
-   verification against a real disposable project NOT yet done.** The
-   endpoint, request shapes, and permission group are researched and
-   written up above - still needs a real create-two-applications-and-
-   confirm-precedence test against a throwaway Cloudflare project before
-   being trusted unattended in the real installer flow (same bar Component
-   4 held itself to - a plausible request body isn't the same as a
-   verified one).
-3. Build the one-time provisioning flow into the installer wizard
-   (Component 2's existing DB-detection page gains the optional Cloudflare
-   token field) - creates the Pages project + the two Access applications
-   per store (see the corrected two-application design above).
-4. Build the hub's own static page (switcher + search JS, CORS-aware
+2. **DONE (2026-08-27)** - empirically verified against a real disposable
+   project (see "Empirically verified" above): create-project, create both
+   Access applications, and confirmed most-specific-application precedence
+   (broad app 302s, narrow `/stock.json` app 200s) all worked exactly as
+   documented from Cloudflare's docs. Not yet verified: the token-minting
+   call (see step 3 below) - that endpoint has never been exercised from
+   this project.
+3. Build the hub's own static page first (switcher + search JS, CORS-aware
    fetch with graceful "store unreachable" handling per store, matching
-   the master spec's existing testing-plan requirement).
+   the master spec's existing testing-plan requirement) - fully unblocked,
+   reorder ahead of provisioning per 2026-08-27 advisor review.
+4. Build the one-time provisioning flow into the installer wizard
+   (Component 2's existing DB-detection page gains the optional Cloudflare
+   token field + an owner-email field, not a hardcoded constant) - creates
+   the Pages project + the two Access applications per store (see the
+   corrected two-application design above). **Blocked on one unverified
+   step**: minting the new narrow `Pages:Edit`-only token programmatically
+   is Cloudflare's *user*-scoped `POST /user/tokens` endpoint (a "User API
+   Tokens: Edit" permission group, distinct from the account-scoped
+   `Access: Apps and Policies:Edit` permission this component already
+   uses) - never called from this codebase, and it's unconfirmed whether a
+   token can even be granted permission to create another token. If it
+   can't, decision #5 above ("the installer should do everything
+   automatically") degrades to "rachad also pastes the narrow `Pages:Edit`
+   token into the wizard" - a real design change, the owner's call, not
+   silently assumed. Verify this against a real (disposable) token before
+   writing that task's code.
 5. Weighted-average cost - after all of the above, per the owner's own
    sequencing.
