@@ -1,7 +1,8 @@
 # Component 3 follow-up: fixing the update elevation gap
 
 Date: 2026-08-27
-Status: approved design, being built this session
+Status: built and real-machine verified this session (see "Real-machine
+verification" at the bottom)
 
 ## The gap this closes
 
@@ -146,3 +147,69 @@ let the caller exit).
   actually launch with no prompt, does `--data-dir` actually resolve to the
   real config) needs a human at the keyboard on a real Windows machine, not
   claimed here as done from a code read alone.
+
+## Real-machine verification (2026-08-27, this machine - the actual shop
+till PC, not a disposable dev box)
+
+Rather than building the full PyInstaller/Inno Setup installer (Inno Setup
+isn't currently installed on this machine, and installing new dev tooling
+onto a production till PC is its own decision worth a separate ask), the
+core claim - a `SYSTEM`/`/rl highest` scheduled task runs elevated with no
+UAC prompt, and `--data-dir` correctly redirects `poslib/paths.py` to the
+real config - was verified directly against the same code path (`main.py
+--apply-update`) run via the dev virtualenv's Python instead of a frozen
+exe. This exercises identical logic - `is_frozen()` only affects whether
+`check_for_update()` makes a network call, not the config/path resolution
+being tested.
+
+Because creating a `/ru SYSTEM` task itself requires admin rights (same
+finding as commit `10deb48`), and this session's own tool shell was not
+elevated (confirmed via `net session`), the owner ran the commands
+themselves in a separately-opened elevated PowerShell window - this
+session's shell tools are a distinct, non-elevated process even when an
+elevated terminal is open on screen, so commands had to be handed over
+rather than run directly.
+
+Steps taken and results:
+
+1. Created a uniquely-named test task (`Shop Analysis - Updater TEST`, not
+   the real task name, to avoid any collision) via
+   `schtasks --% /create /f /tn "Shop Analysis - Updater TEST" /tr "\"<venv
+   python>\" \"<repo>\main.py\" --apply-update --data-dir \"<repo>\""
+   /sc onlogon /rl highest /ru SYSTEM` (the `--%` stop-parsing token was
+   needed because PowerShell's own quote handling otherwise mangles a
+   command line containing embedded escaped quotes - `schtasks.exe` itself
+   expects the classic Win32 `\"`-escaped convention, same as
+   `packaging/setup.iss`'s `[Run]` Parameters already use). Succeeded.
+2. `schtasks /query /tn "Shop Analysis - Updater TEST" /v /fo list`
+   confirmed `Exécuter en tant qu'utilisateur: Système` and
+   `Type de planification: À l'ouverture de session` - the task was created
+   exactly as designed.
+3. `schtasks /run /tn "Shop Analysis - Updater TEST"` - the owner watched
+   the screen and confirmed **no UAC dialog, no visible window** appeared
+   at all.
+4. The expected log line (`check_for_update()`'s "Not a frozen build -
+   skipping update check.") did not appear in `logs/pos-tool.log` - not a
+   failure, but a reminder that message logs at DEBUG while this config's
+   `logging.level` is INFO, so it's correctly filtered. Exit code is the
+   real signal here, not that specific line.
+5. Re-querying showed `Dernier résultat: 0` (Last Result: 0, success).
+   Since `main._apply_update()` returns 1 (via `sys.exit`) on a
+   `ConfigError`, a `0` here specifically proves `get_config()` succeeded
+   under the `--data-dir` override reading the real `config.yaml` - not
+   just that *some* process launched.
+6. Deleted the test task
+   (`schtasks /delete /f /tn "Shop Analysis - Updater TEST"`); confirmed
+   gone via a subsequent query returning "file not found". The real
+   watcher's own log activity (Cloudflare pushes at 09:52 and 09:56/10:01)
+   continued undisturbed throughout - this test never touched the DB, the
+   live Cloudflare project, or the production scheduled tasks.
+
+Net result: the elevation mechanism (SYSTEM task -> no UAC -> correct
+config resolution via `--data-dir`) is now verified on real hardware, not
+just unit-tested. Still not verified: an actual frozen-build silent
+install end-to-end (that part's underlying download/verify/checksum logic
+was already verified in the prior Component 3 session against a real
+throwaway GitHub release - see the original design doc - so this was
+intentionally scoped to just the new elevation mechanism, not a re-test of
+already-proven logic).
