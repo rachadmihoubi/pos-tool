@@ -15,6 +15,13 @@ Two different questions, both frozen-mode-aware:
                     %LOCALAPPDATA%\\Shop Analysis, since a normal Windows
                     install (Program Files, or a Task Scheduler entry set to
                     /rl limited) is not reliably writable by the app itself.
+                    Overridable via SHOP_ANALYSIS_DATA_DIR - needed when the
+                    calling process's own %LOCALAPPDATA% is not the shop's
+                    (the elevated "Shop Analysis - Updater" scheduled task
+                    runs as SYSTEM, whose profile has no real config.yaml at
+                    all; main.py's --apply-update sets this from its
+                    --data-dir argument, itself baked in at install time -
+                    see docs/superpowers/specs/2026-08-27-update-elevation-fix.md).
 
 Every place in the codebase that used to compute PROJECT_ROOT by hand goes
 through here instead, so there is exactly one frozen/dev branch, not one per
@@ -42,6 +49,9 @@ def app_root() -> Path:
 
 def user_data_dir() -> Path:
     """Writable root: config.yaml, .env, cache.db, logs, digests, backups."""
+    override = os.environ.get("SHOP_ANALYSIS_DATA_DIR")
+    if override:
+        return Path(override)
     if is_frozen():
         base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
         return base / "Shop Analysis"

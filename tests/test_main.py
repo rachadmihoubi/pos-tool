@@ -50,3 +50,73 @@ def test_dashboard_flags_are_forwarded_to_sys_argv(monkeypatch):
     monkeypatch.setattr(main_module.app, "main", fake_app_main)
     assert main_module.main(["--no-browser"]) == 0
     assert seen_argv == [["app.py", "--no-browser"]]
+
+
+class FakeConfig:
+    pass
+
+
+def _patch_apply_update_deps(monkeypatch, *, config_error=None):
+    """
+    poslib.config/poslib.updater are imported lazily inside
+    main._apply_update, so they must be patched on the real modules, not on
+    main_module's own namespace.
+    """
+    import poslib.config as config_module
+    import poslib.updater as updater_module
+
+    calls = {"get_config": 0, "setup_logging": 0, "check_and_apply_update": []}
+
+    def fake_get_config():
+        calls["get_config"] += 1
+        if config_error is not None:
+            raise config_error
+        return FakeConfig()
+
+    monkeypatch.setattr(config_module, "get_config", fake_get_config)
+    monkeypatch.setattr(config_module, "setup_logging",
+                        lambda cfg: calls.__setitem__("setup_logging", calls["setup_logging"] + 1))
+    monkeypatch.setattr(updater_module, "check_and_apply_update",
+                        lambda cfg: calls["check_and_apply_update"].append(cfg) or True)
+    return calls
+
+
+class TestApplyUpdateDispatch:
+
+    def test_apply_update_flag_calls_check_and_apply_update(self, monkeypatch):
+        calls = _patch_apply_update_deps(monkeypatch)
+        assert main_module.main(["--apply-update"]) == 0
+        assert calls["get_config"] == 1
+        assert calls["setup_logging"] == 1
+        assert len(calls["check_and_apply_update"]) == 1
+
+    def test_data_dir_sets_the_override_env_var_before_loading_config(self, monkeypatch):
+        monkeypatch.delenv("SHOP_ANALYSIS_DATA_DIR", raising=False)
+        seen = {}
+
+        import poslib.config as config_module
+        import poslib.updater as updater_module
+
+        def fake_get_config():
+            seen["env"] = main_module.os.environ.get("SHOP_ANALYSIS_DATA_DIR")
+            return FakeConfig()
+
+        monkeypatch.setattr(config_module, "get_config", fake_get_config)
+        monkeypatch.setattr(config_module, "setup_logging", lambda cfg: None)
+        monkeypatch.setattr(updater_module, "check_and_apply_update", lambda cfg: False)
+
+        assert main_module.main(["--apply-update", "--data-dir", r"C:\Users\owner\AppData\Local\Shop Analysis"]) == 0
+        assert seen["env"] == r"C:\Users\owner\AppData\Local\Shop Analysis"
+
+    def test_no_data_dir_leaves_the_override_env_var_untouched(self, monkeypatch):
+        monkeypatch.delenv("SHOP_ANALYSIS_DATA_DIR", raising=False)
+        _patch_apply_update_deps(monkeypatch)
+        assert main_module.main(["--apply-update"]) == 0
+        assert "SHOP_ANALYSIS_DATA_DIR" not in main_module.os.environ
+
+    def test_bad_config_is_reported_and_returns_1_without_crashing(self, monkeypatch, capsys):
+        import poslib.config as config_module
+        _patch_apply_update_deps(monkeypatch, config_error=config_module.ConfigError("bad config"))
+
+        assert main_module.main(["--apply-update"]) == 1
+        assert "bad config" in capsys.readouterr().out

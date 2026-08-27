@@ -41,9 +41,28 @@ class TestUserDataDir:
 
     def test_dev_mode_matches_app_root(self, monkeypatch):
         monkeypatch.delattr(paths.sys, "frozen", raising=False)
+        monkeypatch.delenv("SHOP_ANALYSIS_DATA_DIR", raising=False)
         assert paths.user_data_dir() == paths.app_root()
 
     def test_frozen_mode_is_under_localappdata(self, monkeypatch, tmp_path):
         monkeypatch.setattr(paths.sys, "frozen", True, raising=False)
+        monkeypatch.delenv("SHOP_ANALYSIS_DATA_DIR", raising=False)
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         assert paths.user_data_dir() == tmp_path / "Shop Analysis"
+
+    def test_override_env_var_wins_even_when_frozen(self, monkeypatch, tmp_path):
+        # The elevated "Shop Analysis - Updater" task runs as SYSTEM, whose
+        # own %LOCALAPPDATA% is not the shop's - main.py's --apply-update
+        # sets this override so config.yaml/cache.db/logs still resolve to
+        # the real per-store data instead of SYSTEM's empty profile.
+        monkeypatch.setattr(paths.sys, "frozen", True, raising=False)
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "system-profile"))
+        override_dir = tmp_path / "real-shop-data"
+        monkeypatch.setenv("SHOP_ANALYSIS_DATA_DIR", str(override_dir))
+        assert paths.user_data_dir() == override_dir
+
+    def test_override_env_var_wins_in_dev_mode_too(self, monkeypatch, tmp_path):
+        monkeypatch.delattr(paths.sys, "frozen", raising=False)
+        override_dir = tmp_path / "somewhere-else"
+        monkeypatch.setenv("SHOP_ANALYSIS_DATA_DIR", str(override_dir))
+        assert paths.user_data_dir() == override_dir

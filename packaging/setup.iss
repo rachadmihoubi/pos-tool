@@ -32,9 +32,19 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Filename: "{app}\{#MyAppExeName}"; Description: "Open Shop Analysis now"; Flags: nowait postinstall skipifsilent
 Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Watcher"" /tr ""\""{app}\{#MyAppExeName}\"" --watcher"" /sc onlogon /rl limited /delay 0000:30"; Flags: runhidden
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--watcher"; Flags: nowait runhidden
+; Second, narrow, always-elevated helper task - the watcher above stays
+; deliberately de-elevated (least privilege), but the silent auto-update it
+; may find needs admin rights to install into Program Files. Running this
+; one as SYSTEM means it never hits an interactive UAC prompt (same
+; mechanism Windows' own built-in SilentCleanup task relies on) and needs no
+; stored password. --data-dir is this (elevated, installing) user's own
+; %LOCALAPPDATA%, captured now because SYSTEM's own %LOCALAPPDATA% is not
+; the shop's - see docs/superpowers/specs/2026-08-27-update-elevation-fix.md.
+Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Updater"" /tr ""\""{app}\{#MyAppExeName}\"" --apply-update --data-dir \""{localappdata}\Shop Analysis\"""" /sc onlogon /rl highest /ru SYSTEM /delay 0000:45"; Flags: runhidden
 
 [UninstallRun]
 Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""Shop Analysis - Watcher"""; Flags: runhidden; RunOnceId: "DeleteWatcherTask"
+Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""Shop Analysis - Updater"""; Flags: runhidden; RunOnceId: "DeleteUpdaterTask"
 
 [Code]
 var
@@ -234,7 +244,7 @@ begin
     if IsAdminInstallMode() then
       MsgBox(
         'Shop Analysis saves its settings under the current Windows user''s ' +
-        'own account, and the background updater that keeps your numbers ' +
+        'own account, and the background watcher that keeps your numbers ' +
         'current only starts automatically when that same person logs in.' + #13#10#13#10 +
         'If someone else normally uses this computer day to day (not the ' +
         'account you just installed as), please log off, log back in as ' +

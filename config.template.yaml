@@ -335,15 +335,20 @@ watcher:
 
 
 # -----------------------------------------------------------------------------
-#  AUTO-UPDATE - checks GitHub Releases once, at startup, for a newer
-#  version and installs it silently if found. Only ever active in a
-#  packaged install - has no effect when run from a git clone.
+#  AUTO-UPDATE - checked once per login by a separate, always-elevated
+#  "Shop Analysis - Updater" scheduled task (runs as SYSTEM, so it never
+#  hits an interactive UAC prompt) and installed silently if found. Only
+#  ever active in a packaged install - has no effect when run from a git
+#  clone. The regular watcher stays de-elevated and never touches this.
 #
-#  LEFT OFF ON PURPOSE. The silent-install step needs admin rights, but the
-#  watcher's scheduled task runs de-elevated - turning this on can hang the
-#  installer on a UAC prompt nobody is there to click through. Do not flip
-#  this to true on a real store PC until that gap is fixed (see CLAUDE.md's
-#  Component 3 status row / commit 10deb48).
+#  LEFT OFF ON PURPOSE. The install-time-elevation gap that used to block
+#  this (installer needs admin rights; the old design only had the
+#  de-elevated watcher available to run it) is fixed - see
+#  docs/superpowers/specs/2026-08-27-update-elevation-fix.md. What's left is
+#  the human-at-the-keyboard verification the original Component 3 status
+#  row already called for (watching a real silent install happen with no
+#  dialog, confirming the already-up-to-date no-op path) - not done yet, so
+#  this still defaults off until that's checked on a real machine.
 # -----------------------------------------------------------------------------
 update:
   enabled: false
