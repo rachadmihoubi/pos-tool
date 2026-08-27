@@ -189,6 +189,16 @@ def export(cfg: Config | None = None) -> Path:
         (out_dir / "stock.json").write_text(
             json.dumps(stock_records, ensure_ascii=False), encoding="utf-8")
 
+        # The hub page (a different Cloudflare Pages origin) fetches this
+        # file with the browser's fetch API, which enforces CORS - without
+        # this header the browser silently rejects the cross-origin
+        # response and the hub reports the store "unreachable" even though
+        # the file itself loads fine outside a browser (e.g. curl). See
+        # poslib/remote.py for why "_headers" has to actually be uploaded
+        # for Cloudflare to read this.
+        (out_dir / "_headers").write_text(
+            "/stock.json\n  Access-Control-Allow-Origin: *\n", encoding="utf-8")
+
         presets = _today_preset_ranges(today)
 
         for lang in LANGUAGES:

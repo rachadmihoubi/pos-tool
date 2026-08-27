@@ -250,6 +250,16 @@ class TestExport:
         exported_item_nos = {r["item_no"] for r in records}
         assert not (inactive_item_nos & exported_item_nos)
 
+    def test_headers_file_grants_cors_on_stock_json(self, cfg, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+
+        headers_path = out_dir / "_headers"
+        assert headers_path.is_file()
+        content = headers_path.read_text(encoding="utf-8")
+        assert "/stock.json" in content
+        assert "Access-Control-Allow-Origin" in content
+
 
 class TestStatusPayload:
 

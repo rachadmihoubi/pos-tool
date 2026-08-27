@@ -42,11 +42,15 @@ _UPLOAD_TIMEOUT_SECONDS = 120
 _MAX_FILES_PER_UPLOAD_BATCH = 500
 _MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 
-# Wrangler's own ignore list (packages/wrangler/src/pages/validate.ts) -
-# these are deployment form fields, not static assets. export_static.py
-# does not currently emit any of these, but skip them defensively rather
-# than assume that never changes.
-_IGNORED_FILE_NAMES = {"_worker.js", "_redirects", "_headers", "_routes.json"}
+# Wrangler's own ignore list (packages/wrangler/src/pages/validate.ts),
+# minus "_headers" - Cloudflare Pages DOES require that file in the
+# uploaded asset set (it isn't served itself, but Cloudflare parses it from
+# the deployment to apply response headers to other assets - see
+# export_static.py's stock.json CORS header). The rest really are
+# deployment form fields / Pages Functions source, not static assets;
+# export_static.py does not currently emit any of those, but skip them
+# defensively rather than assume that never changes.
+_IGNORED_FILE_NAMES = {"_worker.js", "_redirects", "_routes.json"}
 _IGNORED_DIR_NAMES = {"functions", "node_modules", ".git", ".wrangler"}
 
 
