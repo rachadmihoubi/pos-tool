@@ -262,14 +262,17 @@ dev-Python substitute above.
    `CloseApplications=force` evidently does not reach the *uninstaller*'s
    own file-removal pass the way it does the *installer*'s file-copy pass.
    Worked around manually this time (`taskkill`, then a follow-up
-   `Remove-Item -Recurse -Force` on the remainder) - not yet fixed in
-   `setup.iss` itself. A real fix would need the uninstaller to
-   explicitly stop `ShopAnalysis.exe` processes before removing files,
-   e.g. an `[UninstallRun]` `taskkill /F /IM ShopAnalysis.exe` step
-   ordered before the file-removal phase (Inno's own ordering rules for
-   this need checking) - left as a follow-up, not blocking, since this
-   only affects the uninstall path and the leftover files pose no risk
-   (dead code, not running, removed manually here).
+   `Remove-Item -Recurse -Force` on the remainder).
+
+   **Fixed and re-verified the same session**: added a
+   `taskkill /F /IM ShopAnalysis.exe` `[UninstallRun]` entry, ordered
+   before the two `schtasks /delete` lines (Inno's default
+   `[UninstallRun]` ordering runs before file removal). Reproduced the
+   exact failure condition again (installed, confirmed the `--watcher`
+   process was running) and re-ran the uninstall: the process was killed
+   automatically and `Program Files\Shop Analysis` was fully removed in
+   one pass, no manual cleanup needed. Both scheduled tasks confirmed
+   gone via `schtasks /query` as before.
 5. Full manual cleanup performed: killed the stray process, removed the
    `{app}` remainder, removed
    `%LOCALAPPDATA%\Shop Analysis` (config/cache/logs/backups created by
