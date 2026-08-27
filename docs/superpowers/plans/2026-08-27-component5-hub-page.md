@@ -664,7 +664,7 @@ this one is not.
 follow-up edit in a later, separate commit once real store URLs exist
 beyond the one already in Task 2's Step 1).
 
-- [ ] **Step 1: Confirm with the user before proceeding**
+- [x] **Step 1: Confirm with the user before proceeding**
 
 State plainly what's about to happen: creating a new Cloudflare Pages
 project (`promakeupmihoubi-hub` or similar) and Access applications on the
@@ -675,7 +675,15 @@ was only ever created on the disposable throwaway project used for
 verification, per the design spec's "Empirically verified" section). Wait
 for explicit go-ahead.
 
-- [ ] **Step 2: Add the missing `/stock.json` Bypass Access application to the live store**
+**Done 2026-08-27** - user confirmed via AskUserQuestion ("Yes, proceed").
+Performed with a temporary Cloudflare API token (`Pages:Edit` +
+`Access: Apps and Policies:Edit`, pasted in by the user for this one-time
+use, held in-memory only for the duration of the API calls, never written
+to `.env` or any file) - same disposable-credential pattern the design
+spec's own verification pass used. User was asked to revoke it once this
+task finished.
+
+- [x] **Step 2: Add the missing `/stock.json` Bypass Access application to the live store**
 
 Via the Cloudflare Zero Trust dashboard (or one throwaway API call, same
 shape as the spec's already-verified step 3): create a second Access
@@ -685,7 +693,29 @@ untouched. Wait ~1-2 minutes for Access propagation (per the spec's own
 note), then confirm `GET https://promakeupmihoubipos.pages.dev/stock.json`
 returns 200 with JSON, not a 302 redirect.
 
-- [ ] **Step 3: Create the hub's own Cloudflare Pages project**
+**Done 2026-08-27** - created via `POST .../access/apps` (app id
+`c5d4cdc6-afc4-43bd-984b-fd86454df55d`), `domain:
+"promakeupmihoubipos.pages.dev/stock.json"`, `decision: "bypass"`,
+`include: [{"everyone": {}}]` - exact shape confirmed against the existing
+owner-only app's config first. After propagation, `GET .../stock.json`
+returned **200 with real JSON**, `GET /` still returned **302** (broad
+owner-only app untouched) - most-specific-application precedence works on
+the real live project, not just the disposable test one.
+
+One real gap found and fixed in the same pass: `/stock.json` initially
+**404'd** even after the Bypass app worked correctly (proving Access
+propagation and precedence were both fine) - `export_static.py` gained
+`stock.json` support on `main` (commit `530c3e1`) but this dev PC's
+watcher had not re-exported/pushed since, since `_run_remote_push()` only
+fires when the ETL actually detects new source rows (`result.rebuilt`),
+and no new till activity had happened since. Fixed by running
+`export(cfg)` + `push_remote(cfg)` directly (the same calls
+`_run_remote_push()` makes, bypassing only the "did the data change" gate,
+using the store's normal persistent `.env` credentials - not the temporary
+provisioning token) - confirmed live afterward: `stock.json` returns 200
+with real item rows.
+
+- [x] **Step 3: Create the hub's own Cloudflare Pages project**
 
 Via the dashboard (Pages -> Create a project -> Direct Upload) or
 `tools/deploy_hub.py` itself, which creates the project implicitly on
@@ -699,7 +729,23 @@ python tools/deploy_hub.py --project promakeupmihoubi-hub
 Confirm the printed URL loads the hub page and its store link/search box
 render.
 
-- [ ] **Step 4: Gate the hub itself with an owner-only Access application**
+**Done 2026-08-27, with one correction to this step's own assumption**:
+Cloudflare's Direct Upload API does **not** create a project implicitly on
+first push - `_get_upload_token` (`poslib/remote.py`) calls
+`/pages/projects/{project}/upload-token`, which 404s against a
+project name that doesn't exist yet. The project must be created first via
+`POST /accounts/{id}/pages/projects` (`name`, `production_branch`) - done
+directly via the API (`tools/deploy_hub.py` itself has no
+project-creation fallback and would need one to match this step's
+original wording; not changed, since this is a one-off manual step and the
+error path is now known). Project created (`promakeupmihoubi-hub.pages.dev`,
+id `f5f0d906-2045-4b1b-8ab0-ad92021f7bce`), then `hub-site/` pushed via
+`push_remote(cfg, project=..., export_dir=...)` directly (in-process, same
+effect as `tools/deploy_hub.py` - the CLI wrapper wasn't invoked as a
+subprocess because the temp token was kept in-memory rather than written
+to `.env` for `get_config()` to read).
+
+- [x] **Step 4: Gate the hub itself with an owner-only Access application**
 
 The hub aggregates all onboarded stores' stock + prices in one place -
 wider exposure than any single store's `/stock.json` (which the owner
@@ -711,9 +757,19 @@ each store's `/stock.json` without a login, since those are separate
 origins already gated to `bypass` for that one path - only the hub page
 itself needs a login.
 
+**Done 2026-08-27** - created (app id `a972fabb-67e2-4217-ab16-29c885892857`),
+`domain: "promakeupmihoubi-hub.pages.dev"`, `decision: "allow"`,
+`include: [{"email": {"email": "rachadm23@gmail.com"}}]` - identical shape
+to each store's existing broad application. Confirmed live: `GET
+https://promakeupmihoubi-hub.pages.dev/` returns 302 to the Access login
+page.
+
 - [ ] **Step 5: Verify end-to-end from a real phone**
 
 Open the hub's URL from a phone (not this dev PC), confirm the Access
 login prompt appears, log in as the owner, confirm the store link opens
 the real store dashboard and the search box returns real stock rows for a
 known item.
+
+**Not done** - needs the user's own phone, not something verifiable from
+this session. Hub URL: `https://promakeupmihoubi-hub.pages.dev/`.
