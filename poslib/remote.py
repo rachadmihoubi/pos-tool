@@ -163,18 +163,32 @@ def _create_deployment(session: requests.Session, account_id: str, project: str,
     return data["result"].get("url")
 
 
-def push_remote(cfg: Config) -> bool:
+def push_remote(cfg: Config, *, project: str | None = None,
+                 export_dir: Path | None = None) -> bool:
     """
-    Deploy the export directory to Cloudflare Pages. Returns True on
-    success, False on any problem at all - never raises.
+    Deploy a directory to Cloudflare Pages. Returns True on success, False
+    on any problem at all - never raises.
+
+    project/export_dir let a caller push an arbitrary directory to an
+    arbitrary project under the same account credentials, instead of the
+    store's own config.yaml-configured project - used by
+    tools/deploy_hub.py to push the multi-store hub (which has no
+    config.yaml/remote-site of its own) with this same proven upload code
+    rather than reimplementing it. Every store's own watcher call
+    (push_remote(cfg), no extra arguments) is unaffected - both default to
+    None, which falls back to today's config-read behavior exactly.
     """
-    project = str(cfg.get("remote.cloudflare_project_name", "")).strip()
+    if project is None:
+        project = str(cfg.get("remote.cloudflare_project_name", "")).strip()
+    else:
+        project = project.strip()
     if not project:
         log.warning("remote.cloudflare_project_name is not set - skipping push. "
                     "See SETUP.md to create a Cloudflare Pages project.")
         return False
 
-    export_dir = cfg.path("remote.export_dir", "remote-site")
+    if export_dir is None:
+        export_dir = cfg.path("remote.export_dir", "remote-site")
     if not export_dir.is_dir():
         log.warning("Nothing to push yet - %s does not exist. Run the export first.",
                     export_dir)

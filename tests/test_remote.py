@@ -151,6 +151,28 @@ class TestPushRemoteHappyPath:
             assert remote.push_remote(cfg) is True
         assert "https://my-shop.pages.dev" in caplog.text
 
+    def test_explicit_project_overrides_config_project(self, tmp_path, monkeypatch):
+        export_dir = _make_export_dir(tmp_path, {"index.html": "hi"})
+        cfg = FakeConfig(project="", export_dir=export_dir)  # config has no project set
+        session = FakeSession(deploy_response=_ok({"url": "https://hub-site.pages.dev"}))
+        _patch_session(monkeypatch, session)
+
+        result = remote.push_remote(cfg, project="hub-site")
+
+        assert result is True
+        deploy_call = [c for c in session.calls if c[0] == "POST" and c[1].endswith("/deployments")][0]
+        assert "/pages/projects/hub-site/" in deploy_call[1]
+
+    def test_explicit_export_dir_overrides_config_export_dir(self, tmp_path, monkeypatch):
+        real_dir = _make_export_dir(tmp_path, {"index.html": "real"})
+        cfg = FakeConfig(export_dir=tmp_path / "does-not-exist")  # config points nowhere
+        session = FakeSession()
+        _patch_session(monkeypatch, session)
+
+        result = remote.push_remote(cfg, export_dir=real_dir)
+
+        assert result is True
+
     def test_upload_token_request_uses_account_prefixed_url_and_api_token(self, tmp_path, monkeypatch):
         export_dir = _make_export_dir(tmp_path, {"index.html": "hi"})
         cfg = FakeConfig(export_dir=export_dir)
