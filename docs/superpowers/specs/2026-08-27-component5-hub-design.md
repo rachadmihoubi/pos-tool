@@ -150,26 +150,57 @@ own docs this session (not yet exercised against a real account):
   auth - what `/stock.json`'s narrower application needs), `non_identity`,
   `deny`.
 
-**Still genuinely unverified** - documentation research is not the same
-as a working call against a real account, and this project's own standing
-rule is to verify empirically, not trust a plausible-looking request body
-(the exact lesson of `poslib/remote.py`'s own `_cf_hash` docstring - a
-malformed request to a Cloudflare API can report success while doing
-nothing real). Before this is wired into the real installer:
-- Confirm the two-application-per-store shape (broad Allow + narrow
-  Bypass on `/stock.json`) actually resolves the way "most specific
-  application wins" is documented to work, against a real disposable
-  project.
-- Confirm the exact required request shape for `domain` when scoping to a
-  single path (`host/path` in one string, as sketched above, vs. some
-  other field) - not confirmed from docs alone.
-- Confirm the CORS side actually works end to end: a `_headers` file
-  granting `Access-Control-Allow-Origin` for the hub's origin on the now-
-  Bypass-gated `/stock.json`, fetched cross-origin from the hub's real JS.
+### Empirically verified (2026-08-27, disposable throwaway project + token)
 
-Same precedent as Component 4's own testing: create disposable throwaway
-resources via the API, verify for real, then tear them down - not assumed
-correct from reading Cloudflare's docs alone.
+Not just documentation research this time - the whole mechanism was
+exercised for real, following the same "create disposable resources via
+the API, verify for real, tear them down" precedent Component 4 already
+established. Using a temporary Cloudflare API token (scoped to `Pages:Edit`
++ `Access: Apps and Policies:Edit`, created by the owner specifically for
+this test, revoked afterward):
+
+1. Created a throwaway Pages project (`postool-verify-<timestamp>`),
+   pushed a tiny test site (`index.html` + `stock.json`) via
+   `poslib/remote.py`'s existing, already-built upload flow - reused
+   directly, not reimplemented.
+2. Created Access application #1: `domain:
+   "postool-verify-....pages.dev"` (the whole hostname), `decision:
+   "allow"`, `include: [{"email": {"email": "<owner's address>"}}]`.
+3. Created Access application #2: `domain:
+   "postool-verify-....pages.dev/stock.json"` (`host/path` in one string -
+   confirms the exact request shape that was unconfirmed from docs alone),
+   `decision: "bypass"`, `include: [{"everyone": {}}]`.
+4. After Access's normal 1-2 minute propagation delay: `GET /` returned
+   **302**, redirecting to `<team>.cloudflareaccess.com/cdn-cgi/access/
+   login/...` - the broad application's login gate, working exactly as
+   before. `GET /stock.json` returned **200 with the real JSON body,
+   directly, no redirect at all** - the narrow Bypass application won for
+   that one path, precisely as "most specific application wins" claims.
+   **This is the core of the whole Component 5 hub design, and it now has
+   a real, observed confirmation, not just a plausible read of Cloudflare's
+   docs.**
+5. CORS: turned out to need no extra work at all. `Access-Control-Allow-
+   Origin: *` is present on `/stock.json`'s response by default, with no
+   `_headers` file at all - confirmed by deploying two different
+   `_headers` files (one setting a specific origin, one adding a
+   distinctive custom marker header) and observing neither had any visible
+   effect; the response stayed exactly `Access-Control-Allow-Origin: *`
+   both times. Whether that's because `_headers` genuinely isn't honored
+   on a Bypass-gated path, or some other reason, wasn't run down further -
+   not worth chasing since the *outcome already satisfies what the hub's
+   JS needs* (an unauthenticated, wildcard-CORS-permitted `fetch()` from
+   any origin succeeds). Revisit only if a narrower, non-wildcard CORS
+   policy is ever wanted instead.
+6. Cleanup: both Access applications deleted, the throwaway Pages project
+   deleted, the temporary API token revoked by the owner - nothing left
+   behind on the real account from this test.
+
+Not yet exercised: the full installer-driven provisioning flow itself
+(creating these programmatically as one automated sequence during a real
+install, with the one-time-use powerful token pattern described above) -
+this test manually drove each API call to verify the *mechanism*; wiring
+it into `packaging/setup.iss`/the installer wizard is still a separate,
+not-yet-built step.
 
 ## Deferred to after this component: weighted-average cost
 
