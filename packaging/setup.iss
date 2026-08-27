@@ -43,6 +43,14 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "--watcher"; Flags: nowait runhid
 Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Updater"" /tr ""\""{app}\{#MyAppExeName}\"" --apply-update --data-dir \""{localappdata}\Shop Analysis\"""" /sc onlogon /rl highest /ru SYSTEM /delay 0000:45"; Flags: runhidden
 
 [UninstallRun]
+; Runs before file removal (Inno's default [UninstallRun] ordering). Without
+; this, a still-running --watcher (or an elevated --apply-update mid-flight)
+; holds some .pyd/.dll files open, so the file-removal pass that follows
+; leaves a partial {app} behind - found during this fix's own real-machine
+; verification (see docs/superpowers/specs/2026-08-27-update-elevation-fix.md).
+; Exit code is ignored if the process isn't running, same as the schtasks
+; /delete lines below already tolerate a missing task.
+Filename: "taskkill.exe"; Parameters: "/F /IM ""{#MyAppExeName}"""; Flags: runhidden; RunOnceId: "KillRunningApp"
 Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""Shop Analysis - Watcher"""; Flags: runhidden; RunOnceId: "DeleteWatcherTask"
 Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""Shop Analysis - Updater"""; Flags: runhidden; RunOnceId: "DeleteUpdaterTask"
 
