@@ -32,11 +32,23 @@ would need the owner to own and configure a real domain).
 2. **Each store's own export additionally includes one file,
    `stock.json`**, and that one path (only that path — everything else on
    the store's domain stays gated to the owner's email exactly as today)
-   is made reachable without an Access login, via a Cloudflare Access
-   **path-scoped Bypass policy** on that store's existing Access
-   application. This is what makes a plain, unauthenticated,
-   CORS-permitted `fetch()` from the hub's JS actually work, with no
-   cross-domain session-sharing problem to solve.
+   is made reachable without an Access login. **Correction (researched,
+   not assumed - Cloudflare does not support a path-scoped policy inside
+   one Access application):** a policy cannot be attached to a single path
+   within an existing application. The actual mechanism is **a second,
+   separate Access application**, scoped just to that store's
+   `.../stock.json` destination, carrying a Bypass policy (`decision:
+   "bypass"`) - while the existing, broader application (`.../*`, the
+   owner-only Allow policy already in place) is untouched. Cloudflare
+   evaluates the *most specific* matching application first, so the
+   narrower `/stock.json` application's Bypass policy wins for that one
+   path and the broader one still gates everything else. So each store
+   ends up with **two** Access applications, not one edited application -
+   this changes the provisioning automation below (create two
+   applications + two policies, not one application + two policies).
+   This is what makes a plain, unauthenticated, CORS-permitted `fetch()`
+   from the hub's JS actually work, with no cross-domain session-sharing
+   problem to solve.
 3. **`stock.json` includes price, not just name + quantity** — the
    owner explicitly asked for this. Retail prices are visible to anyone
    in the physical store anyway, so this is a smaller exposure than, say,
@@ -79,17 +91,22 @@ the installer binary, never persisted anywhere after setup completes:
    only when setting up a *new* store (left blank on every ordinary
    customer-facing repeat-install/update, where nothing Cloudflare-side
    needs to change).
-2. If provided, the installer calls Cloudflare's REST API, in order: create
-   a new Pages project for this store -> create an Access application
-   scoped to that project's `*.pages.dev` hostname -> add the owner-only
-   Identity policy (same "Allow, Include: Emails" shape already used for
-   `promakeupmihoubipos`) -> add the `/stock.json` Bypass policy -> push
-   the first deployment (reusing the exact upload flow already built in
-   `poslib/remote.py`) -> mint a **new, narrow** `Pages:Edit`-only token
-   scoped to this account (the same account-wide constraint Component 4
-   already documented - Cloudflare has no finer per-project scoping) and
-   write *that* one into `config.yaml`/`.env` for the watcher's ongoing
-   use.
+2. If provided, the installer calls Cloudflare's REST API, in order:
+   create a new Pages project for this store -> create Access
+   application #1 (`POST .../access/apps`, `type: "self_hosted"`) scoped
+   to that project's whole `*.pages.dev` hostname, with the owner-only
+   Identity policy embedded (`policies: [{"decision": "allow", "include":
+   [{"email": {"email": "<owner's address>"}}]}]` - same shape already
+   used for `promakeupmihoubipos`) -> create Access application #2, a
+   *second, narrower* application scoped to just that hostname's
+   `/stock.json` path, with a Bypass policy (`decision: "bypass"`) - see
+   the correction above for why this needs its own application, not a
+   second policy on application #1 -> push the first deployment (reusing
+   the exact upload flow already built in `poslib/remote.py`) -> mint a
+   **new, narrow** `Pages:Edit`-only token scoped to this account (the
+   same account-wide constraint Component 4 already documented -
+   Cloudflare has no finer per-project scoping) and write *that* one into
+   `config.yaml`/`.env` for the watcher's ongoing use.
 3. The one-time powerful token itself is used only for the duration of
    that install run and is never written to disk - it lives only in the
    installer process's own memory for the few seconds this takes, the
@@ -97,13 +114,61 @@ the installer binary, never persisted anywhere after setup completes:
    `packaging/publish_release.py` already uses for GitHub release
    credentials on rachad's own dev PC.
 
-This is new, unverified ground - Cloudflare's Access Management API
-(distinct from the Pages Direct Upload API already reverse-engineered and
-documented in `poslib/remote.py`) has not been used from this codebase
-before. It needs its own research-and-verify pass (most likely against a
-disposable throwaway project + Access app, created and torn down via the
-API, the same precedent Component 4 already established) before being
-trusted to run unattended against a real store's setup - not assumed
+### What's confirmed from documentation research (2026-08-27) vs. still unverified
+
+Cloudflare's Access Management API (distinct from the Pages Direct Upload
+API already reverse-engineered and documented in `poslib/remote.py`) has
+not been called from this codebase before. Researched against Cloudflare's
+own docs this session (not yet exercised against a real account):
+
+- **Endpoint**: `POST /accounts/{account_id}/access/apps` creates an
+  application; policies can be embedded directly in that same call's
+  `policies` array (no separate call needed per policy), e.g.:
+  ```json
+  {
+    "type": "self_hosted",
+    "name": "Store A - stock.json",
+    "domain": "store-a.pages.dev/stock.json",
+    "policies": [{"decision": "bypass", "include": [{"everyone": {}}]}]
+  }
+  ```
+  and, for the existing-shape owner-only app:
+  ```json
+  {
+    "type": "self_hosted",
+    "name": "Store A",
+    "domain": "store-a.pages.dev",
+    "policies": [{"decision": "allow",
+                  "include": [{"email": {"email": "<owner's address>"}}]}]
+  }
+  ```
+- **Token permission group**: "Access: Apps and Policies" at **Edit**
+  level - a distinct permission group from `Pages:Edit`, confirming this
+  really is a more powerful credential than the one that stays on the till
+  PC long-term, not just a reused scope.
+- **Policy `decision` values**: `allow` (identity-based), `bypass` (no
+  auth - what `/stock.json`'s narrower application needs), `non_identity`,
+  `deny`.
+
+**Still genuinely unverified** - documentation research is not the same
+as a working call against a real account, and this project's own standing
+rule is to verify empirically, not trust a plausible-looking request body
+(the exact lesson of `poslib/remote.py`'s own `_cf_hash` docstring - a
+malformed request to a Cloudflare API can report success while doing
+nothing real). Before this is wired into the real installer:
+- Confirm the two-application-per-store shape (broad Allow + narrow
+  Bypass on `/stock.json`) actually resolves the way "most specific
+  application wins" is documented to work, against a real disposable
+  project.
+- Confirm the exact required request shape for `domain` when scoping to a
+  single path (`host/path` in one string, as sketched above, vs. some
+  other field) - not confirmed from docs alone.
+- Confirm the CORS side actually works end to end: a `_headers` file
+  granting `Access-Control-Allow-Origin` for the hub's origin on the now-
+  Bypass-gated `/stock.json`, fetched cross-origin from the hub's real JS.
+
+Same precedent as Component 4's own testing: create disposable throwaway
+resources via the API, verify for real, then tear them down - not assumed
 correct from reading Cloudflare's docs alone.
 
 ## Deferred to after this component: weighted-average cost
@@ -140,18 +205,22 @@ attempted here.
 
 ## What's next (build order for this component)
 
-1. Extend `poslib/metrics.py`'s stock catalog data + `export_static.py` to
-   emit a `stock.json` (item name, quantity, price - cost/margin stays out
-   of this public file) into each store's own export directory. Low risk,
-   no Cloudflare-API research needed, useful regardless of how the
-   provisioning-automation piece turns out.
-2. Research and verify Cloudflare's Access Management API (create
-   application, create Identity policy, create Bypass policy) against a
-   disposable throwaway project - before wiring it into the real
-   installer flow.
+1. **DONE (2026-08-27)** - `poslib/metrics.py`'s stock catalog data +
+   `export_static.py` now emit `stock.json` (item code, name, quantity,
+   price - cost/margin stays out of this public file) into each store's
+   own export directory.
+2. **Documentation research done (2026-08-27, see above); empirical
+   verification against a real disposable project NOT yet done.** The
+   endpoint, request shapes, and permission group are researched and
+   written up above - still needs a real create-two-applications-and-
+   confirm-precedence test against a throwaway Cloudflare project before
+   being trusted unattended in the real installer flow (same bar Component
+   4 held itself to - a plausible request body isn't the same as a
+   verified one).
 3. Build the one-time provisioning flow into the installer wizard
    (Component 2's existing DB-detection page gains the optional Cloudflare
-   token field).
+   token field) - creates the Pages project + the two Access applications
+   per store (see the corrected two-application design above).
 4. Build the hub's own static page (switcher + search JS, CORS-aware
    fetch with graceful "store unreachable" handling per store, matching
    the master spec's existing testing-plan requirement).
