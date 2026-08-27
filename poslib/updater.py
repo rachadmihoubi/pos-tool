@@ -101,7 +101,7 @@ def check_for_update(cfg: Config) -> ReleaseInfo | None:
     if not is_frozen():
         log.debug("Not a frozen build - skipping update check.")
         return None
-    if not bool(cfg.get("update.enabled", True)):
+    if not bool(cfg.get("update.enabled", False)):
         log.info("Auto-update disabled via config - skipping check.")
         return None
 
