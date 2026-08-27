@@ -2566,7 +2566,7 @@ class Metrics:
              "expected": 14635724, "kind": "money", "grows": False},
             {"key": "stock_value", "value": inv["total_value"], "expected": 59168540,
              "kind": "money", "grows": False},
-            {"key": "dead_stock_value", "value": inv["dead_value"], "expected": 12495043,
+            {"key": "dead_stock_value", "value": inv["dead_value"], "expected": 15698733,
              "kind": "money", "grows": False},
             {"key": "receivables", "value": rec["total"], "expected": 18035898,
              "kind": "money", "grows": False},

@@ -5,7 +5,11 @@ installer, computes its checksum, and publishes both to GitHub Releases.
 
 Run by hand on this dev PC when rachad wants to ship an update. Not part
 of the shipped app - store PCs never see this file. Requires pyinstaller
-(.venv), Inno Setup's `iscc` on PATH, and the `gh` CLI already logged in.
+(.venv), Inno Setup's `iscc` (found on PATH if present, else this dev PC's
+known install location), and the `gh` CLI already logged in. Commits and
+pushes the VERSION/setup.iss bump before publishing - `gh release create`
+tags whatever the remote's default branch HEAD is, so without the push the
+tag would land on the pre-bump commit.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -22,6 +27,7 @@ SETUP_ISS = PROJECT_ROOT / "packaging" / "setup.iss"
 INSTALLER_PATH = PROJECT_ROOT / "dist-installer" / "Setup.exe"
 CHECKSUM_PATH = PROJECT_ROOT / "dist-installer" / "Setup.exe.sha256"
 REPO = "rachadmihoubi/pos-tool"
+_ISCC_FALLBACK = r"C:\Users\RACHAD\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
 
 
 def _read_version() -> tuple[int, int, int]:
@@ -58,13 +64,24 @@ def _build() -> None:
     _run([str(PROJECT_ROOT / ".venv" / "Scripts" / "pyinstaller.exe"),
           "packaging/pos-tool.spec", "--distpath", "dist", "--workpath", "build",
           "--noconfirm"])
-    _run([r"C:\Users\RACHAD\AppData\Local\Programs\Inno Setup 6\ISCC.exe", "packaging/setup.iss"])
+    iscc = shutil.which("iscc") or shutil.which("ISCC") or _ISCC_FALLBACK
+    _run([iscc, "packaging/setup.iss"])
 
 
 def _write_checksum() -> str:
     digest = hashlib.sha256(INSTALLER_PATH.read_bytes()).hexdigest()
     CHECKSUM_PATH.write_text(f"{digest}  Setup.exe\n", encoding="utf-8")
     return digest
+
+
+def _commit_version_bump(version_text: str) -> None:
+    _run(["git", "add", str(VERSION_FILE), str(SETUP_ISS)])
+    staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=PROJECT_ROOT)
+    if staged.returncode != 0:
+        _run(["git", "commit", "-m", f"chore(release): bump version to {version_text}"])
+    else:
+        print("Version bump already committed - nothing to commit.")
+    _run(["git", "push"])
 
 
 def _publish(version_text: str) -> None:
@@ -97,6 +114,7 @@ def main() -> int:
     digest = _write_checksum()
     print(f"Setup.exe sha256: {digest}")
 
+    _commit_version_bump(version_text)
     _publish(version_text)
     print(f"Published v{version_text} to {REPO}.")
     return 0

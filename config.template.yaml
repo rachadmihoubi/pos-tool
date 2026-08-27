@@ -338,9 +338,15 @@ watcher:
 #  AUTO-UPDATE - checks GitHub Releases once, at startup, for a newer
 #  version and installs it silently if found. Only ever active in a
 #  packaged install - has no effect when run from a git clone.
+#
+#  LEFT OFF ON PURPOSE. The silent-install step needs admin rights, but the
+#  watcher's scheduled task runs de-elevated - turning this on can hang the
+#  installer on a UAC prompt nobody is there to click through. Do not flip
+#  this to true on a real store PC until that gap is fixed (see CLAUDE.md's
+#  Component 3 status row / commit 10deb48).
 # -----------------------------------------------------------------------------
 update:
-  enabled: true
+  enabled: false
 
   # The GitHub repo releases are published to.
   github_repo: "rachadmihoubi/pos-tool"

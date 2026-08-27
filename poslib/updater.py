@@ -99,12 +99,15 @@ def check_for_update(cfg: Config) -> ReleaseInfo | None:
     docstring for why. Never raises.
     """
     if not is_frozen():
+        log.debug("Not a frozen build - skipping update check.")
         return None
     if not bool(cfg.get("update.enabled", True)):
+        log.info("Auto-update disabled via config - skipping check.")
         return None
 
     repo = str(cfg.get("update.github_repo", "")).strip()
     if not repo:
+        log.warning("update.github_repo is not set - cannot check for updates.")
         return None
 
     release = _fetch_latest_release(repo)
@@ -236,6 +239,6 @@ def check_and_apply_update(cfg: Config) -> bool:
                   release.tag_name)
         return True
 
-    except OSError as exc:
+    except Exception as exc:
         log.warning("Could not apply update: %s", exc)
         return False

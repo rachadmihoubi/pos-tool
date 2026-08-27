@@ -223,7 +223,11 @@ class TestDownloadAndVerify:
             return FakeResponse2(b"unused")
         monkeypatch.setattr(updater.requests, "get", _fake_get)
 
-        assert updater.download_and_verify(self._release(), tmp_path) is None
+        result = updater.download_and_verify(self._release(), tmp_path)
+
+        assert result is None
+        assert not (tmp_path / "Setup.exe").exists()
+        assert not (tmp_path / "Setup.exe.sha256").exists()
 
     def test_returns_none_when_installer_download_fails(self, monkeypatch, tmp_path):
         digest = hashlib.sha256(b"x").hexdigest()
@@ -234,7 +238,11 @@ class TestDownloadAndVerify:
             raise requests.ConnectionError("offline")
         monkeypatch.setattr(updater.requests, "get", _fake_get)
 
-        assert updater.download_and_verify(self._release(), tmp_path) is None
+        result = updater.download_and_verify(self._release(), tmp_path)
+
+        assert result is None
+        assert not (tmp_path / "Setup.exe").exists()
+        assert not (tmp_path / "Setup.exe.sha256").exists()
 
     def test_returns_none_and_cleans_up_on_empty_checksum_file(
             self, monkeypatch, tmp_path):
