@@ -38,6 +38,14 @@ preset needs its own pre-rendered file instead. `daily.json` is a compact
 per-day revenue rollup (see `Metrics.daily_rollup()`) that lets the Today
 page's remote custom-range picker sum an arbitrary range client-side,
 since a truly arbitrary range can't be pre-rendered at all.
+
+`stock.json` (item code, name, quantity, price - no cost/margin) is for
+Component 5's multi-store hub: a cross-store stock search whose JS fetches
+this one file directly from each store's own Cloudflare Pages project. See
+docs/superpowers/specs/2026-08-27-component5-hub-design.md for why this
+one path needs an Access Bypass policy (everything else on this domain
+stays gated to the owner's email as before) and why the hub can't simply
+share a login session across stores.
 """
 
 from __future__ import annotations
@@ -47,6 +55,8 @@ import json
 import logging
 import shutil
 from pathlib import Path
+
+import pandas as pd
 
 from poslib.config import (PROJECT_ROOT, REMOTE_TICKET_WINDOW_DAYS, Config,
                            get_config, setup_logging)
@@ -158,6 +168,26 @@ def export(cfg: Config | None = None) -> Path:
             })
         (out_dir / "daily.json").write_text(
             json.dumps(daily_records, ensure_ascii=False), encoding="utf-8")
+
+        # For Component 5 (the multi-store hub's cross-store stock search -
+        # see docs/superpowers/specs/2026-08-27-component5-hub-design.md).
+        # Deliberately name/code/quantity/price only - no cost, no margin,
+        # no family/internal IDs - since this one file is reachable without
+        # an Access login (a path-scoped Bypass policy, everything else on
+        # this store's domain stays gated). Inactive (discontinued) items
+        # are excluded - a cross-store "do they have it" search has no use
+        # for a product this store no longer carries at all.
+        catalog = m.catalog()
+        stock_records = []
+        for _, row in catalog[~catalog["inactive"]].iterrows():
+            stock_records.append({
+                "item_no": str(row["item_no"]) if pd.notna(row["item_no"]) else None,
+                "name": row["item_name"],
+                "stock": float(row["stock"]) if pd.notna(row["stock"]) else None,
+                "price": float(row["price"]) if pd.notna(row["price"]) else None,
+            })
+        (out_dir / "stock.json").write_text(
+            json.dumps(stock_records, ensure_ascii=False), encoding="utf-8")
 
         presets = _today_preset_ranges(today)
 

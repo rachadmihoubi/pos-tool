@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from poslib.config import Config
 from poslib.i18n import LANGUAGES
 
@@ -217,6 +219,36 @@ class TestExport:
                 assert key in records[0]
             dates = [r["date"] for r in records]
             assert dates == sorted(dates), "daily.json must be chronological for the client-side slicer"
+
+    def test_stock_json_is_written_and_valid(self, cfg, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+
+        stock_path = out_dir / "stock.json"
+        assert stock_path.is_file()
+        records = json.loads(stock_path.read_text(encoding="utf-8"))
+        assert isinstance(records, list)
+        if records:
+            for key in ("item_no", "name", "stock", "price"):
+                assert key in records[0]
+            # No cost/margin/family/internal IDs - this one file is
+            # reachable without an Access login (see
+            # docs/superpowers/specs/2026-08-27-component5-hub-design.md).
+            for forbidden in ("cost", "margin", "family_name", "item_id", "inactive"):
+                assert forbidden not in records[0]
+
+    def test_stock_json_excludes_inactive_items(self, cfg, metrics, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+
+        catalog = metrics.catalog()
+        if not catalog["inactive"].any():
+            pytest.skip("no inactive items in this database to check against")
+        inactive_item_nos = set(catalog.loc[catalog["inactive"], "item_no"].astype(str))
+
+        out_dir = export_static.export(cfg)
+        records = json.loads((out_dir / "stock.json").read_text(encoding="utf-8"))
+        exported_item_nos = {r["item_no"] for r in records}
+        assert not (inactive_item_nos & exported_item_nos)
 
 
 class TestStatusPayload:
