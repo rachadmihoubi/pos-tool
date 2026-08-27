@@ -206,10 +206,83 @@ Steps taken and results:
    live Cloudflare project, or the production scheduled tasks.
 
 Net result: the elevation mechanism (SYSTEM task -> no UAC -> correct
-config resolution via `--data-dir`) is now verified on real hardware, not
-just unit-tested. Still not verified: an actual frozen-build silent
-install end-to-end (that part's underlying download/verify/checksum logic
-was already verified in the prior Component 3 session against a real
-throwaway GitHub release - see the original design doc - so this was
-intentionally scoped to just the new elevation mechanism, not a re-test of
-already-proven logic).
+config resolution via `--data-dir`) is verified on real hardware, not just
+unit-tested.
+
+## Full frozen-build installer verification (2026-08-27, same session,
+same machine)
+
+Inno Setup was installed afterward (`winget install --id
+JRSoftware.InnoSetup`, per-user install under
+`%LOCALAPPDATA%\Programs\Inno Setup 6` since the shell doing the winget
+install wasn't elevated either) so the real end-to-end path - PyInstaller
+build -> Inno Setup compile -> real `Setup.exe` -> real install -> real
+elevated task -> real uninstall - could be exercised too, not just the
+dev-Python substitute above.
+
+1. Built with the existing `packaging/pos-tool.spec` and
+   `packaging/setup.iss`, unchanged. To let the install run fully
+   unattended (`/VERYSILENT`), `%LOCALAPPDATA%\Shop Analysis\config.yaml`
+   was pre-seeded from `config.template.yaml` with the real (read-only)
+   `E:/Base de données4.dblx` path filled in - the same effect
+   `WriteDatabaseConfig` has on a repeat install, so `ConfigIsConfigured()`
+   correctly skipped the interactive DB-browse wizard page.
+   `config.template.yaml`'s `remote.enabled: false` and `update.enabled:
+   false` defaults meant this fresh install's own watcher never touched
+   the live Cloudflare project during the test.
+2. Ran `Setup.exe /VERYSILENT /NORESTART /SUPPRESSMSGBOXES` from the
+   owner's elevated window. Confirmed via `schtasks /query`:
+   - `"Shop Analysis - Watcher"`: `Exécuter en tant qu'utilisateur:
+     Quick Tech`, points at `"C:\Program Files\Shop
+     Analysis\ShopAnalysis.exe" --watcher` - correct, de-elevated, as
+     designed.
+   - `"Shop Analysis - Updater"`: `Exécuter en tant qu'utilisateur:
+     Système`, command line
+     `"C:\Program Files\Shop Analysis\ShopAnalysis.exe" --apply-update
+     --data-dir "C:\Users\Quick Tech\AppData\Local\Shop Analysis"` - the
+     installer correctly baked the installing user's real
+     `%LOCALAPPDATA%` in at install time, exactly as designed. Querying
+     this task from a non-elevated shell was itself denied ("Accès
+     refusé") - consistent with it being SYSTEM-owned.
+3. `schtasks /run /tn "Shop Analysis - Updater"` - owner confirmed no
+   prompt. The install's own log
+   (`%LOCALAPPDATA%\Shop Analysis\logs\pos-tool.log`) then showed:
+   `poslib.updater  Auto-update disabled via config - skipping check.` -
+   this time at INFO level (unlike the dev-mode substitute test's
+   DEBUG-level message), an unambiguous, direct log confirmation that the
+   real frozen build ran elevated, loaded the real config through
+   `--data-dir`, and reached exactly the expected code path.
+4. Cleanup surfaced one real, minor finding: `unins000.exe
+   /VERYSILENT /NORESTART /SUPPRESSMSGBOXES` could not remove every file
+   in `{app}` in one pass, because the install's own `--watcher` process
+   (launched by `setup.iss`'s unconditional `[Run]` line - no
+   `skipifsilent` on that specific line, unlike the "open dashboard now"
+   line - so it starts even on a silent install) was still holding some
+   `.pyd`/`.dll` files open at uninstall time; `CloseApplicationsFilter`/
+   `CloseApplications=force` evidently does not reach the *uninstaller*'s
+   own file-removal pass the way it does the *installer*'s file-copy pass.
+   Worked around manually this time (`taskkill`, then a follow-up
+   `Remove-Item -Recurse -Force` on the remainder) - not yet fixed in
+   `setup.iss` itself. A real fix would need the uninstaller to
+   explicitly stop `ShopAnalysis.exe` processes before removing files,
+   e.g. an `[UninstallRun]` `taskkill /F /IM ShopAnalysis.exe` step
+   ordered before the file-removal phase (Inno's own ordering rules for
+   this need checking) - left as a follow-up, not blocking, since this
+   only affects the uninstall path and the leftover files pose no risk
+   (dead code, not running, removed manually here).
+5. Full manual cleanup performed: killed the stray process, removed the
+   `{app}` remainder, removed
+   `%LOCALAPPDATA%\Shop Analysis` (config/cache/logs/backups created by
+   the test), removed the local `dist/`/`build/`/`dist-installer/` build
+   output (regenerable, gitignored, matching the existing "work tree
+   cleaned" precedent from Component 1). Confirmed both scheduled tasks
+   gone, confirmed the *real* git-clone-based watcher's own log
+   (`logs/pos-tool.log` at the repo root) kept pushing to Cloudflare
+   normally throughout (10:33, 10:38, 10:43) - completely undisturbed by
+   any of this.
+
+This closes the one item the original design doc's testing plan left for
+"a human at the keyboard": a real silent install, watched end to end, with
+no dialog. The only remaining open item from that plan is exercising the
+already-up-to-date no-op path against a real newer release, which needs an
+actual second GitHub release to compare against - not done here.
