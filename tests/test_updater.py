@@ -175,6 +175,71 @@ class TestCheckForUpdate:
 
         assert updater.check_for_update(FakeConfig()) is None
 
+    def test_returns_none_when_this_tag_was_already_attempted(self, monkeypatch):
+        # A mis-cut release (bundled VERSION not actually bumped) must not
+        # loop download->install->relaunch forever - see Known gap #2.
+        monkeypatch.setattr(updater, "is_frozen", lambda: True)
+        monkeypatch.setattr(updater, "current_version", lambda: (1, 0, 0))
+        monkeypatch.setattr(updater, "_read_last_attempted_tag", lambda: "v1.2.0")
+        monkeypatch.setattr(updater.requests, "get",
+                            lambda url, **k: FakeResponse(_release_json("v1.2.0")))
+
+        assert updater.check_for_update(FakeConfig()) is None
+
+    def test_proceeds_when_a_different_tag_was_previously_attempted(self, monkeypatch):
+        monkeypatch.setattr(updater, "is_frozen", lambda: True)
+        monkeypatch.setattr(updater, "current_version", lambda: (1, 0, 0))
+        monkeypatch.setattr(updater, "_read_last_attempted_tag", lambda: "v1.1.0")
+        monkeypatch.setattr(updater.requests, "get",
+                            lambda url, **k: FakeResponse(_release_json("v1.2.0")))
+
+        result = updater.check_for_update(FakeConfig())
+
+        assert result is not None
+        assert result.tag_name == "v1.2.0"
+
+    def test_proceeds_when_nothing_was_previously_attempted(self, monkeypatch):
+        monkeypatch.setattr(updater, "is_frozen", lambda: True)
+        monkeypatch.setattr(updater, "current_version", lambda: (1, 0, 0))
+        monkeypatch.setattr(updater, "_read_last_attempted_tag", lambda: None)
+        monkeypatch.setattr(updater.requests, "get",
+                            lambda url, **k: FakeResponse(_release_json("v1.2.0")))
+
+        result = updater.check_for_update(FakeConfig())
+
+        assert result is not None
+        assert result.tag_name == "v1.2.0"
+
+
+class TestAttemptedMarker:
+
+    def test_read_returns_none_when_no_marker_file(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(updater, "user_data_dir", lambda: tmp_path)
+        assert updater._read_last_attempted_tag() is None
+
+    def test_write_then_read_round_trips(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(updater, "user_data_dir", lambda: tmp_path)
+        updater._write_attempted_tag("v1.2.0")
+        assert updater._read_last_attempted_tag() == "v1.2.0"
+
+    def test_write_creates_the_data_dir_if_missing(self, monkeypatch, tmp_path):
+        data_dir = tmp_path / "not-yet-created"
+        monkeypatch.setattr(updater, "user_data_dir", lambda: data_dir)
+        updater._write_attempted_tag("v1.2.0")
+        assert (data_dir / updater._ATTEMPTED_MARKER_NAME).read_text(encoding="utf-8") == "v1.2.0"
+
+    def test_read_returns_none_and_does_not_raise_when_marker_is_a_directory(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setattr(updater, "user_data_dir", lambda: tmp_path)
+        (tmp_path / updater._ATTEMPTED_MARKER_NAME).mkdir()
+        assert updater._read_last_attempted_tag() is None
+
+    def test_write_does_not_raise_when_it_cannot_write(self, monkeypatch, tmp_path):
+        # Make the marker's own path a directory so writing to it as a file fails.
+        monkeypatch.setattr(updater, "user_data_dir", lambda: tmp_path)
+        (tmp_path / updater._ATTEMPTED_MARKER_NAME).mkdir()
+        updater._write_attempted_tag("v1.2.0")  # must not raise
+
 
 class TestDownloadAndVerify:
 
@@ -348,9 +413,11 @@ class TestCheckAndApplyUpdate:
                             lambda release, dest_dir: installer_path)
         monkeypatch.setattr(updater, "launch_silent_install",
                             lambda path: launched.append(path) or True)
+        monkeypatch.setattr(updater, "user_data_dir", lambda: tmp_path)
 
         assert updater.check_and_apply_update(FakeConfig()) is True
         assert launched == [installer_path]
+        assert updater._read_last_attempted_tag() == "v9.9.9"
 
     def test_returns_false_when_launch_fails(self, monkeypatch, tmp_path):
         release = updater.ReleaseInfo(version=(9, 9, 9), tag_name="v9.9.9",
@@ -363,8 +430,12 @@ class TestCheckAndApplyUpdate:
         monkeypatch.setattr(updater, "download_and_verify",
                             lambda release, dest_dir: installer_path)
         monkeypatch.setattr(updater, "launch_silent_install", lambda path: False)
+        monkeypatch.setattr(updater, "user_data_dir", lambda: tmp_path)
 
         assert updater.check_and_apply_update(FakeConfig()) is False
+        # A failed launch is not an "attempt" for looping purposes - it must
+        # be retried next time, not treated as already-tried.
+        assert updater._read_last_attempted_tag() is None
 
     def test_returns_false_when_tempdir_creation_fails(self, monkeypatch):
         release = updater.ReleaseInfo(version=(9, 9, 9), tag_name="v9.9.9",

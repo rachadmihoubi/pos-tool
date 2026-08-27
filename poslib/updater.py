@@ -9,8 +9,18 @@ poslib/remote.py's rule: never raise. A failed check, download, or install
 attempt logs and gives up until the next watcher startup - it must never
 crash the watcher.
 
+Invoked by main.py's --apply-update, run from a separate always-elevated
+scheduled task, not the (deliberately de-elevated) watcher itself - see
+docs/superpowers/specs/2026-08-27-update-elevation-fix.md for why.
+
+A small on-disk marker (update_attempted.txt in user_data_dir()) records
+the tag of the last release an install was actually launched for, so a
+mis-cut release (bundled VERSION not actually bumped) is detected and
+skipped instead of looping download->install->relaunch forever - see
+_read_last_attempted_tag/_write_attempted_tag below.
+
 See docs/superpowers/specs/2026-08-26-component3-auto-update-design.md for
-the full design.
+the full original design.
 """
 
 from __future__ import annotations
@@ -25,7 +35,7 @@ from pathlib import Path
 import requests
 
 from .config import Config
-from .paths import app_root, is_frozen
+from .paths import app_root, is_frozen, user_data_dir
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +101,46 @@ def _asset_url(release: dict, name: str) -> str | None:
     return None
 
 
+_ATTEMPTED_MARKER_NAME = "update_attempted.txt"
+
+
+def _attempted_marker_path() -> Path:
+    return user_data_dir() / _ATTEMPTED_MARKER_NAME
+
+
+def _read_last_attempted_tag() -> str | None:
+    """
+    The tag_name of the last release check_and_apply_update() actually
+    launched an installer for, or None if there isn't one / it can't be
+    read. Never raises - a missing or unreadable marker is treated the same
+    as "nothing attempted yet", which just means one more retry, not a
+    crash.
+    """
+    try:
+        path = _attempted_marker_path()
+        if not path.is_file():
+            return None
+        return path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _write_attempted_tag(tag_name: str) -> None:
+    """
+    Records that an install for tag_name was just launched, so a mis-cut
+    release (bundled VERSION not actually newer, so current_version() never
+    advances) can be detected next check instead of silently
+    download-install-relaunching forever. Never raises - if this write
+    fails, the worst case is one possible extra retry, not a crash.
+    """
+    try:
+        path = _attempted_marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(tag_name, encoding="utf-8")
+    except OSError as exc:
+        log.warning("Could not record the update-attempt marker: %s", exc)
+
+
 def check_for_update(cfg: Config) -> ReleaseInfo | None:
     """
     Returns a ReleaseInfo if GitHub Releases has a version newer than this
@@ -121,6 +171,14 @@ def check_for_update(cfg: Config) -> ReleaseInfo | None:
         return None
 
     if remote_version <= current_version():
+        return None
+
+    if _read_last_attempted_tag() == tag_name:
+        log.error(
+            "Release %s was already attempted but this build's version did "
+            "not change afterwards - the release is likely mis-cut (bundled "
+            "VERSION file not actually bumped). Not retrying automatically; "
+            "publish a corrected release to resume.", tag_name)
         return None
 
     installer_url = _asset_url(release, "Setup.exe")
@@ -235,6 +293,7 @@ def check_and_apply_update(cfg: Config) -> bool:
         if not launch_silent_install(installer_path):
             return False
 
+        _write_attempted_tag(release.tag_name)
         log.info("Installer launched for %s - stopping so it can replace running files.",
                   release.tag_name)
         return True
