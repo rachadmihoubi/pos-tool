@@ -68,7 +68,7 @@ JS bundler either).
     `CLOUDFLARE_ACCOUNT_ID` either way. Task 3's `tools/deploy_hub.py`
     is the first caller to pass these.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_remote.py`, inside `class TestPushRemoteHappyPath`:
 
@@ -96,12 +96,12 @@ Add to `tests/test_remote.py`, inside `class TestPushRemoteHappyPath`:
         assert result is True
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_remote.py -k "override" -v`
 Expected: FAIL - `push_remote() got an unexpected keyword argument 'project'`
 
-- [ ] **Step 3: Implement the optional overrides**
+- [x] **Step 3: Implement the optional overrides**
 
 In `poslib/remote.py`, replace the `push_remote` signature and its first
 two blocks (lines 166-181):
@@ -143,14 +143,14 @@ The rest of the function (from `api_token = cfg.secret(...)` onward) is
 unchanged - `project` and `export_dir` are now plain local variables
 either way, so every later reference to them already works.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_remote.py -v`
 Expected: PASS - all existing tests plus the two new ones (existing tests
 are unaffected since they never pass `project`/`export_dir`, so both
 default to `None` and hit the same code path as before).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add poslib/remote.py tests/test_remote.py
@@ -176,7 +176,7 @@ git commit -m "feat(remote): let push_remote target an arbitrary project/directo
   `tools/deploy_hub.py` pushes as-is. No other task depends on this one's
   internals beyond the directory existing.
 
-- [ ] **Step 1: Write `hub-site/stores.json`**
+- [x] **Step 1: Write `hub-site/stores.json`**
 
 ```json
 {
@@ -193,7 +193,7 @@ onboarded (Task 4's provisioning work, not yet built), add another
 configuration, hand-maintained on purpose (see the design spec's "rarely
 redeployed" framing).
 
-- [ ] **Step 2: Write `hub-site/style.css`**
+- [x] **Step 2: Write `hub-site/style.css`**
 
 ```css
 :root {
@@ -279,7 +279,7 @@ header p {
 }
 ```
 
-- [ ] **Step 3: Write `hub-site/app.js`**
+- [x] **Step 3: Write `hub-site/app.js`**
 
 ```js
 // app.js - hub page logic: renders store links, fetches every store's
@@ -369,7 +369,7 @@ async function init() {
 init();
 ```
 
-- [ ] **Step 4: Write `hub-site/index.html`**
+- [x] **Step 4: Write `hub-site/index.html`**
 
 ```html
 <!doctype html>
@@ -405,7 +405,7 @@ init();
 </html>
 ```
 
-- [ ] **Step 5: Write the failing structural tests**
+- [x] **Step 5: Write the failing structural tests**
 
 Create `tests/test_hub_site.py`:
 
@@ -462,14 +462,14 @@ def test_app_js_uses_the_real_stock_json_field_names():
         "must use allSettled, not Promise.all, so one unreachable store doesn't hide the rest"
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 Run: `pytest tests/test_hub_site.py -v`
 Expected: PASS (this task writes both the files and the tests together,
 so there is no red step here beyond a typo check - run the tests to
 confirm none)
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add hub-site/ tests/test_hub_site.py
@@ -492,7 +492,7 @@ git commit -m "feat(hub): add the multi-store hub's static site"
   any failure - run by hand from this dev PC, never by the watcher or any
   scheduled task (the hub has no per-store data that changes on its own).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_deploy_hub.py`:
 
@@ -569,12 +569,12 @@ def test_push_failure_returns_1(tmp_path, monkeypatch, capsys):
     assert "failed" in capsys.readouterr().out.lower()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_deploy_hub.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'deploy_hub'`
 
-- [ ] **Step 3: Write `tools/deploy_hub.py`**
+- [x] **Step 3: Write `tools/deploy_hub.py`**
 
 ```python
 """
@@ -639,12 +639,12 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_deploy_hub.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tools/deploy_hub.py tests/test_deploy_hub.py
