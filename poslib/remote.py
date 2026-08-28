@@ -43,14 +43,17 @@ _MAX_FILES_PER_UPLOAD_BATCH = 500
 _MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 
 # Wrangler's own ignore list (packages/wrangler/src/pages/validate.ts),
-# minus "_headers" - Cloudflare Pages DOES require that file in the
-# uploaded asset set (it isn't served itself, but Cloudflare parses it from
-# the deployment to apply response headers to other assets - see
-# export_static.py's stock.json CORS header). The rest really are
-# deployment form fields / Pages Functions source, not static assets;
-# export_static.py does not currently emit any of those, but skip them
+# minus "_headers" and "_redirects" - Cloudflare Pages DOES require both in
+# the uploaded asset set (neither is served as a page itself, but Cloudflare
+# parses them from the deployment - "_headers" for response headers, see
+# export_static.py's stock.json CORS header; "_redirects" for the root ->
+# /{lang}/today rule export_static.py writes). Confirmed the hard way: with
+# "_redirects" excluded here, every store's "/" 404'd from day one (only
+# deep links like /en/today ever worked) - Cloudflare Pages Functions
+# source, which really is out of scope for this Functions-less static
+# deploy; export_static.py does not currently emit either, but skip them
 # defensively rather than assume that never changes.
-_IGNORED_FILE_NAMES = {"_worker.js", "_redirects", "_routes.json"}
+_IGNORED_FILE_NAMES = {"_worker.js", "_routes.json"}
 _IGNORED_DIR_NAMES = {"functions", "node_modules", ".git", ".wrangler"}
 
 

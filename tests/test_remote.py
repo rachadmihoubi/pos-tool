@@ -268,7 +268,6 @@ class TestPushRemoteHappyPath:
         files = {
             "index.html": "hi",
             "_worker.js": "ignored",
-            "_redirects": "ignored",
             "_routes.json": "ignored",
             "functions/handler.js": "ignored",
         }
@@ -284,6 +283,29 @@ class TestPushRemoteHappyPath:
         import json as _json
         manifest = _json.loads(deploy_call[2]["files"]["manifest"][1])
         assert set(manifest.keys()) == {"/index.html"}
+
+    def test_uploads_redirects_file(self, tmp_path, monkeypatch):
+        """
+        Regression test: "_redirects" is a real static asset Cloudflare
+        Pages must have uploaded to honor export_static.py's root ->
+        /{lang}/today rule - unlike "_worker.js"/"_routes.json" (genuine
+        Pages Functions config this project doesn't use), it must NOT be
+        filtered out. Excluding it left every store's root URL 404ing from
+        day one, caught only when a hub store-link button led there.
+        """
+        files = {"index.html": "hi", "_redirects": "/  /en/today  302"}
+        export_dir = _make_export_dir(tmp_path, files)
+        cfg = FakeConfig(export_dir=export_dir)
+        session = FakeSession()
+        _patch_session(monkeypatch, session)
+
+        remote.push_remote(cfg)
+
+        deploy_call = next(
+            c for c in session.calls if c[1].endswith("/pages/projects/my-shop/deployments"))
+        import json as _json
+        manifest = _json.loads(deploy_call[2]["files"]["manifest"][1])
+        assert "/_redirects" in manifest
 
     def test_uploads_headers_file(self, tmp_path, monkeypatch):
         files = {
