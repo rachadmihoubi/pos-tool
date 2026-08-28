@@ -801,6 +801,11 @@ logged in, per this file's established "don't declare a deploy fully
 verified until the owner's phone confirms it" practice (see the
 `_redirects` bug history above, which burned this exact shortcut twice).
 
+**Owner-confirmed on his own phone, 2026-08-28: both product and customer
+drill-down pages work.** This closes out the feature — full remote parity
+for product/customer detail pages is done, deployed, and verified both
+mechanically (file-level checks above) and by the owner directly.
+
 ### The actual product goal (owner's own words, 2026-08-26) — read this before prioritizing anything
 
 The owner does not want a local dashboard. He already has R.Lynx's own POS
