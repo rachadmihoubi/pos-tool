@@ -269,6 +269,7 @@ class TestPushRemoteHappyPath:
             "index.html": "hi",
             "_worker.js": "ignored",
             "_routes.json": "ignored",
+            "_redirects": "ignored-as-a-manifest-asset",
             "functions/handler.js": "ignored",
         }
         export_dir = _make_export_dir(tmp_path, files)
@@ -284,14 +285,17 @@ class TestPushRemoteHappyPath:
         manifest = _json.loads(deploy_call[2]["files"]["manifest"][1])
         assert set(manifest.keys()) == {"/index.html"}
 
-    def test_uploads_redirects_file(self, tmp_path, monkeypatch):
+    def test_sends_redirects_as_separate_deployment_field(self, tmp_path, monkeypatch):
         """
-        Regression test: "_redirects" is a real static asset Cloudflare
-        Pages must have uploaded to honor export_static.py's root ->
-        /{lang}/today rule - unlike "_worker.js"/"_routes.json" (genuine
-        Pages Functions config this project doesn't use), it must NOT be
-        filtered out. Excluding it left every store's root URL 404ing from
-        day one, caught only when a hub store-link button led there.
+        Regression test, confirmed against a disposable throwaway Cloudflare
+        Pages project: unlike "_headers" (read straight out of the normal
+        uploaded asset set), Cloudflare's Direct Upload API only honors
+        "_redirects" when it arrives as its own multipart file field on the
+        deployment-create call - filename "_redirects", text/plain. A
+        manifest-only "_redirects" (this file's state for a while, believed
+        fixed but actually still broken) deploys successfully and then
+        silently never redirects anything, which is exactly why this needs
+        its own real regression test instead of just checking the manifest.
         """
         files = {"index.html": "hi", "_redirects": "/  /en/today  302"}
         export_dir = _make_export_dir(tmp_path, files)
@@ -305,7 +309,23 @@ class TestPushRemoteHappyPath:
             c for c in session.calls if c[1].endswith("/pages/projects/my-shop/deployments"))
         import json as _json
         manifest = _json.loads(deploy_call[2]["files"]["manifest"][1])
-        assert "/_redirects" in manifest
+        assert "/_redirects" not in manifest
+
+        redirects_field = deploy_call[2]["files"]["_redirects"]
+        assert redirects_field == ("_redirects", "/  /en/today  302", "text/plain")
+
+    def test_no_redirects_field_when_no_redirects_file(self, tmp_path, monkeypatch):
+        files = {"index.html": "hi"}
+        export_dir = _make_export_dir(tmp_path, files)
+        cfg = FakeConfig(export_dir=export_dir)
+        session = FakeSession()
+        _patch_session(monkeypatch, session)
+
+        remote.push_remote(cfg)
+
+        deploy_call = next(
+            c for c in session.calls if c[1].endswith("/pages/projects/my-shop/deployments"))
+        assert "_redirects" not in deploy_call[2]["files"]
 
     def test_uploads_headers_file(self, tmp_path, monkeypatch):
         files = {

@@ -42,18 +42,23 @@ _UPLOAD_TIMEOUT_SECONDS = 120
 _MAX_FILES_PER_UPLOAD_BATCH = 500
 _MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 
-# Wrangler's own ignore list (packages/wrangler/src/pages/validate.ts),
-# minus "_headers" and "_redirects" - Cloudflare Pages DOES require both in
-# the uploaded asset set (neither is served as a page itself, but Cloudflare
-# parses them from the deployment - "_headers" for response headers, see
-# export_static.py's stock.json CORS header; "_redirects" for the root ->
-# /{lang}/today rule export_static.py writes). Confirmed the hard way: with
-# "_redirects" excluded here, every store's "/" 404'd from day one (only
-# deep links like /en/today ever worked) - Cloudflare Pages Functions
-# source, which really is out of scope for this Functions-less static
-# deploy; export_static.py does not currently emit either, but skip them
-# defensively rather than assume that never changes.
-_IGNORED_FILE_NAMES = {"_worker.js", "_routes.json"}
+# Wrangler's own ignore list (packages/wrangler/src/pages/validate.ts).
+# "_headers" stays a normal uploaded asset - Cloudflare Pages reads it at
+# serve time to apply response headers to other assets (confirmed working
+# empirically: export_static.py's stock.json CORS header actually applies
+# in production). "_redirects" is different and easy to get backwards:
+# despite looking like the same kind of "special static file", Cloudflare's
+# Direct Upload API does NOT parse it out of the asset manifest at all - it
+# must be excluded from the regular upload here and sent as its own
+# multipart file field on the deployment-create call instead (see
+# push_remote/_create_deployment). Confirmed both ways empirically against
+# disposable throwaway projects: a manifest-only "_redirects" (this file's
+# previous state, and also a later "fix" that only stopped excluding it
+# here) deploys successfully but silently never redirects anything - root
+# came back a bare 404 in both cases. Only the separate-file-field form
+# actually returns the 302. Get this wrong and every store's bare domain
+# root 404s forever with no error anywhere pointing at why.
+_IGNORED_FILE_NAMES = {"_worker.js", "_routes.json", "_redirects"}
 _IGNORED_DIR_NAMES = {"functions", "node_modules", ".git", ".wrangler"}
 
 
@@ -155,12 +160,25 @@ def _upsert_hashes(session: requests.Session, jwt: str, hashes: list[str]) -> bo
 
 
 def _create_deployment(session: requests.Session, account_id: str, project: str,
-                        manifest: dict[str, str]) -> str | None:
-    """Step 4 of 4. Back to the normal API-token auth and full account path."""
+                        manifest: dict[str, str],
+                        redirects_content: str | None) -> str | None:
+    """
+    Step 4 of 4. Back to the normal API-token auth and full account path.
+
+    redirects_content, if given, is the raw text of an export's "_redirects"
+    file - sent here as its own multipart file part (filename "_redirects",
+    text/plain), never folded into the manifest. This is the one part of
+    the whole flow Cloudflare handles asymmetrically: "_headers" is read
+    straight out of the normal uploaded asset set, but "_redirects" is only
+    honored when it arrives this way - confirmed against a disposable
+    throwaway project (see _IGNORED_FILE_NAMES's comment).
+    """
     url = f"{_API_BASE}/accounts/{account_id}/pages/projects/{project}/deployments"
     # multipart/form-data with a JSON-string manifest field, per Cloudflare's
     # Create Deployment contract - not a JSON body.
-    files = {"manifest": (None, json.dumps(manifest))}
+    files: dict[str, tuple] = {"manifest": (None, json.dumps(manifest))}
+    if redirects_content is not None:
+        files["_redirects"] = ("_redirects", redirects_content, "text/plain")
     resp = session.post(url, files=files, timeout=_REQUEST_TIMEOUT_SECONDS)
     resp.raise_for_status()
     data = resp.json()
@@ -229,6 +247,10 @@ def push_remote(cfg: Config, *, project: str | None = None,
             log.warning("Nothing to push - %s has no files to upload.", export_dir)
             return False
 
+        redirects_path = export_dir / "_redirects"
+        redirects_content = (redirects_path.read_text(encoding="utf-8")
+                             if redirects_path.is_file() else None)
+
         session = requests.Session()
         session.headers["Authorization"] = f"Bearer {api_token}"
 
@@ -242,7 +264,7 @@ def push_remote(cfg: Config, *, project: str | None = None,
         if not _upsert_hashes(session, jwt, [key for key, _data, _ctype in files]):
             return False
 
-        url = _create_deployment(session, account_id, project, manifest)
+        url = _create_deployment(session, account_id, project, manifest, redirects_content)
         if url is None:
             return False
 

@@ -378,31 +378,56 @@ no-op and the button linked straight at the raw JSON file's path. Fixed to
 owner reported the *exact same* symptom afterward, which meant the first
 diagnosis was incomplete.
 
-**Real root cause**: `poslib/remote.py`'s `_IGNORED_FILE_NAMES` had
-excluded `_redirects` from every Cloudflare Pages upload since Component 4
-shipped (2026-08-26), lumped in with `_worker.js`/`_routes.json` on the
-mistaken assumption all three are "Pages Functions source, not static
-assets." `_worker.js`/`_routes.json` really are Functions-only config this
-project doesn't use — correctly out of scope. `_redirects` is different:
-it's the real static asset Cloudflare Pages reads to apply
-`export_static.py`'s `/  ->  /{lang}/today  302` rule. With it silently
-missing from every deploy, **every store's bare domain root (`/`) has
-404'd since the very first live deployment** — only deep links like
-`/en/today` ever worked, because those files genuinely exist on disk.
-The hub button was never the bug; it correctly collapsed to the store
-root and then hit this pre-existing, unrelated defect — which is why the
-"already fixed" regex change didn't change the symptom at all.
+**Real root cause, finally nailed down empirically (not guessed)**:
+`poslib/remote.py`'s `_IGNORED_FILE_NAMES` had excluded `_redirects` from
+every Cloudflare Pages upload since Component 4 shipped (2026-08-26),
+lumped in with `_worker.js`/`_routes.json` on the mistaken assumption all
+three are "Pages Functions source, not static assets." A first fix
+(`d9a08e0`) just removed `_redirects` from that ignore list so it uploaded
+as a normal manifest asset, same as `_headers` — logical, tested, deployed,
+and **still didn't work**, because it was solving the wrong half of the
+problem. Cloudflare's Direct Upload API treats `_headers` and `_redirects`
+asymmetrically and nothing in Cloudflare's own docs says so: `_headers` is
+read straight out of the normal uploaded asset set (confirmed — the
+`stock.json` CORS header really does work this way), but `_redirects` is
+**only** honored when it is excluded from the asset manifest entirely and
+sent as its own separate multipart file field on the deployment-create
+call (filename `"_redirects"`, content-type `text/plain`) — exactly how
+`wrangler pages deploy` does it internally, which is not documented
+anywhere in Cloudflare's public API reference. Proved this by scripting
+disposable throwaway Cloudflare Pages projects (same pattern Components 4
+and 5 used) and testing both forms directly: a manifest-only `_redirects`
+deploys with `success: true` and then serves a bare 404 on `/` forever,
+while the separate-file-field form returns a real `302`. `_create_deployment`
+now takes an optional `redirects_content` string and adds it as
+`files["_redirects"] = ("_redirects", content, "text/plain")` only when
+present; `_IGNORED_FILE_NAMES` has `_redirects` back in it (correctly, this
+time — excluded from the manifest walk, not dropped from the deploy).
+Tests updated: `test_ignores_wrangler_reserved_names` now also covers
+`_redirects`, and a new `test_sends_redirects_as_separate_deployment_field`
+/`test_no_redirects_field_when_no_redirects_file` replace the old
+(disproven) `test_uploads_redirects_file`. Full suite green
+(`tests/test_remote.py`, 30 passed). Store redeployed with this fix.
 
-Fixed by removing `_redirects` from `_IGNORED_FILE_NAMES`
-(`poslib/remote.py`). Added `test_uploads_redirects_file` to
-`tests/test_remote.py` (and fixed `test_ignores_wrangler_reserved_names`,
-which had been asserting the *buggy* behavior — dropping `_redirects` from
-its "ignored" fixture rather than asserting it's excluded). Committed as
-`d9a08e0`, store redeployed same session. **Not yet re-confirmed from the
-owner's phone** — this is a stronger fix than the regex change (it repairs
-root-level navigation on every existing and future store, not just the
-hub's button), so ask for a fresh phone check before considering this
-closed.
+**Why the owner's phone check couldn't be skipped even after this**:
+Cloudflare Access sits in front of the entire deployment and intercepts
+every unauthenticated request — including a plain `curl` from this dev
+machine — before Cloudflare Pages' own `_redirects` logic ever runs, so an
+unauthenticated `curl` to `/` cannot distinguish "root redirect works" from
+"root redirect is still broken" (both come back as a 302 to the Access
+login page). What *can* be confirmed from here, and was: (1) the
+mechanism itself works, proven against a disposable project with no Access
+in front of it at all; (2) the real store's actual generated `_redirects`
+file (`/  /fr/today  302` plus one line per language) has the same syntax
+that disposable-project test used successfully; (3) the real deployment
+went out with this fix. What still can't be confirmed from a dev machine:
+whether Access correctly hands the *authenticated* browser back to Pages'
+post-Access routing in a way that still applies the redirect — needs the
+owner's own phone, logged in, hitting the bare domain root. Two prior
+"fixed" claims in this file turned out to be wrong or unverified before
+the owner tested; don't repeat that a third time — say what's confirmed
+vs. what only the owner's phone can confirm, and wait for that check
+before calling this closed.
 
 ### The actual product goal (owner's own words, 2026-08-26) — read this before prioritizing anything
 
