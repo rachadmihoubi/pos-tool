@@ -385,7 +385,10 @@
   "catalog": {
     "title": "Catalogue produits",
     "subtitle": "Tous les produits - référence, famille, quantité et prix.",
-    "col_reference": "Référence"
+    "col_reference": "Référence",
+    "col_boxes": "Colis",
+    "col_avg_cost": "Coût moyen",
+    "col_last_cost": "Dernier coût"
   },
 
   "products": {
@@ -432,6 +435,12 @@
     "detail_history_title": "Historique des ventes",
     "detail_no_history": "Aucune vente enregistrée.",
     "detail_col_ticket": "Ticket",
+    "purchase_history_title": "Historique des achats (brut, depuis les registres fournisseurs)",
+    "purchase_history_note": "Chaque livraison de ce produit, la plus récente en premier, directement depuis les registres d'achat de la caisse — rien ici n'est calculé. « Prix payé » est le prix unitaire réel de cette livraison. « Coût courant » est le coût moyen pondéré calculé par la caisse après cette livraison, indiqué à titre de référence uniquement.",
+    "purchase_history_empty": "Aucun achat enregistré pour ce produit.",
+    "purchase_col_price_paid": "Prix payé",
+    "purchase_col_running_cost": "Coût courant (caisse)",
+    "purchase_col_new_stock": "Stock après",
     "detail_family_compare": "Ce produit vs. la moyenne de sa marque",
     "detail_family_note": "Comment la marge de ce produit se compare à celle de chaque autre produit de {family}.",
     "competitor_title": "Prix de la concurrence",

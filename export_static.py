@@ -18,17 +18,21 @@ never sets it, so this export can share 100% of the routes/templates with
 zero behavioural change to the live local server.
 
 Customer and product drill-down pages (/customers/<id>, /products/<id>)
-are NOT exported - there are 600+/1500+ of them and no natural recency
-cutoff (a customer or product doesn't "age out"). Clicking one remotely
-hits the custom 404 page below.
+ARE exported too, in full, for every real customer/product - unlike
+tickets, these don't grow without bound day after day; they're catalog/
+roster sizes (roughly 600 customers, 1,600 products here) that grow
+slowly, the same reasoning that already applied to purchases below. The
+anonymous walk-in till (customer_id matching `Metrics.walkin_id`) has no
+profile of its own (`customer_profile()` returns None for it) and is
+skipped, same as it always was locally.
 
-Ticket and purchase drill-downs (/tickets/<id>,
-/suppliers/purchases/<id>) ARE exported, but only for the recent window
-`DRILLDOWN_WINDOW_DAYS` covers - a ticket from years ago is not something
-anyone checks from their phone, and without a cutoff the count only grows,
-forever, with the live shop. Purchases are exported in full regardless of
-date - there are only ~500-600 of them, an order of magnitude fewer than
-tickets, so windowing them buys nothing.
+Ticket drill-downs (/tickets/<id>) ARE exported too, but only for the
+recent window `DRILLDOWN_WINDOW_DAYS` covers - a ticket from years ago is
+not something anyone checks from their phone, and without a cutoff the
+count only grows, forever, with the live shop (unlike customers/products/
+purchases, which don't). Purchases (/suppliers/purchases/<id>) are
+exported in full regardless of date - there are only ~500-600 of them, an
+order of magnitude fewer than tickets, so windowing them buys nothing.
 
 Also exported: bounded date-preset variants of the Today screen
 (`TODAY_PRESET_FILES` - yesterday/this-week/last-7-days), because
@@ -39,13 +43,27 @@ per-day revenue rollup (see `Metrics.daily_rollup()`) that lets the Today
 page's remote custom-range picker sum an arbitrary range client-side,
 since a truly arbitrary range can't be pre-rendered at all.
 
-`stock.json` (item code, name, quantity, price - no cost/margin) is for
-Component 5's multi-store hub: a cross-store stock search whose JS fetches
-this one file directly from each store's own Cloudflare Pages project. See
+`stock.json` (item reference, name, quantity - in pieces and, where R.Lynx
+tracks a box size (`Item.QtyPerParcel`, "Colis"), in whole boxes plus
+leftover pieces too - and price, no cost/margin) is for Component 5's
+multi-store hub: a cross-store stock search whose JS fetches this one file
+directly from each store's own Cloudflare Pages project. See
 docs/superpowers/specs/2026-08-27-component5-hub-design.md for why this
 one path needs an Access Bypass policy (everything else on this domain
 stays gated to the owner's email as before) and why the hub can't simply
 share a login session across stores.
+
+`remote.stock_json_token`, if set in config.yaml, switches this to a
+second, cost-bearing file instead: `stock-<token>.json`, filename chosen
+so the URL itself (known only to whoever can log into the hub, via
+hub-site/stores.json) is the only thing gating it - real Access-checked
+auth isn't possible here since Cloudflare Pages Direct Upload (this
+project's whole deploy mechanism, chosen specifically to avoid needing
+Node.js/wrangler on a customer PC) doesn't support Pages Functions, and
+browser fetch() can't carry Access service-token headers across origins
+either. Without a token configured, behaviour is unchanged (public
+stock.json, price only, no cost) - a missing token fails safe rather than
+silently exposing cost on the well-known public filename.
 """
 
 from __future__ import annotations
@@ -58,6 +76,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from poslib import ownerdata
 from poslib.config import (PROJECT_ROOT, REMOTE_TICKET_WINDOW_DAYS, Config,
                            get_config, setup_logging)
 from poslib.etl import ETL
@@ -92,9 +111,9 @@ _NOT_FOUND_HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Not available remotely</title></head>
 <body style="font-family: sans-serif; max-width: 640px; margin: 80px auto; text-align: center;">
 <h1>Not available remotely</h1>
-<p>This specific page (usually a single customer or product's detail view)
-is not part of the remote snapshot - only the main dashboard pages are.
-Open the tool on the store PC to see it.</p>
+<p>This specific page (usually a ticket older than the recent window this
+snapshot covers) is not part of the remote snapshot. Open the tool on the
+store PC to see it.</p>
 <p><a href="/">Back to the dashboard</a></p>
 </body></html>
 """
@@ -151,6 +170,12 @@ def export(cfg: Config | None = None) -> Path:
         purchases = m.supplier_transactions()
         purchase_ids = ([int(x) for x in purchases["purchase_id"]]
                         if not purchases.empty else [])
+        # Every real customer/product gets its own exported page - see the
+        # module docstring for why these, unlike tickets, aren't windowed.
+        # The walk-in till is excluded here rather than relying on
+        # customer_profile() to skip it, so the log line's count is exact.
+        customer_ids = [int(x) for x in m.customers.loc[
+            m.customers["customer_id"] != m.walkin_id, "customer_id"]]
         daily = m.daily_rollup()
         cache_info = etl.cache_info()
 
@@ -177,17 +202,50 @@ def export(cfg: Config | None = None) -> Path:
         # this store's domain stays gated). Inactive (discontinued) items
         # are excluded - a cross-store "do they have it" search has no use
         # for a product this store no longer carries at all.
+        stock_token = cfg.get("remote.stock_json_token", "")
+        stock_filename = f"stock-{stock_token}.json" if stock_token else "stock.json"
+
         catalog = m.catalog()
+        # Every item gets its own exported page, active or not (see the
+        # module docstring) - unlike stock.json below, a discontinued
+        # product's profile is still viewable locally, so it stays viewable
+        # remotely too.
+        item_ids = [int(x) for x in catalog["item_id"]]
         stock_records = []
         for _, row in catalog[~catalog["inactive"]].iterrows():
-            stock_records.append({
-                "item_no": str(row["item_no"]) if pd.notna(row["item_no"]) else None,
+            record = {
+                "reference": str(row["reference"]) if pd.notna(row["reference"]) else None,
                 "name": row["item_name"],
                 "stock": float(row["stock"]) if pd.notna(row["stock"]) else None,
-                "price": float(row["price"]) if pd.notna(row["price"]) else None,
-            })
-        (out_dir / "stock.json").write_text(
+                "boxes": float(row["stock_boxes"]) if pd.notna(row["stock_boxes"]) else None,
+                "boxes_remainder": (float(row["stock_remainder"])
+                                     if pd.notna(row["stock_remainder"]) else None),
+            }
+            # A configured token is what makes this filename unguessable,
+            # so cost only ever goes into the tokenized file - never into
+            # the well-known public "stock.json" name (see module docstring).
+            if stock_token:
+                record["cost"] = float(row["cost"]) if pd.notna(row["cost"]) else None
+                record["avg_cost"] = (float(row["avg_cost"])
+                                       if pd.notna(row["avg_cost"]) else None)
+                record["last_purchase_cost"] = (float(row["last_purchase_cost"])
+                                                 if pd.notna(row["last_purchase_cost"])
+                                                 else None)
+            else:
+                record["price"] = float(row["price"]) if pd.notna(row["price"]) else None
+            stock_records.append(record)
+        (out_dir / stock_filename).write_text(
             json.dumps(stock_records, ensure_ascii=False), encoding="utf-8")
+
+        # The hub page (a different Cloudflare Pages origin) fetches this
+        # file with the browser's fetch API, which enforces CORS - without
+        # this header the browser silently rejects the cross-origin
+        # response and the hub reports the store "unreachable" even though
+        # the file itself loads fine outside a browser (e.g. curl). See
+        # poslib/remote.py for why "_headers" has to actually be uploaded
+        # for Cloudflare to read this.
+        (out_dir / "_headers").write_text(
+            f"/{stock_filename}\n  Access-Control-Allow-Origin: *\n", encoding="utf-8")
 
         presets = _today_preset_ranges(today)
 
@@ -267,12 +325,53 @@ def export(cfg: Config | None = None) -> Path:
                         cache=cache_info,
                     )
                 (purchases_dir / f"{purchase_id}.html").write_text(html, encoding="utf-8")
+
+            products_dir = lang_dir / "products"
+            products_dir.mkdir(parents=True, exist_ok=True)
+            for item_id in item_ids:
+                profile = m.product_profile(item_id)
+                if profile is None:
+                    raise RuntimeError(f"item {item_id} vanished mid-export")
+                competitor_prices = ownerdata.competitor_prices_for_item(cfg, item_id)
+                with app.test_request_context(
+                        f"/products/{item_id}?lang={lang}&__static__=1",
+                        environ_overrides={"SCRIPT_NAME": f"/{lang}"}):
+                    html = render_template(
+                        "product_detail.html",
+                        summary=row_dict(profile["summary"]),
+                        family=row_dict(profile["family"]),
+                        sales_history=rows(profile["sales_history"], limit=200),
+                        purchase_history=rows(profile["purchase_history"], limit=200),
+                        competitor_prices=rows(competitor_prices),
+                        form_error=None,
+                        cache=cache_info,
+                    )
+                (products_dir / f"{item_id}.html").write_text(html, encoding="utf-8")
+
+            customers_dir = lang_dir / "customers"
+            customers_dir.mkdir(parents=True, exist_ok=True)
+            for customer_id in customer_ids:
+                profile = m.customer_profile(customer_id)
+                if profile is None:
+                    raise RuntimeError(f"customer {customer_id} vanished mid-export")
+                with app.test_request_context(
+                        f"/customers/{customer_id}?lang={lang}&__static__=1",
+                        environ_overrides={"SCRIPT_NAME": f"/{lang}"}):
+                    html = render_template(
+                        "customer_detail.html",
+                        summary=row_dict(profile["summary"]),
+                        receivable=row_dict(profile["receivable"]),
+                        purchases=rows(profile["purchases"], limit=200),
+                        payments=rows(profile["payments"], limit=100),
+                        cache=cache_info,
+                    )
+                (customers_dir / f"{customer_id}.html").write_text(html, encoding="utf-8")
     finally:
         conn.close()
 
     # Root + per-language redirects to the Today page, and a friendly 404
-    # for anything not exported (customer/product drill-downs, and any
-    # ticket/purchase older than the recent window above).
+    # for anything not exported (a ticket older than the recent window
+    # above, or any genuinely unknown path).
     redirects = [f"/  /{default_lang}/today  302"]
     for lang in LANGUAGES:
         redirects.append(f"/{lang}  /{lang}/today  302")
@@ -283,11 +382,14 @@ def export(cfg: Config | None = None) -> Path:
     (out_dir / "status.json").write_text(
         json.dumps(status, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    total_per_lang = len(PAGES) + len(NESTED_PAGES) + len(presets) + len(ticket_ids) + len(purchase_ids)
+    total_per_lang = (len(PAGES) + len(NESTED_PAGES) + len(presets) + len(ticket_ids)
+                       + len(purchase_ids) + len(item_ids) + len(customer_ids))
     log.info("Static export written to %s (%d pages x %d languages, "
-             "%d tickets + %d purchases within the last %d days)",
+             "%d tickets within the last %d days + %d purchases + "
+             "%d products + %d customers)",
              out_dir, total_per_lang, len(LANGUAGES),
-             len(ticket_ids), len(purchase_ids), DRILLDOWN_WINDOW_DAYS)
+             len(ticket_ids), DRILLDOWN_WINDOW_DAYS, len(purchase_ids),
+             len(item_ids), len(customer_ids))
     return out_dir
 
 

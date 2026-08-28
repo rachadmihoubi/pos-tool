@@ -675,6 +675,7 @@ def page_product(item_id: int) -> str:
             summary=row_dict(profile["summary"]),
             family=row_dict(profile["family"]),
             sales_history=rows(profile["sales_history"], limit=200),
+            purchase_history=rows(profile["purchase_history"], limit=200),
             competitor_prices=rows(competitor_prices),
             form_error=request.args.get("form_error"),
             cache=etl.cache_info(),

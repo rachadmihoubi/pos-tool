@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -726,12 +727,183 @@ class TestCatalog:
     def test_catalog_columns(self, metrics: Metrics):
         cat = metrics.catalog()
         for col in ("item_id", "item_no", "item_name", "family_name",
-                    "stock", "cost", "price"):
+                    "stock", "qty_per_parcel", "stock_boxes", "stock_remainder",
+                    "cost", "price", "avg_cost", "last_purchase_cost"):
             assert col in cat.columns
 
     def test_catalog_sorted_by_name(self, metrics: Metrics):
         cat = metrics.catalog()
         assert list(cat["item_name"]) == sorted(cat["item_name"])
+
+    def test_stock_boxes_reconstructs_stock_for_boxed_items(self, metrics: Metrics):
+        """
+        Wholesale box view: for any item with a real box size
+        (QtyPerParcel/"Colis" > 1), whole boxes * box size + leftover
+        pieces must add back up to the exact piece-level stock figure -
+        this is just stock re-expressed in two units, never a different
+        number.
+        """
+        cat = metrics.catalog()
+        boxed = cat[cat["stock_boxes"].notna()]
+        if boxed.empty:
+            pytest.skip("no items with a tracked box size in this database")
+        reconstructed = boxed["stock_boxes"] * boxed["qty_per_parcel"] + boxed["stock_remainder"]
+        assert np.allclose(reconstructed, boxed["stock"].fillna(0))
+        assert (boxed["qty_per_parcel"] > 1).all()
+
+    def test_stock_boxes_is_none_without_a_tracked_box_size(self, metrics: Metrics):
+        cat = metrics.catalog()
+        unboxed = cat[cat["qty_per_parcel"].fillna(0) <= 1]
+        if unboxed.empty:
+            pytest.skip("every item in this database has a tracked box size")
+        assert unboxed["stock_boxes"].isna().all()
+        assert unboxed["stock_remainder"].isna().all()
+
+    def test_catalog_row_count_unaffected_by_purchase_cost_merge(self, metrics: Metrics):
+        """
+        item_purchase_costs is one row per item_id - merging it into
+        catalog() must never duplicate or drop rows.
+        """
+        cat = metrics.catalog()
+        assert len(cat) == len(metrics.items)
+
+    def test_items_never_purchased_have_no_purchase_cost(self, metrics: Metrics):
+        cat = metrics.catalog()
+        purchased_ids = set(metrics.item_purchase_costs["item_id"])
+        never_purchased = cat[~cat["item_id"].isin(purchased_ids)]
+        if never_purchased.empty:
+            pytest.skip("every item in this database has purchase history")
+        assert never_purchased["avg_cost"].isna().all()
+        assert never_purchased["last_purchase_cost"].isna().all()
+
+    def test_purchase_cost_present_only_where_purchase_history_exists(self, metrics: Metrics):
+        ipc = metrics.item_purchase_costs
+        if ipc.empty:
+            pytest.skip("no purchase history in this database")
+        assert ipc["avg_cost"].notna().all()
+        assert ipc["last_purchase_cost"].notna().all()
+        assert (ipc["avg_cost"] > 0).all()
+        assert (ipc["last_purchase_cost"] > 0).all()
+
+    def test_last_purchase_cost_matches_last_valid_purchase_entry(self, metrics: Metrics):
+        """
+        Independent re-derivation: for each item with purchase history,
+        last_purchase_cost must equal cost/qty of that item's own
+        highest-entry_id valid line (qty > 0, cost/qty > 0) - entry_id is
+        a sound ordering key within one item's own lines. Deliberately
+        re-derived from `cost` (the line's own net-of-discount amount),
+        never from `new_cost` (R.Lynx's own already-blended running
+        average, which is the exact figure this feature must not surface
+        as "last cost" - see item_purchase_costs' docstring).
+        """
+        p = metrics.purchases
+        if p.empty:
+            pytest.skip("no purchase data in this database")
+        valid = p[p["is_purchase"] & (p["qty"] > 0) & p["cost"].notna()].copy()
+        valid["raw"] = valid["cost"] / valid["qty"]
+        valid = valid[valid["raw"] > 0]
+        if valid.empty:
+            pytest.skip("no valid purchase lines in this database")
+        last_by_item = (valid.sort_values("entry_id")
+                        .groupby("item_id")["raw"].last())
+
+        ipc = metrics.item_purchase_costs.set_index("item_id")["last_purchase_cost"]
+        common = last_by_item.index.intersection(ipc.index)
+        assert len(common) > 0
+        assert np.allclose(last_by_item.loc[common], ipc.loc[common])
+
+    def test_avg_cost_equals_last_cost_for_single_purchase_items(self, metrics: Metrics):
+        """
+        An item bought exactly once has no averaging to do - its avg_cost
+        must equal that one purchase's cost/qty exactly.
+        """
+        p = metrics.purchases
+        if p.empty:
+            pytest.skip("no purchase data in this database")
+        valid = p[p["is_purchase"] & (p["qty"] > 0) & p["cost"].notna()].copy()
+        valid["raw"] = valid["cost"] / valid["qty"]
+        valid = valid[valid["raw"] > 0]
+        counts = valid.groupby("item_id").size()
+        single = counts[counts == 1].index
+        if len(single) == 0:
+            pytest.skip("no single-purchase items in this database")
+        ipc = metrics.item_purchase_costs.set_index("item_id")
+        common = [i for i in single if i in ipc.index]
+        assert len(common) > 0
+        subset = ipc.loc[common]
+        assert np.allclose(subset["avg_cost"], subset["last_purchase_cost"])
+
+    def test_discounted_single_purchase_uses_net_cost_not_gross_price(self, metrics: Metrics):
+        """
+        Regression test for the actual bug this feature shipped with:
+        PurchaseEntry.Price is the GROSS list price before the supplier's
+        own discount; the correct per-unit input is cost/qty (net of
+        TotalItemDiscount). An item bought exactly once with a discount
+        must show its net cost, not its gross list price, as both
+        avg_cost and last_purchase_cost.
+        """
+        p = metrics.purchases
+        if p.empty:
+            pytest.skip("no purchase data in this database")
+        valid = p[p["is_purchase"] & (p["qty"] > 0) & p["cost"].notna()].copy()
+        valid["raw"] = valid["cost"] / valid["qty"]
+        valid = valid[valid["raw"] > 0]
+        counts = valid.groupby("item_id").size()
+        single_ids = set(counts[counts == 1].index)
+
+        discounted = valid[valid["item_id"].isin(single_ids)
+                            & (valid["price"] - valid["raw"]).abs().gt(0.01)]
+        if discounted.empty:
+            pytest.skip("no single-purchase item with a discounted line in this database")
+
+        ipc = metrics.item_purchase_costs.set_index("item_id")
+        row = discounted.iloc[0]
+        item_id = int(row["item_id"])
+        assert item_id in ipc.index
+        assert np.isclose(ipc.loc[item_id, "last_purchase_cost"], row["raw"])
+        assert np.isclose(ipc.loc[item_id, "avg_cost"], row["raw"])
+        assert not np.isclose(ipc.loc[item_id, "last_purchase_cost"], row["price"])
+
+
+class TestProductPurchaseHistory:
+    """
+    The product drill-down's "Purchase history" table exists so the owner
+    can check the AVCO/last-cost figures against the POS's own raw
+    records himself, instead of trusting a number he can't see behind.
+    It must show the real, unaltered purchase lines - no calculation.
+    """
+
+    def test_purchase_history_is_raw_purchase_entry_rows(self, metrics: Metrics):
+        p = metrics.purchases
+        valid = p[p["is_purchase"] & (p["qty"] > 0)]
+        if valid.empty:
+            pytest.skip("no purchase data in this database")
+        item_id = int(valid["item_id"].value_counts().index[0])
+
+        profile = metrics.product_profile(item_id)
+        assert profile is not None
+        history = profile["purchase_history"]
+        assert not history.empty
+        for col in ("purchase_time", "purchase_id", "supplier_name",
+                    "qty", "price", "new_cost", "new_stock"):
+            assert col in history.columns
+
+        expected = valid[valid["item_id"] == item_id]
+        assert len(history) == len(expected)
+        assert set(history["price"].dropna()) <= set(expected["price"].dropna()) | {np.nan}
+
+    def test_purchase_history_sorted_most_recent_entry_first(self, metrics: Metrics):
+        p = metrics.purchases
+        valid = p[p["is_purchase"] & (p["qty"] > 0)]
+        counts = valid.groupby("item_id").size()
+        multi = counts[counts > 1]
+        if multi.empty:
+            pytest.skip("no item with more than one purchase line")
+        item_id = int(multi.index[0])
+
+        history = metrics.product_profile(item_id)["purchase_history"]
+        entry_ids = list(history["entry_id"])
+        assert entry_ids == sorted(entry_ids, reverse=True)
 
 
 class TestFamilyMarginOutliers:

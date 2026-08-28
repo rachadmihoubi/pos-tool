@@ -315,6 +315,10 @@ remote:
   # Where the exported static files are written before being uploaded.
   export_dir: "remote-site"
 
+  # Unguessable-filename gate for the cost-bearing stock file - see
+  # config.template.yaml's comment for what this does and why.
+  stock_json_token: "f1cab0dac3a8e273d6293d71c808c877"
+
 
 # -----------------------------------------------------------------------------
 #  THE WATCHER - notices when the POS saves new sales and refreshes the tool.

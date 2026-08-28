@@ -42,11 +42,23 @@ _UPLOAD_TIMEOUT_SECONDS = 120
 _MAX_FILES_PER_UPLOAD_BATCH = 500
 _MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 
-# Wrangler's own ignore list (packages/wrangler/src/pages/validate.ts) -
-# these are deployment form fields, not static assets. export_static.py
-# does not currently emit any of these, but skip them defensively rather
-# than assume that never changes.
-_IGNORED_FILE_NAMES = {"_worker.js", "_redirects", "_headers", "_routes.json"}
+# Wrangler's own ignore list (packages/wrangler/src/pages/validate.ts).
+# "_headers" stays a normal uploaded asset - Cloudflare Pages reads it at
+# serve time to apply response headers to other assets (confirmed working
+# empirically: export_static.py's stock.json CORS header actually applies
+# in production). "_redirects" is different and easy to get backwards:
+# despite looking like the same kind of "special static file", Cloudflare's
+# Direct Upload API does NOT parse it out of the asset manifest at all - it
+# must be excluded from the regular upload here and sent as its own
+# multipart file field on the deployment-create call instead (see
+# push_remote/_create_deployment). Confirmed both ways empirically against
+# disposable throwaway projects: a manifest-only "_redirects" (this file's
+# previous state, and also a later "fix" that only stopped excluding it
+# here) deploys successfully but silently never redirects anything - root
+# came back a bare 404 in both cases. Only the separate-file-field form
+# actually returns the 302. Get this wrong and every store's bare domain
+# root 404s forever with no error anywhere pointing at why.
+_IGNORED_FILE_NAMES = {"_worker.js", "_routes.json", "_redirects"}
 _IGNORED_DIR_NAMES = {"functions", "node_modules", ".git", ".wrangler"}
 
 
@@ -148,12 +160,25 @@ def _upsert_hashes(session: requests.Session, jwt: str, hashes: list[str]) -> bo
 
 
 def _create_deployment(session: requests.Session, account_id: str, project: str,
-                        manifest: dict[str, str]) -> str | None:
-    """Step 4 of 4. Back to the normal API-token auth and full account path."""
+                        manifest: dict[str, str],
+                        redirects_content: str | None) -> str | None:
+    """
+    Step 4 of 4. Back to the normal API-token auth and full account path.
+
+    redirects_content, if given, is the raw text of an export's "_redirects"
+    file - sent here as its own multipart file part (filename "_redirects",
+    text/plain), never folded into the manifest. This is the one part of
+    the whole flow Cloudflare handles asymmetrically: "_headers" is read
+    straight out of the normal uploaded asset set, but "_redirects" is only
+    honored when it arrives this way - confirmed against a disposable
+    throwaway project (see _IGNORED_FILE_NAMES's comment).
+    """
     url = f"{_API_BASE}/accounts/{account_id}/pages/projects/{project}/deployments"
     # multipart/form-data with a JSON-string manifest field, per Cloudflare's
     # Create Deployment contract - not a JSON body.
-    files = {"manifest": (None, json.dumps(manifest))}
+    files: dict[str, tuple] = {"manifest": (None, json.dumps(manifest))}
+    if redirects_content is not None:
+        files["_redirects"] = ("_redirects", redirects_content, "text/plain")
     resp = session.post(url, files=files, timeout=_REQUEST_TIMEOUT_SECONDS)
     resp.raise_for_status()
     data = resp.json()
@@ -163,18 +188,32 @@ def _create_deployment(session: requests.Session, account_id: str, project: str,
     return data["result"].get("url")
 
 
-def push_remote(cfg: Config) -> bool:
+def push_remote(cfg: Config, *, project: str | None = None,
+                 export_dir: Path | None = None) -> bool:
     """
-    Deploy the export directory to Cloudflare Pages. Returns True on
-    success, False on any problem at all - never raises.
+    Deploy a directory to Cloudflare Pages. Returns True on success, False
+    on any problem at all - never raises.
+
+    project/export_dir let a caller push an arbitrary directory to an
+    arbitrary project under the same account credentials, instead of the
+    store's own config.yaml-configured project - used by
+    tools/deploy_hub.py to push the multi-store hub (which has no
+    config.yaml/remote-site of its own) with this same proven upload code
+    rather than reimplementing it. Every store's own watcher call
+    (push_remote(cfg), no extra arguments) is unaffected - both default to
+    None, which falls back to today's config-read behavior exactly.
     """
-    project = str(cfg.get("remote.cloudflare_project_name", "")).strip()
+    if project is None:
+        project = str(cfg.get("remote.cloudflare_project_name", "")).strip()
+    else:
+        project = project.strip()
     if not project:
         log.warning("remote.cloudflare_project_name is not set - skipping push. "
                     "See SETUP.md to create a Cloudflare Pages project.")
         return False
 
-    export_dir = cfg.path("remote.export_dir", "remote-site")
+    if export_dir is None:
+        export_dir = cfg.path("remote.export_dir", "remote-site")
     if not export_dir.is_dir():
         log.warning("Nothing to push yet - %s does not exist. Run the export first.",
                     export_dir)
@@ -208,6 +247,10 @@ def push_remote(cfg: Config) -> bool:
             log.warning("Nothing to push - %s has no files to upload.", export_dir)
             return False
 
+        redirects_path = export_dir / "_redirects"
+        redirects_content = (redirects_path.read_text(encoding="utf-8")
+                             if redirects_path.is_file() else None)
+
         session = requests.Session()
         session.headers["Authorization"] = f"Bearer {api_token}"
 
@@ -221,7 +264,7 @@ def push_remote(cfg: Config) -> bool:
         if not _upsert_hashes(session, jwt, [key for key, _data, _ctype in files]):
             return False
 
-        url = _create_deployment(session, account_id, project, manifest)
+        url = _create_deployment(session, account_id, project, manifest, redirects_content)
         if url is None:
             return False
 

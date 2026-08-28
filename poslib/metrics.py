@@ -273,6 +273,7 @@ class Metrics:
         """The product catalogue, with stock valued at cost."""
         df = self._read("""
             SELECT i.ID AS item_id, i.ItemNo AS item_no, i.ItemName AS item_name,
+                   i.Reference AS reference,
                    i.ItemFamilyID AS family_id, i.Stock AS stock,
                    i.StockAlert AS stock_alert, i.Cost AS cost, i.Price AS price,
                    i.LastSold AS last_sold, i.LastPurchased AS last_purchased,
@@ -289,6 +290,10 @@ class Metrics:
         df["date_created"] = pd.to_datetime(df["date_created"], errors="coerce")
         df["inactive"] = df["inactive"].fillna(0).astype(int).astype(bool)
         df["family_name"] = df["family_name"].fillna("—")
+        # "." is R.Lynx's own placeholder for "no reference set" (seen on
+        # generic/catch-all items) - not a real reference, so treat it the
+        # same as a blank one rather than showing it as if it were real.
+        df["reference"] = df["reference"].mask(df["reference"].isin(["", "."]))
 
         # Stock value at cost. Rows with negative stock are POS mistakes; they
         # are kept in the total (so it matches the books) and reported on
@@ -300,6 +305,19 @@ class Metrics:
             df["cost"].fillna(0) > 0,
             (df["price"].fillna(0) - df["cost"].fillna(0)) / df["cost"].replace(0, np.nan),
             np.nan)
+
+        # Wholesale box view: R.Lynx's own "QtyPerParcel" ("Colis" in the
+        # French UI) is how many individual pieces come in one box/case -
+        # e.g. 24 for most items in this database. A qty_per_parcel of 0/1/
+        # NaN means "no box packaging tracked for this item" - stock_boxes/
+        # stock_remainder stay NaN rather than a misleading "1 box per
+        # piece" split. Floor division so a partly-broken-open box shows as
+        # whole boxes plus the loose pieces left over, not a fractional box.
+        has_boxes = df["qty_per_parcel"].fillna(0) > 1
+        df["stock_boxes"] = np.where(
+            has_boxes, np.floor(df["stock"].fillna(0) / df["qty_per_parcel"]), np.nan)
+        df["stock_remainder"] = np.where(
+            has_boxes, df["stock"].fillna(0) - df["stock_boxes"] * df["qty_per_parcel"], np.nan)
         return df
 
     @cached_property
@@ -421,6 +439,114 @@ class Metrics:
         df["purchase_time"] = df["purchase_id"].map(dates)
 
         return df
+
+    @cached_property
+    def item_purchase_costs(self) -> pd.DataFrame:
+        """
+        Per-item weighted-average cost (AVCO) and last purchase cost,
+        computed fresh from `purchases` - never from `Item.Cost` and never
+        from `PurchaseEntry.NewCost`.
+
+        `PurchaseEntry.NewCost` looks like a per-delivery unit cost but is
+        actually R.Lynx's OWN already-computed running weighted-average
+        cost (the exact same AVCO recursion this function implements,
+        updated incrementally per purchase line) - feeding it back into an
+        averaging formula double-averages. The real per-unit input is
+        `Cost / Qty`: `PurchaseEntry.Cost` is the line's net cost
+        (`Amount - TotalItemDiscount`, i.e. `Price * Qty` after the
+        supplier's own discount, when one applies), not `NewCost * Qty` as
+        an earlier pass of this investigation wrongly assumed. `Price`
+        itself is the GROSS list price before that discount, so it is
+        also the wrong input on the ~13% of lines that carry one -
+        checked empirically: `Cost / Qty` reproduces R.Lynx's own
+        `NewCost` (anchored against `OldCost`) on 2,606 of 2,606 valid
+        lines; `Price` only reproduces it on 2,271 of 2,606, failing
+        exactly on the discounted rows, and by overstating cost. This was
+        the shop owner's own catch: he reported the shipped last-cost
+        figures had "lots of digits" and weren't the round numbers he
+        actually pays, which is the signature of `NewCost`'s own internal
+        blending, not real purchase noise.
+
+        The `Item.Cost` divergence noted in an earlier version of this
+        docstring (18 of 1,567 items, one 12-item cluster exactly 2x off
+        via bulk `PricingUpdateID` 217) turned out to run the OPPOSITE
+        direction on inspection: those 12 items each have a purchase line
+        with `OldCost = 0` blended against pre-existing stock, i.e.
+        `PurchaseEntry.NewCost` itself is the corrupted value there and
+        `PricingUpdateID` 217 was the correction, not the damage. Kept
+        here as a reminder that `NewCost` cannot be trusted as ground
+        truth anywhere in this table, not just on the well-known items -
+        `Cost` is the only per-line field this function still uses.
+
+        The accumulator only needs `purchases` - no purchase dates, no
+        sales table, no interleaving. `new_stock` is R.Lynx's own snapshot
+        of the item's total stock level immediately AFTER this purchase
+        line was applied, so `new_stock - qty` is the stock on hand the
+        instant before this delivery landed - i.e. exactly the quantity
+        that was carrying the old average. That already nets out every
+        sale, return and stock adjustment that happened since the previous
+        purchase, so there is no need to know when any of that happened.
+        `entry_id` (PurchaseEntry's own row ID) is a sound ordering key
+        WITHIN one item's own purchase lines for the very large majority
+        of items - it is NOT a clean global chronological key across the
+        whole table (confirmed: PurchaseID runs backwards against it at
+        20 points system-wide), so it must never be used for anything
+        beyond per-item ordering. Checked against `Item.LastPurchasePrice`
+        (which R.Lynx updates from its own notion of "the last purchase"):
+        4 of 1,574 items disagree with the highest-`entry_id` line's own
+        price, so even within-item `entry_id` order is not a perfect
+        guarantee, just a very reliable one.
+
+        A line with non-positive qty, a missing `cost`, or a `cost/qty`
+        that isn't strictly positive is skipped for costing purposes, but
+        the running quantity is still resynced to that line's own
+        new_stock (when known) so a later, good line isn't compared
+        against a stale quantity. There is deliberately no fallback to
+        `NewCost` for a bad final line - that would silently reintroduce
+        the exact bug this function exists to avoid on the single most
+        visible figure. Items with no usable purchase history at all get
+        no row here - `catalog()`'s merge leaves avg_cost/last_purchase_cost
+        as NaN for them, blank rather than guessed from `Item.Cost`.
+
+        Display-only for now: this does not feed stock_value, markup_pct,
+        dead_stock or any other existing diagnostic - see CLAUDE.md.
+        """
+        cols = ["item_id", "avg_cost", "last_purchase_cost"]
+        p = self.purchases
+        if p.empty:
+            return pd.DataFrame(columns=cols)
+
+        p = p[p["is_purchase"]].sort_values(["item_id", "entry_id"])
+
+        records: list[dict[str, Any]] = []
+        for item_id, group in p.groupby("item_id", sort=False):
+            running_qty: float | None = None
+            running_avg: float | None = None
+            last_cost: float | None = None
+            for row in group.itertuples():
+                qty, cost, new_stock = row.qty, row.cost, row.new_stock
+                bad = pd.isna(qty) or qty <= 0 or pd.isna(cost) or pd.isna(new_stock)
+                raw = (cost / qty) if not bad else None
+                bad = bad or raw is None or raw <= 0
+                if bad:
+                    if not pd.isna(new_stock):
+                        running_qty = new_stock
+                    continue
+                before = new_stock - qty
+                if running_avg is None:
+                    running_avg = raw
+                else:
+                    carry = min(max(before, 0.0), running_qty)
+                    denom = carry + qty
+                    running_avg = ((carry * running_avg + qty * raw) / denom
+                                   if denom > 0 else raw)
+                running_qty = new_stock
+                last_cost = raw
+            if last_cost is not None:
+                records.append({"item_id": item_id, "avg_cost": running_avg,
+                                 "last_purchase_cost": last_cost})
+
+        return pd.DataFrame.from_records(records, columns=cols)
 
     @cached_property
     def supplier_payments(self) -> pd.DataFrame:
@@ -1429,12 +1555,18 @@ class Metrics:
     def catalog(self) -> pd.DataFrame:
         """
         The full product catalogue for the Stock catalog screen: reference,
-        name, family/brand, quantity, cost, price. A thin, sorted view over
-        `items` - no new business logic, just what a search screen needs.
+        name, family/brand, quantity (in pieces and, where R.Lynx tracks a
+        box size, in whole boxes + leftover pieces too), cost, price, plus
+        the weighted-average and last-purchase cost from
+        `item_purchase_costs` (NaN for items with no usable purchase
+        history - blank, not guessed). `cost` (Item.Cost) stays untouched
+        alongside them, still the field every existing diagnostic reads.
         """
-        cols = ["item_id", "item_no", "item_name", "family_name", "stock",
+        cols = ["item_id", "item_no", "reference", "item_name", "family_name",
+                "stock", "qty_per_parcel", "stock_boxes", "stock_remainder",
                 "cost", "price", "inactive"]
-        return self.items[cols].sort_values("item_name").reset_index(drop=True)
+        df = self.items[cols].merge(self.item_purchase_costs, on="item_id", how="left")
+        return df.sort_values("item_name").reset_index(drop=True)
 
     def inventory_summary(self) -> dict[str, Any]:
         """The stock picture in one set of numbers."""
@@ -1890,11 +2022,21 @@ class Metrics:
         s = (self.sales[self.sales["item_id"] == item_id]
              .sort_values("ticket_time", ascending=False))
 
+        pu = self.purchases
+        pu = pu[(pu["item_id"] == item_id) & (pu["is_purchase"])]
+        pu = pu.merge(self.suppliers[["supplier_id", "supplier_name"]],
+                      on="supplier_id", how="left")
+        pu["supplier_name"] = pu["supplier_name"].fillna("")
+        pu = pu.sort_values("entry_id", ascending=False)
+
         return {
             "summary": summary_row,
             "family": family_row,
             "sales_history": s[["ticket_time", "receipt_id", "qty", "price",
                                 "amount", "gross_profit"]],
+            "purchase_history": pu[["entry_id", "purchase_time", "purchase_id",
+                                    "supplier_name", "qty", "price", "new_cost",
+                                    "new_stock"]],
         }
 
     # =====================================================================

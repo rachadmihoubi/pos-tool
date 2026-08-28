@@ -265,7 +265,7 @@ order" section sequences the work into the 5 components below.
 | 2 | DB auto-detect wizard page + silent watcher auto-start (`schtasks /sc onlogon`) | **DONE, interactively verified 2026-08-26** | `docs/superpowers/plans/2026-08-26-db-autodetect-watcher-autostart.md` (status banner has the full detail). Both tasks committed (`eb22bfb`..`10deb48`, 5 commits incl. two real fixes: placeholder-config detection, admin/user-account mismatch warning). Real install on this dev PC confirmed: no-overwrite guard, correct scheduled-task target/user/trigger, headless watcher run (no window, correct DB file watched, digest job ran), clean `/VERYSILENT` uninstall (task + folder both removed). One residual gap: the DB wizard page's own auto-detect/Browse flow wasn't click-through-exercised (this dev PC already had a configured `config.yaml` so the page was skipped by design) — the underlying code did go through a review + fix cycle already. |
 | 3 | Silent auto-update via GitHub Releases | **CODE-COMPLETE; elevation gap fixed 2026-08-27, still NOT customer-rollout-ready** | `docs/superpowers/plans/2026-08-26-component3-auto-update.md` for the original build; `docs/superpowers/specs/2026-08-27-update-elevation-fix.md` for the elevation fix. Detect/download/checksum-verify/reject all verified 2026-08-27 against a real, now-deleted throwaway `v1.0.1` GitHub release. **Known blocking gap #1 — FIXED 2026-08-27**: the watcher's scheduled task stays de-elevated (`setup.iss`, unchanged, per commit `10deb48`) and no longer calls `check_and_apply_update()` at all. A second scheduled task, "Shop Analysis - Updater" (`packaging/setup.iss`), created at install time running as `SYSTEM`/`/rl highest`/`/sc onlogon`, owns the whole check→download→verify→install flow instead — SYSTEM tasks never hit an interactive UAC prompt (same mechanism as Windows' own built-in `SilentCleanup` task), so no stored credentials and no dialog nobody is there to click. It runs `ShopAnalysis.exe --apply-update --data-dir "<installing user's %LOCALAPPDATA%\Shop Analysis>"` (new `main.py` dispatch + new `SHOP_ANALYSIS_DATA_DIR` override in `poslib/paths.py::user_data_dir()`), because SYSTEM's own `%LOCALAPPDATA%` is not the shop's — solved the same way `setup.iss`'s existing `WriteDatabaseConfig` already captures `{localappdata}` at install time, not by having the elevated process guess. The two cheap fixes previously ruled out (per-user install; a `/CURRENTUSER` override) stay ruled out; this is the "second always-elevated helper task" option the table used to describe as not-yet-built. `check_and_apply_update()`/`check_for_update()`/etc. in `poslib/updater.py` are unchanged — only which process, running as what account, calls them changed. `update.enabled` stays defaulted to `false` in both `config.template.yaml` and `poslib/updater.py`'s own fail-safe default — this fix removes the *reason* it was off, but flipping it on for a real store still needs the last item below, not done as part of this fix. **Known gap #2 — FIXED 2026-08-27**: `poslib/updater.py` now writes a small marker (`update_attempted.txt` in `user_data_dir()`, holding the release tag) right after successfully launching an installer; `check_for_update()` refuses to retry the *same* tag again (logs an error instead - "publish a corrected release to resume") so a genuinely mis-cut release (bundled `VERSION` not actually bumped) can no longer loop download→install→relaunch forever - a launch that fails outright is *not* marked attempted, so it still retries normally next login. **Fully real-machine-verified 2026-08-27, both the mechanism and the real installer** (see `docs/superpowers/specs/2026-08-27-update-elevation-fix.md` for the full log of both passes): first, a dev-Python substitute test (`SYSTEM`/`/rl highest` task running `main.py --apply-update --data-dir <repo>`) confirmed **zero UAC prompt** and exit code `0`. Then Inno Setup was installed (`winget install --id JRSoftware.InnoSetup`) and the *actual* `packaging/pos-tool.spec` + `packaging/setup.iss` were built into a real `Setup.exe` and installed on this machine: `schtasks /query` confirmed both tasks created exactly as designed (`"Shop Analysis - Watcher"` as the installing user, `"Shop Analysis - Updater"` as `Système` with `--data-dir` correctly baked to the real `%LOCALAPPDATA%`); `schtasks /run` on the Updater task showed no prompt and the install's own log recorded `poslib.updater  Auto-update disabled via config - skipping check.` at INFO level — direct proof the real frozen build ran elevated end-to-end. Full manual cleanup afterward (process killed, Program Files/`%LOCALAPPDATA%\Shop Analysis`/build output all removed, both tasks confirmed gone); the real git-clone watcher kept pushing to Cloudflare throughout, completely undisturbed. **One minor finding from this pass, fixed and re-verified same session**: the uninstaller initially couldn't remove every file in one pass because the install's own `--watcher` process (started unconditionally by `setup.iss`'s `[Run]` section, even on a silent install) was still holding some files open — `CloseApplications=force` covers the *installer*'s file-copy phase but not the *uninstaller*'s file-removal phase. Added a `taskkill /F /IM ShopAnalysis.exe` `[UninstallRun]` entry ordered before file removal; reproduced the exact failure and re-ran the uninstall — process killed automatically, `Program Files` fully removed in one pass, both tasks confirmed gone. **Still open**: exercising the already-up-to-date no-op path against a real newer release (needs an actual second GitHub release to publish and compare against) — low priority, can be checked the first time a real update actually ships. |
 | 4 | Cloudflare Pages push over direct REST API (no `wrangler`/Node.js) | **DONE, committed, phone-verified** | `poslib/remote.py`, commit `5df4d73` (2026-08-26), superseding the scoped-token approach in `docs/superpowers/plans/2026-08-25-cloudflare-token-auth.md` (see that file's status banner). Verified by pushing to a disposable throwaway Cloudflare Pages project (created and deleted via the API — the real store project `promakeupmihoubipos` was never touched) and confirming it loaded correctly from an actual phone, not just a "success" API response. 25 unit tests passing (`tests/test_remote.py`). |
-| 5 | Multi-store hub page + cross-store stock search | **DESIGN SETTLED + EMPIRICALLY VERIFIED 2026-08-27; `stock.json` export BUILT; hub page + installer automation NOT built yet** | `docs/superpowers/specs/2026-08-27-component5-hub-design.md` — corrects a real gap found in the original master spec (a Cloudflare Pages deployment fully replaces a project's site, so 3 stores can't share one hub project as a write target the way the master spec assumed) and a hard blocker (Access login sessions can't cross `*.pages.dev` origins — cookie scoping, not a Cloudflare quirk). Settled design: each store keeps pushing only its own project; `export_static.py` now emits one extra file, `stock.json` (item code, name, quantity, price — price inclusion was the owner's explicit call, a real widening from "low-sensitivity" but accepted), excluding inactive items. Making that one path reachable without login needs **two** Access applications per store, not one edited application with a path-scoped policy — Cloudflare has no such thing; a policy can't be scoped to a path within an app. The fix: a second, narrower Access application scoped to just `.../stock.json` with a Bypass policy, alongside the existing broad owner-only application — Cloudflare evaluates the most specific matching application first. **Empirically verified 2026-08-27 against a real disposable throwaway Cloudflare project + Access apps** (same precedent Component 4 held itself to, not just documentation research): `GET /` → 302 to Access login; `GET /stock.json` → 200 with the real content, no redirect at all — confirmed the two-application design actually works, confirmed the `domain: "host/path"` request shape, and found CORS needs zero extra `_headers` config (`Access-Control-Allow-Origin: *` is already present by default). Everything created was deleted afterward; the test token was revoked. The hub itself stays a plain static page whose JS fetches all 3 `stock.json` files directly, no new Cloudflare product — not built yet. Owner's explicit goal: **the installer should provision all of this automatically**, no manual Zero Trust dashboard clicking per store — resolved as a one-time-use powerful Cloudflare token (permission group "Access: Apps and Policies", Edit — confirmed distinct from `Pages:Edit`), pasted in only during a *new* store's interactive install (never persisted), that creates the project + both Access applications via Cloudflare's Access Management API and then mints the narrow ongoing `Pages:Edit`-only token for the watcher's permanent use — preserves Component 4's least-privilege intent for the credential that actually lives on the till PC long-term. This automated installer flow itself is not built yet — today's test manually drove each API call to verify the mechanism, one step at a time, not as one scripted sequence. No auto-matching across stores, no combined totals — unchanged from the master spec, V1 shows matching rows side by side. |
+| 5 | Multi-store hub page + cross-store stock search | **Hub is LIVE at `promakeupmihoubi-hub.pages.dev`, fully phone-verified by the owner 2026-08-28: store-link button, reference-based search, and cost-instead-of-price all confirmed working** (see "Hub search shows cost, not price" section below for the token/Access-repoint work, and the follow-up stale-hub-deploy bug fixed the same day). Installer-driven provisioning NOT built yet, but its blocking feasibility question is now RESOLVED (2026-08-28) — confirmed viable, clear to build** | `docs/superpowers/specs/2026-08-27-component5-hub-design.md` for the design; `docs/superpowers/plans/2026-08-27-component5-hub-page.md` for the build and live-deploy log (all of Tasks 1-4 done, including the real-phone check). Corrects a real gap found in the original master spec (a Cloudflare Pages deployment fully replaces a project's site, so 3 stores can't share one hub project as a write target the way the master spec assumed) and a hard blocker (Access login sessions can't cross `*.pages.dev` origins — cookie scoping, not a Cloudflare quirk). Settled design: each store keeps pushing only its own project; `export_static.py` now emits one extra file, `stock.json` (item code, name, quantity, price — price inclusion was the owner's explicit call, a real widening from "low-sensitivity" but accepted), excluding inactive items. Making that one path reachable without login needs **two** Access applications per store, not one edited application with a path-scoped policy — Cloudflare has no such thing; a policy can't be scoped to a path within an app. The fix: a second, narrower Access application scoped to just `.../stock.json` with a Bypass policy, alongside the existing broad owner-only application — Cloudflare evaluates the most specific matching application first. **Empirically verified twice now**: first against a disposable throwaway project (2026-08-27, deleted afterward, same precedent Component 4 held itself to), then for real against the live `promakeupmihoubipos` project and a brand-new live `promakeupmihoubi-hub` project (2026-08-27) — `GET https://promakeupmihoubipos.pages.dev/` → 302 to Access login (broad app untouched); `GET .../stock.json` → 200 with real item rows, no redirect; `GET https://promakeupmihoubi-hub.pages.dev/` → 302 to Access login (new owner-only app on the hub). Built and pushed 2026-08-27, with two real corrections found while going live (both logged in the plan file): (1) the live store's `stock.json` initially 404'd even with the Bypass app working, because this dev PC's watcher only re-pushes when the ETL detects new source rows — the `export_static.py` code adding `stock.json` had landed on `main` with no new till activity since, so nothing had re-exported it; fixed by running `export(cfg)` + `push_remote(cfg)` directly once, bypassing that gate. (2) Cloudflare's Direct Upload API does **not** auto-create a project on first push (contrary to this component's own original assumption) — `POST /accounts/{id}/pages/projects` has to be called explicitly first; `tools/deploy_hub.py` does not yet have this fallback built in (a one-off manual step for now, not blocking). All three live Access applications (`promakeupmihoubipos.pages.dev` broad, `promakeupmihoubipos.pages.dev/stock.json` bypass, `promakeupmihoubi-hub.pages.dev` broad) created with a temporary Cloudflare token (`Pages:Edit` + `Access: Apps and Policies:Edit`) the user pasted in for one-time use, held in-memory only, never written to disk — user was asked to revoke it once done, same disposable-credential pattern as Component 4 and the original verification pass. **Built 2026-08-27**: `hub-site/` (static switcher + client-side cross-store search page, `Promise.allSettled`-based so one unreachable store doesn't hide the rest), `poslib/remote.py::push_remote` gained optional `project`/`export_dir` overrides (backward compatible — every existing watcher call is unaffected) so it can push a directory that isn't a store's own `config.yaml`-configured export, and `tools/deploy_hub.py`, a one-off manual CLI reusing that override to push `hub-site/` to its own Cloudflare Pages project. 34 new/updated unit tests passing (`tests/test_remote.py`, `tests/test_hub_site.py`, `tests/test_deploy_hub.py`); full suite (`pytest tests -q`) green at 310 passed, 1 skipped. Owner's explicit goal for the *other* half of this component: **the installer should provision new stores' Cloudflare setup automatically**, no manual Zero Trust dashboard clicking — resolved as a one-time-use powerful Cloudflare token (permission group "Access: Apps and Policies", Edit — confirmed distinct from `Pages:Edit`), pasted in only during a *new* store's interactive install (never persisted), that creates the project + both Access applications via Cloudflare's Access Management API and then mints the narrow ongoing `Pages:Edit`-only token for the watcher's permanent use. **Feasibility RESOLVED 2026-08-28 — confirmed a scoped token CAN mint other tokens.** The last step (minting the narrow ongoing token programmatically) is Cloudflare's *user*-scoped `POST /user/tokens` endpoint; this was empirically untested until now, so nothing was built against the assumption it would work. Tested directly with three real disposable tokens against the live Cloudflare API (all three since revoked by the user): the first two both failed every token-management call with a generic `9109 Unauthorized` — including on a plain `GET /user` self-info call — which looked at first like a hard platform block, but turned out to be a false negative both times: token 1 was built via the generic "Custom Token" flow, which Cloudflare's own docs say cannot expose the "User > API Tokens > Edit" permission at all (only a specific dashboard template, "Create Additional Tokens," can); token 2 used that correct template but had its permission dropdown accidentally left on "Account · Cloudflare Pages · Edit" instead of "User · API Tokens · Edit" — a dashboard mix-up, not a platform limit, so it never actually carried token-management rights either. A third token, created via "Create Additional Tokens" with the permission dropdowns actually set to **User · API Tokens · Edit**, worked end-to-end: `GET /user/tokens/permission_groups` and `GET /user/tokens` (list — correctly showed all 3 real account tokens, including the production "pos tool" watcher token) both succeeded; `POST /user/tokens` successfully minted a brand-new working `Pages Write`-scoped token; `DELETE /user/tokens/{id}` successfully revoked it again, confirmed gone via a follow-up list call. Full create→verify→delete lifecycle proven. (One unrelated, harmless quirk: this same working token still got `9109` on plain `GET /user` — "API Tokens Write" apparently doesn't cover basic self-info — irrelevant to the actual need.) **Conclusion: the original Component 5 design is viable as written, no fallback-to-manual-pasting redesign needed.** Separately, and still true regardless: **account-owned tokens** (`cfat_` prefix, Cloudflare's purpose-built "durable integration" token type) require **Super Administrator** account-level permission to create — a full member role, not a grantable token permission — so if this feature is ever revisited toward that mechanism instead of user-owned tokens, that's a materially higher privilege bar; not needed given the above already works via user-owned tokens. Per the global CLAUDE.md security/access-control gate, dispatch the opus-reviewer subagent to sanity-check the actual provisioning-flow plan before writing code — this finding only clears the feasibility question, not the design-review gate. No auto-matching across stores, no combined totals — unchanged from the master spec, V1 shows matching rows side by side. |
 
 Key decisions worth knowing without re-reading the whole spec:
 - **This dev PC is not one of the 3 customer stores** — it stays on the
@@ -281,6 +281,530 @@ Key decisions worth knowing without re-reading the whole spec:
   discovery #11 below. V1 shows matching rows side by side and lets the
   owner's own eyes do the matching; a real combined total would need a
   manual product-linking step, not built.
+
+## Hub search shows cost, not price (2026-08-27/28) — and why it's an unguessable filename, not a real login
+
+The owner asked for two changes to the hub's cross-store search after his
+first live phone test: match on `Item.Reference` (the shop's own product
+code, e.g. "Q0130") instead of the internal `ItemNo` (e.g. "AR0002"), and
+show cost instead of selling price. The reference swap was simple —
+`Metrics.items`/`catalog()` now select `i.Reference AS reference` (with
+R.Lynx's own `"."` placeholder for "not set" normalized to null,
+`poslib/metrics.py`), and `export_static.py`/`hub-site` use that field
+instead of `item_no`.
+
+Cost was a real security decision, not a simple swap — `/stock.json` is
+reachable with **no login at all** (Cloudflare Access Bypass policy, see
+the Component 5 row above), so putting cost there would make margin data
+public to anyone with the URL. The owner's first instinct was "keep
+everything private," which surfaced two infeasible options worth recording
+so they aren't re-attempted: (1) a real server-checked secret (a header or
+Cloudflare Access service token validated per-request) doesn't work
+because Cloudflare Pages **Direct Upload** — this project's whole deploy
+mechanism, chosen specifically so customer installs don't need Node.js/
+wrangler — does not support Pages Functions at all, and browser `fetch()`
+can't reliably carry Access service-token headers cross-origin either;
+(2) the actually-correct fix (put every store + the hub on subdomains of
+one real domain so Cloudflare Access can share one login session across
+them, removing the need for any Bypass policy) needs the owner to own a
+domain and was deferred, not rejected.
+
+**What shipped instead**: `remote.stock_json_token` (per-store, in
+`config.yaml`, blank by default) switches `export_static.py`'s output from
+the public `stock.json` (price, never cost) to `stock-<token>.json` (cost,
+never price) — a second file whose *name itself* is the only thing gating
+it, since nothing server-side actually checks it (Cloudflare Pages static
+hosting can't). The token is only known to `hub-site/stores.json`, which
+is itself only reachable by whoever can log into the hub (the existing
+owner-only Access application) — so the practical exposure is "anyone who
+can already log into the hub could extract this URL from the page source
+and re-share it," not "public to the internet." The owner explicitly
+accepted this exact tradeoff after it was spelled out, rather than having
+it silently implemented — see the two `AskUserQuestion` exchanges in this
+session's history. **Missing/blank token fails safe**: a store with no
+token configured keeps exactly today's behavior (public `stock.json`,
+price only, no cost) rather than ever exposing cost on the well-known
+filename. This dev PC's real `config.yaml` already has a generated token;
+`hub-site/stores.json`'s URL was updated to match. **Both remaining steps
+are now done (2026-08-28)**: the live Cloudflare Access application for
+`promakeupmihoubipos.pages.dev` (app id `c5d4cdc6-afc4-43bd-984b-fd86454df55d`)
+was repointed from the literal `.../stock.json` path to
+`.../stock-f1cab0dac3a8e273d6293d71c808c877.json` via the Access
+Management API (`domain`, `self_hosted_domains`, and `destinations[].uri`
+all updated together — a `PUT` with only `domain` changed fails with
+error 12130 "domain not included in destinations"; the endpoint also only
+accepts `PUT`, not `PATCH`, which returns 405), and the store was
+redeployed (`export_static.export(cfg)` + `poslib.remote.push_remote(cfg)`
+run directly, the same manual-redeploy step used twice earlier in this
+component, since the watcher only auto-pushes on new till activity). The
+one-time Cloudflare API token used for the Access-app edit was pasted in
+by the owner for this single use and should be revoked now that it's no
+longer needed.
+
+**Follow-up bug, found and fixed same day (2026-08-28)**: the owner
+reported the hub's button-to-store-dashboard was fixed (see the
+`_redirects` section below) but cross-store search now returned "no
+results at all." Root cause: `hub-site/stores.json` was edited locally in
+commit `95f79f9` to point at the new `stock-<token>.json` URL, but
+**`tools/deploy_hub.py` was never re-run afterward** — the hub project is
+pushed manually, separately from the store's own watcher-driven push, and
+nothing in this fix's own work actually redeployed it. Once the store's
+Access Bypass app was repointed away from the plain `/stock.json` path
+(the step right above), that URL started 302-ing to the Cloudflare Access
+login page instead of serving JSON — so the *still-live* hub was fetching
+a URL that had just become access-gated out from under it. A cross-origin
+fetch() to a redirect-to-login response fails in the browser, `allItems`
+never populated, and the search box had nothing to filter. This is the
+same class of bug as the earlier "stock.json initially 404'd" note above
+(committed code that never actually got pushed to the live deployment) —
+worth remembering any time `hub-site/` or a store's `remote.*` config
+changes: a git commit is not a deploy for either of these two ad hoc
+CLI-driven pushes.
+
+Fixed by running `python tools/deploy_hub.py --project
+promakeupmihoubi-hub` directly. **Verified without needing the owner's
+login**: a Cloudflare Pages Direct Upload deployment's unique per-deploy
+subdomain (e.g. `https://5dc8a56e.promakeupmihoubi-hub.pages.dev/`, printed
+by the push itself) is NOT covered by the hub's Access application (which
+is scoped to the literal `promakeupmihoubi-hub.pages.dev` hostname only),
+so it's reachable without logging in — a reusable trick for verifying any
+future hub/store deploy from this dev machine without needing the owner's
+phone. Confirmed on that URL via `gstack browse`: `stores.json` now serves
+the tokenized URL, the page loads with no console errors and "Pro Makeup
+Mihoubi: 1599 items", typing "2530" into the search box returns the
+matching row with correct cost (35) and box count (14 (+0)), and the
+store-link button resolves to `https://promakeupmihoubipos.pages.dev/`
+correctly. **Owner-confirmed 2026-08-28**: checked from his own phone
+(the production `promakeupmihoubi-hub.pages.dev` URL, behind his real
+Access login) — both the store-link button and cross-store search now
+work. Both the button/`_redirects` bug and this stale-hub-deploy bug are
+closed.
+
+## Wholesale box/"colis" stock view (2026-08-28)
+
+The owner sells wholesale in boxes of 24+ pieces, not individual units, and
+asked the tool to show stock that way. `Item.QtyPerParcel` ("Colis" in
+R.Lynx's own UI) turned out to already be a well-populated field in the
+real database (1,512 of 1,599 items have a real box size; most common
+values 24/12/6/36 pcs) — no schema gap like discovery #5/#6 above, just an
+unsurfaced column. `Metrics.items` (`poslib/metrics.py`) now derives
+`stock_boxes = floor(stock / qty_per_parcel)` and
+`stock_remainder = stock - stock_boxes * qty_per_parcel`, only when
+`qty_per_parcel > 1` (0/1/NaN means "no box packaging tracked" — both
+derived columns stay NaN rather than showing a misleading 1-piece "box").
+`catalog()` exposes both; the local Stock catalog page, `stock.json`/
+`stock-<token>.json` (both variants — box counts aren't sensitive the way
+cost is), and the hub's cross-store search table all show a "Boxes" column
+(`24 (+6)` style: full boxes plus any partial remainder). `qty_per_parcel`
+itself stays internal-only — never leaks into the exported JSON. Committed
+as `8d7f94b`.
+
+## Hub store-link button 404'd on every store's root — real bug in
+`poslib/remote.py`, not the hub (2026-08-28)
+
+While shipping the box feature above, the owner reported the hub's
+"Pro Makeup Mihoubi" button led to `https://promakeupmihoubipos.pages.dev/`
+showing Cloudflare's own custom 404 ("Not available remotely..."). First
+fix attempt: `hub-site/app.js`'s `renderStoreLinks` collapsed a store's
+`stock.json` URL back to its dashboard root via
+`s.url.replace(/\/stock\.json$/, "/")` — a regex that only matched the
+plain filename, not the new tokenized `stock-<token>.json` (see the hub
+cost/token section above), so for this store the replace was a silent
+no-op and the button linked straight at the raw JSON file's path. Fixed to
+`/\/stock(-[0-9a-f]+)?\.json$/`, tested, redeployed (`f63e718`) — but the
+owner reported the *exact same* symptom afterward, which meant the first
+diagnosis was incomplete.
+
+**Real root cause, finally nailed down empirically (not guessed)**:
+`poslib/remote.py`'s `_IGNORED_FILE_NAMES` had excluded `_redirects` from
+every Cloudflare Pages upload since Component 4 shipped (2026-08-26),
+lumped in with `_worker.js`/`_routes.json` on the mistaken assumption all
+three are "Pages Functions source, not static assets." A first fix
+(`d9a08e0`) just removed `_redirects` from that ignore list so it uploaded
+as a normal manifest asset, same as `_headers` — logical, tested, deployed,
+and **still didn't work**, because it was solving the wrong half of the
+problem. Cloudflare's Direct Upload API treats `_headers` and `_redirects`
+asymmetrically and nothing in Cloudflare's own docs says so: `_headers` is
+read straight out of the normal uploaded asset set (confirmed — the
+`stock.json` CORS header really does work this way), but `_redirects` is
+**only** honored when it is excluded from the asset manifest entirely and
+sent as its own separate multipart file field on the deployment-create
+call (filename `"_redirects"`, content-type `text/plain`) — exactly how
+`wrangler pages deploy` does it internally, which is not documented
+anywhere in Cloudflare's public API reference. Proved this by scripting
+disposable throwaway Cloudflare Pages projects (same pattern Components 4
+and 5 used) and testing both forms directly: a manifest-only `_redirects`
+deploys with `success: true` and then serves a bare 404 on `/` forever,
+while the separate-file-field form returns a real `302`. `_create_deployment`
+now takes an optional `redirects_content` string and adds it as
+`files["_redirects"] = ("_redirects", content, "text/plain")` only when
+present; `_IGNORED_FILE_NAMES` has `_redirects` back in it (correctly, this
+time — excluded from the manifest walk, not dropped from the deploy).
+Tests updated: `test_ignores_wrangler_reserved_names` now also covers
+`_redirects`, and a new `test_sends_redirects_as_separate_deployment_field`
+/`test_no_redirects_field_when_no_redirects_file` replace the old
+(disproven) `test_uploads_redirects_file`. Full suite green
+(`tests/test_remote.py`, 30 passed). Store redeployed with this fix.
+
+**Why the owner's phone check couldn't be skipped even after this**:
+Cloudflare Access sits in front of the entire deployment and intercepts
+every unauthenticated request — including a plain `curl` from this dev
+machine — before Cloudflare Pages' own `_redirects` logic ever runs, so an
+unauthenticated `curl` to `/` cannot distinguish "root redirect works" from
+"root redirect is still broken" (both come back as a 302 to the Access
+login page). What *can* be confirmed from here, and was: (1) the
+mechanism itself works, proven against a disposable project with no Access
+in front of it at all; (2) the real store's actual generated `_redirects`
+file (`/  /fr/today  302` plus one line per language) has the same syntax
+that disposable-project test used successfully; (3) the real deployment
+went out with this fix. What still can't be confirmed from a dev machine:
+whether Access correctly hands the *authenticated* browser back to Pages'
+post-Access routing in a way that still applies the redirect — needs the
+owner's own phone, logged in, hitting the bare domain root. Two prior
+"fixed" claims in this file turned out to be wrong or unverified before
+the owner tested; don't repeat that a third time — say what's confirmed
+vs. what only the owner's phone can confirm, and wait for that check
+before calling this closed.
+
+## Weighted-average cost (AVCO) + last purchase cost (2026-08-28) — built, both figures shown side by side
+
+The owner asked for weighted-average cost back on 2026-08-27 (deferred
+until Component 5 shipped, per the sequencing noted throughout this file)
+and, once Component 5 was phone-verified, gave the concrete requirement:
+**both** the weighted-average cost **and** the last price actually paid
+for the product, shown next to each other — not just one. Per the global
+CLAUDE.md financial-decision gate (any change to cost/reconciliation
+logic needs an Opus subagent plan sanity-check before code is written,
+same rule that would have caught discovery #11's fabricated supplier
+figure earlier), the design below was reviewed by a dedicated Opus
+subagent before any code was written, then independently re-verified
+against the real database.
+
+**Two real discoveries about `PurchaseEntry`, neither previously
+documented anywhere in this codebase:**
+
+1. **`Item.Cost` is NOT reliably "last purchase cost"** — it looked like
+   it should be, but it is also overwritten by `PricingUpdateEntry`
+   (manual price edits in the POS UI), not just by purchases. Checked
+   against the full population: 18 of 1,567 items with purchase history
+   have an `Item.Cost` that diverges from their own last purchase's
+   `NewCost`, one cluster of 12 items exactly 2x off via a single bulk
+   `PricingUpdateID` 217 operation (2026-06-04). This means "last purchase
+   cost" has to be computed fresh from `PurchaseEntry`, never by
+   relabeling `Item.Cost` — an early instinct that a small 5-item sample
+   check seemed to confirm, until the subagent checked all 1,567 and found
+   the exceptions. **Correction, 2026-08-28** (see the section below):
+   the direction of that PricingUpdateID 217 story was backwards.
+   `PurchaseEntry.NewCost` itself was corrupted (understated ~2x) on
+   those 12 items by a separate bug (`OldCost = 0` on a line with
+   pre-existing stock — see point 2 below); PricingUpdate 217 was R.Lynx
+   *correcting* `Item.Cost` back to the right value, not damaging it. The
+   practical conclusion this discovery reached — compute a purchase-based
+   cost fresh, never by trusting `Item.Cost` — still holds, it just
+   holds for a different reason than originally written down here.
+2. **`PurchaseEntry.NewStock` is R.Lynx's own snapshot of the item's total
+   stock level immediately *after* that purchase line was applied** — not
+   the quantity received in that delivery. This is the key fact that made
+   a correct AVCO accumulator cheap to build: `NewStock - Qty` is the
+   stock on hand the instant *before* this delivery landed, which already
+   nets out every sale, return and stock adjustment (`ItemAdjustment`, a
+   real table with more rows than `PurchaseEntry` itself — a naive
+   purchases+sales-only interleave would have silently ignored it) that
+   happened since the previous purchase. This is why the accumulator
+   needs no purchase dates and no sales-table interleaving at all — an
+   initial framing of the problem (interleave purchases and sales
+   chronologically, blocked by ~34% of purchases having no real date) was
+   the wrong approach even with perfect dates, and was dropped in favor of
+   this one on the subagent's advice. `PurchaseEntry.ID` (`entry_id`) is a
+   **very reliable but not perfect** ordering key *within one item's own
+   purchase lines*: cross-checked against `Item.LastPurchasePrice`
+   (R.Lynx's own record of the last price paid) on 1,574 items, it agrees
+   on 1,570 and disagrees on 4 — good enough to build the accumulator on,
+   but not an absolute guarantee, and it is NOT a clean global
+   chronological key across the whole table regardless (confirmed:
+   `PurchaseID` runs backwards against it at 20 points system-wide) —
+   never rely on it beyond per-item ordering. **Corrected, 2026-08-28**:
+   `PurchaseEntry.Cost` is NOT `NewCost * Qty` as originally written
+   here — that was a wrong guess this file itself shipped with. `Cost` is
+   actually `Amount - TotalItemDiscount`, the line's real *net* total
+   cost after the supplier's own per-line discount; `Cost / Qty` is the
+   correct net per-unit figure. The genuine naming trap is the other way
+   around: `NewCost` *looks* like the obvious per-unit cost to use and is
+   even a real per-unit figure, but it is R.Lynx's own already-computed
+   running weighted-average (fed by the exact same `NewStock - Qty`
+   recursion this codebase independently builds) — using it as a raw
+   per-delivery input double-averages every purchase. See the correction
+   section below for how this was found and fixed.
+
+**What shipped**: `Metrics.item_purchase_costs` (`poslib/metrics.py`), a
+new standalone `cached_property` — deliberately not folded into the
+existing `items` property, to keep this from touching `stock_value`,
+`markup_pct`, `dead_stock`, `stockout_risk`, or anything else already
+built on `cost`. It walks each item's own purchase lines ordered by
+`entry_id`, computing each line's raw per-unit cost as `Cost / Qty` (net
+of the supplier's own discount — never `NewCost`, never gross `Price`;
+see the correction section below for why both of those are wrong),
+skipping a line with non-positive qty or a missing/non-positive raw cost
+for costing purposes (but still resyncing the running quantity to that
+line's own `new_stock`, so a later good line isn't compared against a
+stale quantity), and produces `avg_cost` (weighted-average, clamped so
+the "old" quantity carried forward never exceeds what was actually on
+hand or goes negative) and `last_purchase_cost` (the most recent valid
+line's own raw `Cost / Qty`) per item. Items never purchased get no
+row — blank on the catalog screen, never guessed from `Item.Cost`.
+`catalog()` merges this in by `item_id` (left join, so row count and
+sort order are unchanged); `cost` (`Item.Cost`) stays exactly as it was,
+still the only field every existing diagnostic reads — this is a
+display-only addition. Both figures now show as adjacent "Avg cost" /
+"Last cost" columns on the Stock catalog screen
+(`templates/catalog.html`, replacing the single "Cost" column; new
+`catalog.col_avg_cost`/`catalog.col_last_cost` keys in all three
+`locales/*.json` files), and in the hub's cross-store search
+(`hub-site/index.html`/`app.js`, two columns replacing one, falling back
+to `price` in both cells for a store with no `stock_json_token`
+configured). In `export_static.py`, both new fields are added **only**
+inside the existing `if stock_token:` branch of the stock-record loop —
+same discipline as the plain `cost` field (see the "Hub search shows
+cost, not price" section above): they can never appear on the public,
+unguessable-filename-only `stock.json`, only on `stock-<token>.json`.
+
+**Materiality — told to the owner up front so it doesn't read as
+broken**: as of the 2026-08-28 correction below, 1,576 items have a
+purchase-cost row; 47 of those show *any* difference between avg cost and
+last purchase cost (>0.01 DZD); 26 currently-in-stock items diverge by
+more than 1%. Stock valued at `avg_cost` totals ~63,990,732 DZD. In other
+words, on roughly 97% of catalog rows the two new columns still show the
+identical number — a real, correctly-working feature that mostly looks
+like it does nothing, because most products in this catalog have only
+ever been bought at one net price. (These figures differ slightly from
+the numbers this section first shipped with — 48/23/~64.5M — because the
+correction below changed the actual per-line cost the accumulator reads;
+re-run the query in that section any time this needs re-checking, don't
+treat either set of numbers as permanently frozen.) Verified via the test
+suite (`tests/test_metrics.py`'s `TestCatalog` —
+`test_last_purchase_cost_matches_last_valid_purchase_entry`,
+`test_avg_cost_equals_last_cost_for_single_purchase_items`, and
+`test_discounted_single_purchase_uses_net_cost_not_gross_price`, the last
+one a regression test specifically guarding against the gross-`Price`
+mistake described below ever being reintroduced) plus a new
+`TestProductPurchaseHistory` class covering the raw-purchase-lines
+transparency view. `pytest tests -q` passing is the re-verification step
+to re-run after any future change to `PurchaseEntry` handling, same as
+every other rule in this file.
+
+### Correction (2026-08-28) — "last cost" was reading the POS's own running average, not a raw delivery price
+
+The owner caught this himself from the numbers, not from a bug report:
+he pointed out that three products he buys often (M308, M377, M2041) got
+"last cost" figures with lots of decimal digits, when in his own real
+purchasing experience their cost is always a round number (rounded to the
+nearest 5 DZD, "only in extreme rare cases" not). His read was exactly
+right: **`item_purchase_costs` had been reading `PurchaseEntry.NewCost`
+as if it were "the raw price paid on the last delivery," but `NewCost` is
+R.Lynx's own already-blended running weighted-average cost** — the same
+number this codebase's own accumulator independently recomputes. Treating
+it as a raw per-delivery input double-averages every purchase, which is
+exactly the kind of drift that produces non-round numbers on an item
+whose real invoiced price never actually changes.
+
+Per the global CLAUDE.md financial-decision gate (this counts as
+"reconciliation logic... a number already shipped," so the gate applied
+even though the shipped number was only hours old), an Opus subagent was
+dispatched to investigate `PurchaseEntry`'s actual columns before any fix
+was written — and it caught a second problem my own first hypothesis
+would have missed. My first instinct was to switch from `NewCost` to
+`PurchaseEntry.Price` (which does look round, and matches the user's
+expectation on M308/M377/M2041 specifically, since none of those three
+happen to carry a supplier discount). The subagent's deeper read of the
+table found `Price` is the **gross list price before the supplier's own
+per-line discount** — wrong on the ~13% of lines that do carry one
+(`TotalItemDiscount != 0` on 335 of 2,615 lines, across 284 of 1,576
+items). The actually-correct raw per-unit input is
+`PurchaseEntry.Cost / Qty`, where `Cost` is `Amount - TotalItemDiscount`
+(net of that discount) — confirmed to reproduce R.Lynx's own `NewCost`
+(anchored against the also-newly-found `OldCost` column) on 2,606 of
+2,606 valid lines, a perfect match, versus 2,271/2,606 for `Price` alone.
+Fixed in `poslib/metrics.py`'s `item_purchase_costs` accordingly (see the
+"What shipped" description above, now current); the two pre-existing
+tests that referenced `new_cost` were updated to re-derive from
+`cost/qty` instead, and a new regression test
+(`test_discounted_single_purchase_uses_net_cost_not_gross_price`) locks
+in the discount case specifically so the gross-`Price` mistake can't
+silently come back. This is also where the `OldCost = 0` finding in
+discovery #1 above came from, and where the `entry_id`-ordering
+guarantee in discovery #2 above got softened (checked against
+`Item.LastPurchasePrice` for the first time).
+
+The owner also asked, separately and explicitly, for a way to check any
+of this himself rather than trust a number he can't see behind: "because
+i can't see what is inside the database my self i can't judge or review
+the number you are providing." The product drill-down page
+(`templates/product_detail.html`) gained a "Purchase history" table
+showing each item's raw `PurchaseEntry` lines — date, supplier, quantity,
+the gross price paid, R.Lynx's own running cost, and resulting stock —
+completely unaltered, no calculation applied, sourced from a new
+`purchase_history` key on `Metrics.product_profile()`. The Stock catalog
+page's reference column and item name are now both links into this page
+(`templates/catalog.html`), so the owner can search for a product (by the
+same reference code he already uses, e.g. "308") and click straight
+through to its own purchase history to check any figure by eye.
+
+**Deployed and dev-machine-verified 2026-08-28**: the store's own
+export+push (`export_static.export(cfg)` + `poslib.remote.push_remote(cfg)`,
+run directly since the watcher only auto-pushes on new till activity) and
+the hub's redeploy (`python tools/deploy_hub.py --project
+promakeupmihoubi-hub`) both succeeded. Confirmed via the same
+disposable-per-deployment-subdomain trick as the earlier hub-button fix
+(`https://e786f12d.promakeupmihoubi-hub.pages.dev/`, printed by the deploy
+itself, not covered by the hub's Access application so it's reachable
+without logging in): the results table header shows "Avg cost"/"Last
+cost" as two separate columns, no console errors, and a divergent-cost
+item (`DB786`) renders two distinct real numbers (2777.82 vs. 2725.53)
+matching the local export exactly — not a display bug collapsing both
+columns to the same value. The store-link button was also re-checked and
+still correctly targets `https://promakeupmihoubipos.pages.dev/` (`target=
+"_blank"`), confirming the earlier `_redirects`/button fix is undisturbed.
+One cosmetic-only hiccup during the hub redeploy: `tools/deploy_hub.py`
+logged a `PermissionError` from Python's log-rotation handler
+*after* printing its own success line, because the always-running local
+watcher had `logs/pos-tool.log` open for writing at the same moment the
+script tried to roll it over — the push itself completed and returned
+success before this happened; if this collision recurs it may be worth
+a defensive fix (e.g. delay-rotate or a separate log file per script), but
+it isn't blocking anything. **Only the owner's own phone confirmation is
+still outstanding** — same "a fixed/built claim only really lands once he
+confirms it himself" pattern as every other feature in this file; not
+blocking calling the implementation itself done.
+
+The local Stock catalog page (`http://127.0.0.1:8777/catalog`) was also
+checked, and initially 500'd (`jinja2.exceptions.UndefinedError: 'dict
+object' has no attribute 'stock_boxes'`) — not a code bug: this dev PC had
+**four** stray `pythonw.exe` processes left over from past sessions (two
+duplicate watcher+dashboard pairs, one set from `.venv\Scripts\pythonw.exe`
+and one from the global `Python312\pythonw.exe` on PATH — only one of the
+two app.py processes actually held port 8777), all started 2026-08-26,
+before today's `stock_boxes`/AVCO columns existed in `catalog()`. A process
+that imports `poslib/metrics.py` once at startup never sees later edits to
+that file — restarting is required, same as any long-running Python
+service. Verified this was the only issue by rendering `/catalog` through
+Flask's test client in a **fresh** process (no port conflict, no need to
+touch the stale ones): 200 OK, "Avg cost"/"Dernier coût" columns present,
+and `DB786` again showing the correct two distinct values. Actually
+killing/restarting the stale port-8777 processes was blocked by this
+session's own permission classifier (`taskkill` denied as a risky action)
+and the owner was asleep to ask — so the live dashboard at :8777 itself
+was **not** restarted this session and will keep 500ing on `/catalog`
+until it is. Next time anyone is at this PC: restart it by killing the
+`pythonw.exe` processes (`watcher.py` and `app.py --no-browser` — check
+`tasklist`/`Get-CimInstance Win32_Process` for the `.venv` vs global-Python
+duplicates and clear all four) and re-running `start-quiet.bat`, or just
+rebooting.
+
+## Remote product/customer drill-downs now exported in full (2026-08-28) — reversed an earlier deliberate exclusion
+
+The owner clicked a product from the Stock catalog on the remote (phone)
+dashboard and hit the static export's own "not available remotely" 404
+page. That page's existence was intentional — the original remote-parity
+design (see discovery #10 above) explicitly excluded `/products/<id>` and
+`/customers/<id>` from the static export, reasoning "no natural recency
+cutoff for a customer or product," unlike a ticket. First response was a
+narrow, defensible fix: gate the product/customer links in `catalog.html`,
+`products.html`, `receivables.html`, `customers.html` behind
+`is_static_export` so they render as plain text (not dead links) when
+viewed remotely. That shipped, tested, and worked as designed.
+
+The owner's immediate follow-up made the actual ask explicit: **"why not
+include this remotely? I want the full view of the local dashboard on my
+phone remotely!!"** — full feature parity, not a hidden link. Revisiting
+the original exclusion rationale found it was wrong on its own terms: it
+conflated *unbounded* growth (tickets, which accumulate forever) with
+*catalog/roster-sized* growth (products, customers) — the real counts are
+1,599 products and 671 customers (walk-in excluded), the same order of
+magnitude as purchases (~500-600), which the export already ships in full
+with no windowing. There was never a real reason to treat products/
+customers differently from purchases.
+
+**What shipped**: the four templates' links were reverted back to plain,
+unconditional `<a href>`s (no `is_static_export` gate — full parity means
+they just work). `export_static.py` gained two more full-population export
+loops, following the exact same `app.test_request_context()` +
+`render_template()` pattern already proven for tickets/purchases (shared
+`Metrics` instance, no per-page Flask request overhead): one over every
+`catalog()` item (`item_ids`, inactive items included — a product's history
+doesn't stop mattering because it's no longer sold), one over every real
+customer (`customer_ids`, excluding `Metrics.walkin_id` — the anonymous
+till account has no profile, `customer_profile()` returns `None` for it,
+same as it always has locally). Output lands at
+`<lang>/products/<item_id>.html` and `<lang>/customers/<customer_id>.html`.
+
+**Real numbers, verified against the live database**: 1,599 products +
+671 customers × 3 languages = 6,810 new files, on top of the existing
+~6,457 → **~13,267 files total**. Checked against Cloudflare Pages' actual
+published limit (fetched from `developers.cloudflare.com/pages/platform/
+limits/`, not assumed from memory): the Free plan allows **20,000 files
+per deployment** — the new total is about 66% of that ceiling. Real
+margin, not a razor's edge, but also not huge if the catalog/customer
+roster keeps growing — worth re-checking this file count again if either
+count roughly doubles.
+
+**Real export time cost**: `pytest tests/test_export_static.py -q`
+(17 of its 19 tests each call `export_static.export(cfg)` fresh against
+the real database) took 3,962s total, or **~3.9 minutes per single
+export**, up from the ~40 seconds the tickets/purchases-only version took
+(see discovery #10's perf note). No `RuntimeError` ("vanished mid-export")
+fired for any real item or customer ID — all 1,599 products and 671
+customers rendered cleanly. This cost lands on the watcher's own
+background push (`watcher.py`'s `_run_remote_push`, triggered only when
+the ETL detects new till activity, on a 90-second-minimum interval) — it
+runs synchronously with no timeout, so a ~4-minute export just delays that
+one push cycle, not anything user-facing on the local dashboard. Acceptable
+tradeoff, not silently absorbed: worth knowing if a future change makes
+export time matter more (e.g. an even lower push interval).
+
+Full `pytest tests -q` suite re-run and store redeployed after this change
+(`export_static.export(cfg)` + `poslib.remote.push_remote(cfg)`, run
+directly — the same manual-redeploy step used repeatedly throughout this
+file, since the watcher only auto-pushes on new till activity). Hub
+redeploy not needed — this change doesn't touch `hub-site/` or
+`stock.json`.
+
+**Verified — and the disposable-subdomain trick is now broken, don't rely
+on it without re-checking.** The established "check a Cloudflare Pages
+deployment via its own unguarded per-deploy subdomain" trick (used
+repeatedly earlier in this file) no longer works: `curl` with no
+cookies/JS to `https://baf18b7c.promakeupmihoubipos.pages.dev/en/catalog`
+got a 302 straight to the Cloudflare Access login, same as the production
+hostname. Most likely cause: the Access application's
+`self_hosted_domains` got broadened (to a wildcard covering
+`*.promakeupmihoubipos.pages.dev`) during the stock-token repoint work
+earlier on 2026-08-28 (see "Hub search shows cost, not price" above,
+where `domain`/`self_hosted_domains`/`destinations[].uri` were all
+updated together) — plausible but not confirmed by inspecting the Access
+app config directly. **Don't assume any future per-deploy subdomain is
+unguarded** — check with a bare `curl` first, the same way this was
+caught.
+
+Verification was done directly against the exported static files on disk
+instead (no Cloudflare, no login needed): file counts matched exactly
+(1,599 files in `remote-site/en/products/`, 671 in
+`remote-site/en/customers/`); `catalog.html` contains exactly 1,599
+`<a href="/en/products/...">` links; sampled pages
+(`products/1.html`, `products/595.html` = item DB786,
+`customers/10.html`) had no `Traceback`/`Undefined`/`werkzeug` error
+markers, real headings (`Article divers`, an Arabic customer name), and
+DB786's page correctly showed its known divergent purchase cost
+(`2725.53`) under a real "Purchase history" section. This confirms the
+exported HTML itself is correct. **What it does not confirm**: whether
+Cloudflare Access, once authenticated, correctly serves these same files
+on the real gated domain — that still needs the owner's own phone,
+logged in, per this file's established "don't declare a deploy fully
+verified until the owner's phone confirms it" practice (see the
+`_redirects` bug history above, which burned this exact shortcut twice).
+
+**Owner-confirmed on his own phone, 2026-08-28: both product and customer
+drill-down pages work.** This closes out the feature — full remote parity
+for product/customer detail pages is done, deployed, and verified both
+mechanically (file-level checks above) and by the owner directly.
 
 ### The actual product goal (owner's own words, 2026-08-26) — read this before prioritizing anything
 
@@ -340,31 +864,21 @@ can reasonably be flipped on for a real store now; the one open item (the
 already-up-to-date no-op path against a real second release) can be
 checked the first time a real update is actually shipped, not before. Read
 the component table before touching `poslib/updater.py`,
-`packaging/setup.iss`, or `main.py`'s `--apply-update` dispatch. Next
-build-order step: Component 5 (hub + cross-store stock search) per
-`docs/superpowers/specs/2026-08-27-component5-hub-design.md`'s build
-order, then the weighted-average-cost feature below once Component 5 is
-done (the owner's own explicit sequencing).
+`packaging/setup.iss`, or `main.py`'s `--apply-update` dispatch. Component
+5's hub is now live at `https://promakeupmihoubi-hub.pages.dev/`, deployed
+and mechanically verified per
+`docs/superpowers/plans/2026-08-27-component5-hub-page.md` (2026-08-27) —
+only a real-phone click-through (that plan's Task 4 Step 5) is left, not
+something verifiable from a dev session. Next build-order step after that:
+the installer-driven provisioning flow (build-order step 4 in the design
+spec) — its token-minting feasibility question is now resolved (confirmed
+viable, 2026-08-28), so this is clear to plan/build; see the component
+table's Component 5 row for the test results. The weighted-average-cost
+feature below stays after all of Component
+5, per the owner's own explicit sequencing.
 
 ## What's left (optional, not blocking)
 
-- **Weighted-average cost, requested by the owner 2026-08-27, deferred
-  until Component 5 is done.** Today `cost` (in `Metrics.items`/`catalog()`
-  and everything built on it - `stock_value`, `markup_pct`, `dead_stock`,
-  `stockout_risk`, etc.) is read straight from R.Lynx's own `Item.Cost`
-  field, a single point-in-time value. The owner wants a real weighted-
-  average cost instead: if stock was bought at a high price, half sold,
-  then more bought at a lower price, the tool should track the average
-  cost of the *remaining* stock (standard AVCO inventory costing - a
-  purchase moves the average, a sale doesn't), surfaced on both the Stock
-  catalog screen and in Component 5's `stock.json`/hub view. Full
-  reasoning and the open design questions (where in `metrics.py`, how a
-  missing/zero purchase-line unit cost is handled, whether to replace or
-  sit alongside the existing `cost` column, interaction with every metric
-  already built on that column) are in
-  `docs/superpowers/specs/2026-08-27-component5-hub-design.md`'s "Deferred
-  to after this component" section. Not started - explicitly sequenced by
-  the owner to come after Component 5, not before.
 - **`.env` is empty on every machine** (gitignored, by design). Email and
   Telegram digest channels are wired up but need real credentials. WhatsApp
   additionally needs Meta template approval — see

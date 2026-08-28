@@ -202,37 +202,33 @@ this test manually drove each API call to verify the *mechanism*; wiring
 it into `packaging/setup.iss`/the installer wizard is still a separate,
 not-yet-built step.
 
-## Deferred to after this component: weighted-average cost
+## Deferred to after this component: weighted-average cost — DONE 2026-08-28
 
 The owner also asked for a real inventory-accounting feature, explicitly
 **not** part of this component and not to be started until Component 5
-is done:
+was done:
 
 > if I bought at a high price and sold half, then bought at a lower
 > price, calculate the average price of the new + remaining stock
 
-This is the standard **weighted-average cost (AVCO)** inventory costing
-method. Today, `Metrics.items`/`catalog()`'s `cost` column is read
-straight from R.Lynx's own `Item.Cost` field - a single point-in-time
-value R.Lynx itself maintains, not something this tool computes. The new
-feature would instead reconstruct each item's own purchase/sale history
-(`purchases()` already has the purchase-line data; `lines`/`is_sale`
-already has the sale-line data) in chronological order and run it through
-a stateful accumulator: a purchase updates the weighted-average cost
-(`new_avg = (old_qty * old_avg + purchased_qty * purchase_unit_cost) /
-(old_qty + purchased_qty)`); a sale reduces quantity without changing the
-average (standard AVCO - the average only moves on a purchase, never a
-sale). The result should surface **both** on the Stock catalog screen
-(replacing or sitting alongside the existing `cost` column - which to do
-needs its own small design decision when this is picked up) **and** in
-`stock.json`/the hub's cross-store view, since the owner asked for it in
-both places. Not started. When picked up, this needs its own careful
-design pass (where exactly in `metrics.py` this lives, how "purchase
-price" is defined when a `PurchaseEntry` line's own unit cost is missing
-or zero, whether a floor of zero applies, how this interacts with the
-existing `stock_value`/`markup_pct`/`dead_stock`/`stockout_risk`
-calculations that already read the old single `cost` column) - not
-attempted here.
+Built once Component 5 was phone-verified, per the owner's own sequencing
+— see CLAUDE.md's "Weighted-average cost (AVCO) + last purchase cost
+(2026-08-28)" section for the full writeup (both `Item.Cost` discoveries,
+the `PurchaseEntry.NewStock`-chain accumulator that avoids needing
+purchase dates or a sales-table interleave, and the materiality numbers).
+Short version of what changed from this section's original framing,
+found by the mandatory pre-build Opus sanity-check: a chronological
+purchase+sale interleave (as sketched above) was the wrong approach even
+with perfect dates, because it would silently ignore `ItemAdjustment`
+(stock corrections outside both purchases and sales); the accumulator
+instead uses `PurchaseEntry.NewStock` alone, which already nets out
+everything since the previous purchase. `Metrics.item_purchase_costs`
+(a new standalone `cached_property`, not folded into `items`) computes
+`avg_cost` and `last_purchase_cost`; `catalog()` merges them in and the
+existing `cost` column is untouched, so `stock_value`/`markup_pct`/
+`dead_stock`/`stockout_risk` are all unaffected — display-only, both
+figures shown side by side on the Stock catalog screen and in
+`stock-<token>.json`/the hub's cross-store view.
 
 ## What's next (build order for this component)
 
@@ -240,20 +236,32 @@ attempted here.
    `export_static.py` now emit `stock.json` (item code, name, quantity,
    price - cost/margin stays out of this public file) into each store's
    own export directory.
-2. **Documentation research done (2026-08-27, see above); empirical
-   verification against a real disposable project NOT yet done.** The
-   endpoint, request shapes, and permission group are researched and
-   written up above - still needs a real create-two-applications-and-
-   confirm-precedence test against a throwaway Cloudflare project before
-   being trusted unattended in the real installer flow (same bar Component
-   4 held itself to - a plausible request body isn't the same as a
-   verified one).
-3. Build the one-time provisioning flow into the installer wizard
-   (Component 2's existing DB-detection page gains the optional Cloudflare
-   token field) - creates the Pages project + the two Access applications
-   per store (see the corrected two-application design above).
-4. Build the hub's own static page (switcher + search JS, CORS-aware
+2. **DONE (2026-08-27)** - empirically verified against a real disposable
+   project (see "Empirically verified" above): create-project, create both
+   Access applications, and confirmed most-specific-application precedence
+   (broad app 302s, narrow `/stock.json` app 200s) all worked exactly as
+   documented from Cloudflare's docs. Not yet verified: the token-minting
+   call (see step 3 below) - that endpoint has never been exercised from
+   this project.
+3. Build the hub's own static page first (switcher + search JS, CORS-aware
    fetch with graceful "store unreachable" handling per store, matching
-   the master spec's existing testing-plan requirement).
+   the master spec's existing testing-plan requirement) - fully unblocked,
+   reorder ahead of provisioning per 2026-08-27 advisor review.
+4. Build the one-time provisioning flow into the installer wizard
+   (Component 2's existing DB-detection page gains the optional Cloudflare
+   token field + an owner-email field, not a hardcoded constant) - creates
+   the Pages project + the two Access applications per store (see the
+   corrected two-application design above). **Blocked on one unverified
+   step**: minting the new narrow `Pages:Edit`-only token programmatically
+   is Cloudflare's *user*-scoped `POST /user/tokens` endpoint (a "User API
+   Tokens: Edit" permission group, distinct from the account-scoped
+   `Access: Apps and Policies:Edit` permission this component already
+   uses) - never called from this codebase, and it's unconfirmed whether a
+   token can even be granted permission to create another token. If it
+   can't, decision #5 above ("the installer should do everything
+   automatically") degrades to "rachad also pastes the narrow `Pages:Edit`
+   token into the wizard" - a real design change, the owner's call, not
+   silently assumed. Verify this against a real (disposable) token before
+   writing that task's code.
 5. Weighted-average cost - after all of the above, per the owner's own
    sequencing.

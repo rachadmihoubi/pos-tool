@@ -20,21 +20,29 @@
           <th>{{ t('common.product') }}</th>
           <th>{{ t('common.family') }}</th>
           <th class="num">{{ t('common.stock') }}</th>
-          <th class="num">{{ t('common.cost') }}</th>
+          <th class="num">{{ t('catalog.col_boxes') }}</th>
+          <th class="num">{{ t('catalog.col_avg_cost') }}</th>
+          <th class="num">{{ t('catalog.col_last_cost') }}</th>
           <th class="num">{{ t('common.price') }}</th>
         </tr>
       </thead>
       <tbody>
         {% for r in products %}
         <tr>
-          <td class="muted">{{ r.item_no or '—' }}</td>
-          <td class="name">{{ r.item_name }}</td>
+          <td class="muted">{{ r.reference or r.item_no or '—' }}</td>
+          <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
           <td class="name muted">{{ r.family_name }}</td>
           <td class="num" data-value="{{ r.stock or 0 }}">
             {% if r.stock is not none and r.stock < 0 %}<span class="pill pill-bad">{{ t.number(r.stock) }}</span>
             {% else %}{{ t.number(r.stock) }}{% endif %}
           </td>
-          <td class="num" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+          <td class="num muted" data-value="{{ r.stock_boxes if r.stock_boxes is not none else -1 }}">
+            {% if r.stock_boxes is not none %}
+              {{ t.number(r.stock_boxes) }}{% if r.stock_remainder %} <span class="muted">(+{{ t.number(r.stock_remainder) }})</span>{% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td class="num" data-value="{{ r.avg_cost or 0 }}">{{ t.money(r.avg_cost) }}</td>
+          <td class="num" data-value="{{ r.last_purchase_cost or 0 }}">{{ t.money(r.last_purchase_cost) }}</td>
           <td class="num strong" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
         </tr>
         {% endfor %}
