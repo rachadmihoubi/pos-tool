@@ -88,7 +88,10 @@ def test_create_pages_project_creates_if_missing():
         ("POST", "/pages/projects"): FakeResponse(200, {"success": True, "result": {"name": "storeb"}}),
     })
     provision.create_pages_project(session, "acct1", "storeb")
-    assert ("POST", session.calls[-1][1]) or True  # POST call happened, no exception
+    # Verify POST was called to /pages/projects endpoint
+    post_calls = [call for call in session.calls if call[0] == "POST"]
+    assert len(post_calls) > 0
+    assert post_calls[0][1].endswith("/pages/projects")
 
 
 def test_find_watcher_token_matches_by_exact_name():
@@ -184,6 +187,156 @@ def test_patch_config_remote_section_updates_only_within_remote_block(tmp_path):
     assert 'stock_json_token: "abc123"' in text
     assert "enabled: false" in text  # untouched - flipped separately, see Task 4
     assert "watcher:\n  enabled: true" in text  # untouched, different section
+
+
+def test_verify_token_succeeds_when_active():
+    session = FakeSession({("GET", "/user/tokens/verify"): FakeResponse(200, {
+        "success": True,
+        "result": {"id": "tok1", "status": "active", "name": "provision token"},
+    })})
+    result = provision.verify_token(session)
+    assert result["id"] == "tok1"
+    assert result["status"] == "active"
+
+
+def test_verify_token_raises_when_not_active():
+    session = FakeSession({("GET", "/user/tokens/verify"): FakeResponse(200, {
+        "success": True,
+        "result": {"id": "tok1", "status": "disabled"},
+    })})
+    with pytest.raises(provision.ProvisionError, match="not valid or not active"):
+        provision.verify_token(session)
+
+
+def test_verify_token_raises_when_success_false():
+    session = FakeSession({("GET", "/user/tokens/verify"): FakeResponse(200, {
+        "success": False,
+        "errors": ["Invalid token"],
+    })})
+    with pytest.raises(provision.ProvisionError, match="not valid or not active"):
+        provision.verify_token(session)
+
+
+def test_create_pages_project_raises_on_api_error():
+    session = FakeSession({
+        ("GET", "/pages/projects/storeb"): FakeResponse(404, {"success": False}),
+        ("POST", "/pages/projects"): FakeResponse(200, {"success": False, "errors": ["Invalid project name"]}),
+    })
+    with pytest.raises(provision.ProvisionError, match="Could not create Pages project"):
+        provision.create_pages_project(session, "acct1", "storeb")
+
+
+def test_mint_watcher_token_succeeds_with_correct_scope():
+    session = FakeSession({("POST", "/user/tokens"): FakeResponse(200, {
+        "success": True,
+        "result": {"id": "tok_abc", "value": "v1.secret123"},
+    })})
+    tok_id, tok_val = provision.mint_watcher_token(session, "acct123", "pos-tool watcher - storeb", "group_pages_edit")
+    assert tok_id == "tok_abc"
+    assert tok_val == "v1.secret123"
+
+
+def test_mint_watcher_token_raises_on_api_error():
+    session = FakeSession({("POST", "/user/tokens"): FakeResponse(200, {
+        "success": False,
+        "errors": ["Permission denied"],
+    })})
+    with pytest.raises(provision.ProvisionError, match="Could not mint the watcher token"):
+        provision.mint_watcher_token(session, "acct123", "pos-tool watcher - storeb", "group_pages_edit")
+
+
+def test_patch_config_remote_section_raises_when_key_missing_from_template(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "remote:\n"
+        "  enabled: false\n"
+        '  cloudflare_project_name: ""\n',
+        encoding="utf-8",
+    )
+    # Try to patch a key that doesn't exist in the remote section
+    with pytest.raises(provision.ProvisionError, match="no key"):
+        provision.patch_config_remote_section(config_path, {
+            "cloudflare_project_name": "storeb",
+            "nonexistent_key": "value",
+        })
+
+
+def test_verify_reachable_succeeds_on_first_attempt():
+    # Patch requests.get to return a successful response
+    import poslib.provision as prov_module
+    original_get = prov_module.requests.get
+
+    def mock_get_success(url, **kw):
+        response = FakeResponse(200, {})
+        response.status_code = 200
+        return response
+
+    try:
+        prov_module.requests.get = mock_get_success
+        result = provision.verify_reachable("https://example.com", expect_status=200, max_attempts=1, delay_seconds=0)
+        assert result is True
+    finally:
+        prov_module.requests.get = original_get
+
+
+def test_verify_reachable_retries_and_eventually_succeeds():
+    # Patch requests.get to fail first, then succeed
+    import poslib.provision as prov_module
+    original_get = prov_module.requests.get
+
+    attempts = [0]
+
+    def mock_get_eventually_succeeds(url, **kw):
+        attempts[0] += 1
+        response = FakeResponse(500 if attempts[0] < 2 else 200, {})
+        response.status_code = 500 if attempts[0] < 2 else 200
+        return response
+
+    try:
+        prov_module.requests.get = mock_get_eventually_succeeds
+        result = provision.verify_reachable("https://example.com", expect_status=200, max_attempts=3, delay_seconds=0)
+        assert result is True
+        assert attempts[0] == 2
+    finally:
+        prov_module.requests.get = original_get
+
+
+def test_verify_reachable_fails_after_max_attempts():
+    # Patch requests.get to always fail
+    import poslib.provision as prov_module
+    original_get = prov_module.requests.get
+
+    attempts = [0]
+
+    def mock_get_always_fails(url, **kw):
+        attempts[0] += 1
+        response = FakeResponse(404, {})
+        response.status_code = 404
+        return response
+
+    try:
+        prov_module.requests.get = mock_get_always_fails
+        result = provision.verify_reachable("https://example.com", expect_status=200, max_attempts=2, delay_seconds=0)
+        assert result is False
+        assert attempts[0] == 2
+    finally:
+        prov_module.requests.get = original_get
+
+
+def test_verify_reachable_handles_network_errors():
+    # Patch requests.get to raise an exception
+    import poslib.provision as prov_module
+    original_get = prov_module.requests.get
+
+    def mock_get_raises(url, **kw):
+        raise prov_module.requests.RequestException("Connection failed")
+
+    try:
+        prov_module.requests.get = mock_get_raises
+        result = provision.verify_reachable("https://example.com", expect_status=200, max_attempts=2, delay_seconds=0)
+        assert result is False
+    finally:
+        prov_module.requests.get = original_get
 
 
 def test_write_provision_record_writes_json(tmp_path):
