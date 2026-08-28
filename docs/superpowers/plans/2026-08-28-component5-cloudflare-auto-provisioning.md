@@ -1517,6 +1517,33 @@ function SetEnvironmentVariableW(lpName, lpValue: String): Boolean;
   external 'SetEnvironmentVariableW@kernel32.dll stdcall';
 ```
 
+**Task 2 proof (2026-08-28):** `SetEnvironmentVariableW` followed by
+`ExecAndCaptureOutput` reliably crosses the process boundary — verified with
+a real build (`EnvTestSetup.exe`) whose child process confirmed it saw
+`POS_TOOL_ENVTEST=hello-from-installer` and exited 0. Task 2's test went
+through an even *more* indirect path (`cmd.exe /c python "child.py"`) than
+this task's direct exe call, so Task 2's brief's Step 3 fallback (bypass
+`cmd.exe` and `Exec` the target exe directly) was not needed — the first
+attempt worked, and this task's simpler direct `ExecAndCaptureOutput` call
+on `{app}\{#MyAppExeName}` needs no fallback either.
+
+One deliberate deviation in how Task 2 proved this, worth stating plainly:
+the throwaway test installer ran with `PrivilegesRequired=lowest` (installed
+to `{localappdata}\EnvTest`, not `{autopf}`) to keep the headless proof from
+hitting a UAC prompt on this non-admin dev shell. The real `setup.iss` has
+no `PrivilegesRequired` override, so it defaults to `admin` — this block
+will actually execute inside an *elevated* `Setup.exe` process, not a
+lowest-privilege one like the test. This isn't expected to change the
+result (env-block inheritance and child-process launching are per-process
+mechanics independent of integrity level — `Exec`/`ExecAndCaptureOutput`
+launch the child at the parent's own token, so an elevated parent simply
+produces an elevated child, which doesn't affect whether the env var
+crosses), but it was never itself exercised under elevation, and doing so
+would require an admin shell this proof didn't have. Flag this if Step 4's
+manual smoke test (which *does* run the real, admin-elevated `setup.iss`)
+ever shows the child not seeing `POS_TOOL_PROVISION_TOKEN` — that would mean
+this assumption was wrong, not that the mechanism itself is unproven.
+
 Extend `CurStepChanged`, after the existing `WriteDatabaseConfig` call and
 before the `IsAdminInstallMode` message box:
 
@@ -1537,11 +1564,14 @@ before the `IsAdminInstallMode` message box:
         for I := 0 to GetArrayLength(ProvisionOutput.StdOut) - 1 do
           ProvisionMessage := ProvisionMessage + ProvisionOutput.StdOut[I] + #13#10;
         if ResultCode = 0 then
-          MsgBox('Cloudflare setup finished:' + #13#10#13#10 + ProvisionMessage,
-                 mbInformation, MB_OK)
+          ProvisionMessage := 'Cloudflare setup finished:' + #13#10#13#10 + ProvisionMessage
         else
-          MsgBox('Cloudflare setup did not finish:' + #13#10#13#10 + ProvisionMessage,
-                 mbError, MB_OK);
+          ProvisionMessage := 'Cloudflare setup did not finish (exit code ' +
+            IntToStr(ResultCode) + '):' + #13#10#13#10 + ProvisionMessage;
+        ForceDirectories(ExpandConstant('{localappdata}\Shop Analysis'));
+        SaveStringToFile(
+          ExpandConstant('{localappdata}\Shop Analysis\cloudflare_provision_log.txt'),
+          ProvisionMessage, False);
         // Restart the watcher so it picks up the newly-written config
         // instead of the stale one it may have started with at [Run] time -
         // see this plan's Task 4/design-review note on the watcher
@@ -1554,7 +1584,10 @@ before the `IsAdminInstallMode` message box:
       else
       begin
         SetEnvironmentVariableW('POS_TOOL_PROVISION_TOKEN', '');
-        MsgBox('Could not launch Cloudflare setup at all.', mbError, MB_OK);
+        ForceDirectories(ExpandConstant('{localappdata}\Shop Analysis'));
+        SaveStringToFile(
+          ExpandConstant('{localappdata}\Shop Analysis\cloudflare_provision_log.txt'),
+          'Could not launch Cloudflare setup at all.', False);
       end;
     end;
 ```
@@ -1562,6 +1595,33 @@ before the `IsAdminInstallMode` message box:
 Add `ResultCode: Integer`, `ProvisionOutput: TExecOutput`,
 `ProvisionMessage: String`, `I: Integer` to the local `var` block of
 `CurStepChanged` (Pascal Script requires locals declared per-procedure).
+
+**Why this writes to a log file instead of a `MsgBox` (adapted from Task 2's
+own required adaptation, for the same reason):** a `MsgBox` here would block
+on a dialog nobody may be present to click during an unattended/silent
+install — the same headless-hang risk Task 2's brief flagged for its own
+throwaway test, except this one is the *real* wizard page a real customer
+install could hit. `{localappdata}\Shop Analysis` is the established
+config-directory convention already used by `WriteDatabaseConfig`/
+`ConfigIsConfigured` elsewhere in this file, so the provisioning log sits
+next to `config.yaml` rather than inventing a new location.
+`ForceDirectories` is called before both `SaveStringToFile` calls (not just
+the success path) because the failure branch — `ExecAndCaptureOutput` never
+even launched — is exactly the case where nothing else has necessarily
+created that directory yet; without it, a `SaveStringToFile` on a missing
+directory silently returns `False` and the one diagnostic that matters most
+(that the launch itself failed) is lost.
+
+**Confirmed the log cannot leak the newly-minted credential:** `provision_store`'s
+`ProvisionResult.message` (`poslib/provision.py` / Task 4's orchestrator, plan
+line ~1081) never includes the minted watcher token's value or the powerful
+provisioning token on either the success or any `ProvisionError` path — it
+reports project/app/token *names* and *ids* only, and explicitly tells the
+operator to revoke the one-time token by hand. Since `ProvisionMessage`
+above is built only from this same stdout, persisting it to a file (instead
+of a `MsgBox` that vanished on click) does not newly expose a secret to
+disk — worth confirming explicitly given this plan's own token-handling
+discipline (env var only, never argv/disk) for the *input* token.
 
 - [ ] **Step 4: Manual smoke test — build and run against a disposable target**
 
@@ -1571,8 +1631,10 @@ pointed at a disposable throwaway Cloudflare project/token (same discipline
 as Task 7 below — this step can be combined with Task 7's live run rather
 than done twice). Confirm: the page renders with all four fields, leaving
 the token blank skips straight past with no `Exec` call, filling it in and
-proceeding triggers `_provision_cloudflare` and shows its output in a
-`MsgBox`.
+proceeding triggers `_provision_cloudflare` and writes its outcome to
+`{localappdata}\Shop Analysis\cloudflare_provision_log.txt` (read that file
+back to confirm success/failure rather than watching for a dialog — there
+isn't one).
 
 - [ ] **Step 5: Commit**
 
