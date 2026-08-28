@@ -152,7 +152,7 @@
       <tbody>
         {% for c in customers %}
         <tr>
-          <td class="name">{% if is_static_export %}{{ c.customer_name }}{% else %}<a href="{{ url_for('page_customer', customer_id=c.customer_id) }}">{{ c.customer_name }}</a>{% endif %}</td>
+          <td class="name"><a href="{{ url_for('page_customer', customer_id=c.customer_id) }}">{{ c.customer_name }}</a></td>
           <td class="num">{{ c.phone or '—' }}</td>
           <td class="num strong" data-value="{{ c.revenue }}">{{ t.money(c.revenue) }}</td>
           <td class="num" data-value="{{ c.revenue_12m }}">{{ t.money(c.revenue_12m) }}</td>

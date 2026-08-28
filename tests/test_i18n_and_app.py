@@ -316,28 +316,6 @@ class TestDashboard:
         body = client.get("/today?__static__=1").get_data(as_text=True)
         assert 'id="refresh-btn"' not in body
 
-    def test_static_export_does_not_link_product_names(self, client):
-        # /products/<id> and /customers/<id> are never exported (see
-        # export_static.py's docstring) - linking to them remotely would
-        # only lead to the custom 404 page, so the static export must not
-        # render them as links at all.
-        body = client.get("/catalog?__static__=1").get_data(as_text=True)
-        assert "url_for('page_product'" not in body
-        assert "/products/" not in body
-        assert 'href="' not in body or "page_product" not in body
-
-    def test_normal_catalog_request_still_links_product_names(self, client):
-        body = client.get("/catalog").get_data(as_text=True)
-        assert "/products/" in body
-
-    def test_static_export_does_not_link_customer_names(self, client):
-        body = client.get("/customers?__static__=1").get_data(as_text=True)
-        assert "/customers/" not in body
-
-    def test_normal_customers_request_still_links_customer_names(self, client):
-        body = client.get("/customers").get_data(as_text=True)
-        assert "/customers/" in body
-
 
 class TestCompetitorPriceRoutes:
     """

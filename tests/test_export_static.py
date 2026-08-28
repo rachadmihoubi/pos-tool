@@ -152,27 +152,37 @@ class TestExport:
         assert 'id="refresh-btn"' not in html
         assert "/export?lang=" not in html
 
-    def test_customer_and_product_drilldowns_are_not_exported(self, cfg, monkeypatch, tmp_path):
+    def test_customer_and_product_drilldowns_are_exported(self, cfg, metrics, monkeypatch, tmp_path):
         """
-        Customer/product detail pages are deliberately excluded from the
-        remote export - there's no natural recency cutoff for a customer
-        or product (unlike a ticket or purchase, see
-        `export_static.DRILLDOWN_WINDOW_DAYS`), so exporting them would
-        only ever grow. Confirmed structurally rather than just by
-        omission from PAGES (in case someone adds a route without
-        updating this test's intent).
+        Customer/product detail pages are exported in full, same as
+        purchases - there are only ~1,600 products and ~660 customers in
+        this database, the same catalog/roster order of magnitude as
+        purchases (already exported without a window), not an
+        unboundedly-growing series like tickets. The walk-in till
+        account has no real profile and must be skipped.
         """
         _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
         out_dir = export_static.export(cfg)
 
+        catalog = metrics.catalog()
+        real_customer_ids = metrics.customers.loc[
+            metrics.customers["customer_id"] != metrics.walkin_id, "customer_id"]
+
         for lang in LANGUAGES:
-            lang_dir = out_dir / lang
-            flat_files = {p.name for p in lang_dir.glob("*.html")}
-            expected = ({f"{slug}.html" for slug in export_static.PAGES} |
-                       {f"{name}.html" for name in export_static.TODAY_PRESET_FILES})
-            assert flat_files == expected
-            assert not (lang_dir / "customers").exists()
-            assert not (lang_dir / "products").exists()
+            products_dir = out_dir / lang / "products"
+            customers_dir = out_dir / lang / "customers"
+            assert products_dir.is_dir(), f"missing {products_dir}"
+            assert customers_dir.is_dir(), f"missing {customers_dir}"
+
+            product_files = {p.stem for p in products_dir.glob("*.html")}
+            customer_files = {p.stem for p in customers_dir.glob("*.html")}
+            assert product_files == {str(int(i)) for i in catalog["item_id"]}
+            assert customer_files == {str(int(i)) for i in real_customer_ids}
+            assert str(int(metrics.walkin_id)) not in customer_files
+
+            html = (products_dir / f"{product_files.pop()}.html").read_text(encoding="utf-8")
+            assert "Traceback" not in html
+            assert "Undefined" not in html
 
     def test_ticket_and_purchase_drilldowns_are_exported(self, cfg, monkeypatch, tmp_path):
         """

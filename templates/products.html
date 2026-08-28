@@ -82,7 +82,7 @@
         <tbody>
           {% for r in low %}
           <tr>
-            <td class="name">{% if is_static_export %}{{ r.item_name }}{% else %}<a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a>{% endif %}</td>
+            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
             <td class="name muted">{{ r.family_name }}</td>
             <td class="num strong" data-value="{{ r.revenue_all }}">{{ t.money(r.revenue_all) }}</td>
             <td class="num" data-value="{{ r.margin_pct or -9 }}">
@@ -125,7 +125,7 @@
         <tbody>
           {% for r in drift %}
           <tr>
-            <td class="name">{% if is_static_export %}{{ r.item_name }}{% else %}<a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a>{% endif %}</td>
+            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
             <td class="num" data-value="{{ r.first_cost or 0 }}">{{ t.money(r.first_cost) }}</td>
             <td class="num strong" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
             <td class="num" data-value="{{ r.first_price or 0 }}">{{ t.money(r.first_price) }}</td>
@@ -167,7 +167,7 @@
         <tbody>
           {% for r in outliers %}
           <tr>
-            <td class="name">{% if is_static_export %}{{ r.item_name }}{% else %}<a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a>{% endif %}</td>
+            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
             <td class="name muted">{{ r.family_name }}</td>
             <td class="num" data-value="{{ r.margin_pct or -9 }}">
               <span class="delta down">{{ t.percent(r.margin_pct) }}</span>
@@ -209,7 +209,7 @@
         <tbody>
           {% for r in below %}
           <tr>
-            <td class="name">{% if is_static_export %}{{ r.item_name }}{% else %}<a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a>{% endif %}</td>
+            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
             <td class="num" data-value="{{ r.units }}">{{ t.number(r.units) }}</td>
             <td class="num strong" data-value="{{ r.loss }}" style="color: var(--bad)">{{ t.money(r.loss|abs) }}</td>
             <td class="num" data-value="{{ r.loss_per_unit }}">{{ t.money(r.loss_per_unit|abs) }}</td>
@@ -256,7 +256,7 @@
                    style="object-fit:cover; border-radius:4px; vertical-align:middle;"
                    onerror="this.hidden=true">
             </td>
-            <td class="name">{% if is_static_export %}{{ r.item_name }}{% else %}<a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a>{% endif %}</td>
+            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
             <td class="name muted">{{ r.family_name }}</td>
             <td class="num">{{ t.money(r.price) }}</td>
             <td class="num" data-value="{{ r.date_created }}">{{ t.date(r.date_created) }}</td>
@@ -296,7 +296,7 @@
       <tbody>
         {% for r in products %}
         <tr>
-          <td class="name">{% if is_static_export %}{{ r.item_name }}{% else %}<a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a>{% endif %}</td>
+          <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
           <td class="name muted">{{ r.family_name }}</td>
           <td class="num strong" data-value="{{ r.revenue_all }}">{{ t.money(r.revenue_all) }}</td>
           <td class="num" data-value="{{ r.gross_profit_all }}">{{ t.money(r.gross_profit_all) }}</td>

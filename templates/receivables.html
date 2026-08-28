@@ -75,7 +75,7 @@
         <tr>
           <td class="muted">{{ loop.index }}</td>
           <td class="name strong">
-            {% if is_static_export %}{{ r.customer_name }}{% else %}<a href="{{ url_for('page_customer', customer_id=r.customer_id) }}">{{ r.customer_name }}</a>{% endif %}
+            <a href="{{ url_for('page_customer', customer_id=r.customer_id) }}">{{ r.customer_name }}</a>
             {% if r.at_risk %}<span class="pill pill-bad">{{ t('receivables.risk_flag') }}</span>{% endif %}
           </td>
           <td class="num">{{ r.phone or '—' }}</td>

@@ -700,6 +700,74 @@ until it is. Next time anyone is at this PC: restart it by killing the
 duplicates and clear all four) and re-running `start-quiet.bat`, or just
 rebooting.
 
+## Remote product/customer drill-downs now exported in full (2026-08-28) — reversed an earlier deliberate exclusion
+
+The owner clicked a product from the Stock catalog on the remote (phone)
+dashboard and hit the static export's own "not available remotely" 404
+page. That page's existence was intentional — the original remote-parity
+design (see discovery #10 above) explicitly excluded `/products/<id>` and
+`/customers/<id>` from the static export, reasoning "no natural recency
+cutoff for a customer or product," unlike a ticket. First response was a
+narrow, defensible fix: gate the product/customer links in `catalog.html`,
+`products.html`, `receivables.html`, `customers.html` behind
+`is_static_export` so they render as plain text (not dead links) when
+viewed remotely. That shipped, tested, and worked as designed.
+
+The owner's immediate follow-up made the actual ask explicit: **"why not
+include this remotely? I want the full view of the local dashboard on my
+phone remotely!!"** — full feature parity, not a hidden link. Revisiting
+the original exclusion rationale found it was wrong on its own terms: it
+conflated *unbounded* growth (tickets, which accumulate forever) with
+*catalog/roster-sized* growth (products, customers) — the real counts are
+1,599 products and 671 customers (walk-in excluded), the same order of
+magnitude as purchases (~500-600), which the export already ships in full
+with no windowing. There was never a real reason to treat products/
+customers differently from purchases.
+
+**What shipped**: the four templates' links were reverted back to plain,
+unconditional `<a href>`s (no `is_static_export` gate — full parity means
+they just work). `export_static.py` gained two more full-population export
+loops, following the exact same `app.test_request_context()` +
+`render_template()` pattern already proven for tickets/purchases (shared
+`Metrics` instance, no per-page Flask request overhead): one over every
+`catalog()` item (`item_ids`, inactive items included — a product's history
+doesn't stop mattering because it's no longer sold), one over every real
+customer (`customer_ids`, excluding `Metrics.walkin_id` — the anonymous
+till account has no profile, `customer_profile()` returns `None` for it,
+same as it always has locally). Output lands at
+`<lang>/products/<item_id>.html` and `<lang>/customers/<customer_id>.html`.
+
+**Real numbers, verified against the live database**: 1,599 products +
+671 customers × 3 languages = 6,810 new files, on top of the existing
+~6,457 → **~13,267 files total**. Checked against Cloudflare Pages' actual
+published limit (fetched from `developers.cloudflare.com/pages/platform/
+limits/`, not assumed from memory): the Free plan allows **20,000 files
+per deployment** — the new total is about 66% of that ceiling. Real
+margin, not a razor's edge, but also not huge if the catalog/customer
+roster keeps growing — worth re-checking this file count again if either
+count roughly doubles.
+
+**Real export time cost**: `pytest tests/test_export_static.py -q`
+(17 of its 19 tests each call `export_static.export(cfg)` fresh against
+the real database) took 3,962s total, or **~3.9 minutes per single
+export**, up from the ~40 seconds the tickets/purchases-only version took
+(see discovery #10's perf note). No `RuntimeError` ("vanished mid-export")
+fired for any real item or customer ID — all 1,599 products and 671
+customers rendered cleanly. This cost lands on the watcher's own
+background push (`watcher.py`'s `_run_remote_push`, triggered only when
+the ETL detects new till activity, on a 90-second-minimum interval) — it
+runs synchronously with no timeout, so a ~4-minute export just delays that
+one push cycle, not anything user-facing on the local dashboard. Acceptable
+tradeoff, not silently absorbed: worth knowing if a future change makes
+export time matter more (e.g. an even lower push interval).
+
+Full `pytest tests -q` suite re-run and store redeployed after this change
+(`export_static.export(cfg)` + `poslib.remote.push_remote(cfg)`, run
+directly — the same manual-redeploy step used repeatedly throughout this
+file, since the watcher only auto-pushes on new till activity). Hub
+redeploy not needed — this change doesn't touch `hub-site/` or
+`stock.json`.
+
 ### The actual product goal (owner's own words, 2026-08-26) — read this before prioritizing anything
 
 The owner does not want a local dashboard. He already has R.Lynx's own POS
