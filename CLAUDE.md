@@ -343,6 +343,67 @@ longer needed. **Still needed**: the owner re-checking from his phone that
 the hub now shows Reference-based search results and cost instead of
 price.
 
+## Wholesale box/"colis" stock view (2026-08-28)
+
+The owner sells wholesale in boxes of 24+ pieces, not individual units, and
+asked the tool to show stock that way. `Item.QtyPerParcel` ("Colis" in
+R.Lynx's own UI) turned out to already be a well-populated field in the
+real database (1,512 of 1,599 items have a real box size; most common
+values 24/12/6/36 pcs) — no schema gap like discovery #5/#6 above, just an
+unsurfaced column. `Metrics.items` (`poslib/metrics.py`) now derives
+`stock_boxes = floor(stock / qty_per_parcel)` and
+`stock_remainder = stock - stock_boxes * qty_per_parcel`, only when
+`qty_per_parcel > 1` (0/1/NaN means "no box packaging tracked" — both
+derived columns stay NaN rather than showing a misleading 1-piece "box").
+`catalog()` exposes both; the local Stock catalog page, `stock.json`/
+`stock-<token>.json` (both variants — box counts aren't sensitive the way
+cost is), and the hub's cross-store search table all show a "Boxes" column
+(`24 (+6)` style: full boxes plus any partial remainder). `qty_per_parcel`
+itself stays internal-only — never leaks into the exported JSON. Committed
+as `8d7f94b`.
+
+## Hub store-link button 404'd on every store's root — real bug in
+`poslib/remote.py`, not the hub (2026-08-28)
+
+While shipping the box feature above, the owner reported the hub's
+"Pro Makeup Mihoubi" button led to `https://promakeupmihoubipos.pages.dev/`
+showing Cloudflare's own custom 404 ("Not available remotely..."). First
+fix attempt: `hub-site/app.js`'s `renderStoreLinks` collapsed a store's
+`stock.json` URL back to its dashboard root via
+`s.url.replace(/\/stock\.json$/, "/")` — a regex that only matched the
+plain filename, not the new tokenized `stock-<token>.json` (see the hub
+cost/token section above), so for this store the replace was a silent
+no-op and the button linked straight at the raw JSON file's path. Fixed to
+`/\/stock(-[0-9a-f]+)?\.json$/`, tested, redeployed (`f63e718`) — but the
+owner reported the *exact same* symptom afterward, which meant the first
+diagnosis was incomplete.
+
+**Real root cause**: `poslib/remote.py`'s `_IGNORED_FILE_NAMES` had
+excluded `_redirects` from every Cloudflare Pages upload since Component 4
+shipped (2026-08-26), lumped in with `_worker.js`/`_routes.json` on the
+mistaken assumption all three are "Pages Functions source, not static
+assets." `_worker.js`/`_routes.json` really are Functions-only config this
+project doesn't use — correctly out of scope. `_redirects` is different:
+it's the real static asset Cloudflare Pages reads to apply
+`export_static.py`'s `/  ->  /{lang}/today  302` rule. With it silently
+missing from every deploy, **every store's bare domain root (`/`) has
+404'd since the very first live deployment** — only deep links like
+`/en/today` ever worked, because those files genuinely exist on disk.
+The hub button was never the bug; it correctly collapsed to the store
+root and then hit this pre-existing, unrelated defect — which is why the
+"already fixed" regex change didn't change the symptom at all.
+
+Fixed by removing `_redirects` from `_IGNORED_FILE_NAMES`
+(`poslib/remote.py`). Added `test_uploads_redirects_file` to
+`tests/test_remote.py` (and fixed `test_ignores_wrangler_reserved_names`,
+which had been asserting the *buggy* behavior — dropping `_redirects` from
+its "ignored" fixture rather than asserting it's excluded). Committed as
+`d9a08e0`, store redeployed same session. **Not yet re-confirmed from the
+owner's phone** — this is a stronger fix than the regex change (it repairs
+root-level navigation on every existing and future store, not just the
+hub's button), so ask for a fresh phone check before considering this
+closed.
+
 ### The actual product goal (owner's own words, 2026-08-26) — read this before prioritizing anything
 
 The owner does not want a local dashboard. He already has R.Lynx's own POS
