@@ -52,3 +52,24 @@ def test_app_js_uses_the_real_stock_json_field_names():
     assert "stores.json" in js
     assert "Promise.allSettled" in js, \
         "must use allSettled, not Promise.all, so one unreachable store doesn't hide the rest"
+
+
+def test_store_link_regex_strips_both_plain_and_tokenized_stock_filenames():
+    """
+    Regression test: the store-link button must collapse a store's stock
+    URL back to its dashboard root whether it's the plain public
+    "stock.json" or a store-specific "stock-<token>.json" (see
+    export_static.py's module docstring) - a regex that only matched the
+    plain filename left the tokenized URL unchanged, sending the owner to
+    a nonexistent path (Cloudflare's custom 404, "Not available remotely")
+    instead of the store's dashboard.
+    """
+    js = (HUB_DIR / "app.js").read_text(encoding="utf-8")
+    match = re.search(r'\.replace\((/[^,]+/), "/"\)', js)
+    assert match, "expected a regex-based .replace(...) call stripping the stock filename"
+    pattern = re.compile(match.group(1)[1:-1])
+
+    plain = "https://example.pages.dev/stock.json"
+    tokenized = "https://example.pages.dev/stock-f1cab0dac3a8e273d6293d71c808c877.json"
+    assert pattern.sub("/", plain) == "https://example.pages.dev/"
+    assert pattern.sub("/", tokenized) == "https://example.pages.dev/"

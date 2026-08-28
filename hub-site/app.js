@@ -23,7 +23,7 @@ async function loadStores() {
 function renderStoreLinks(stores) {
   const el = document.getElementById("store-links");
   el.innerHTML = stores.map(s => {
-    const dashboardUrl = s.url.replace(/\/stock\.json$/, "/");
+    const dashboardUrl = s.url.replace(/\/stock(-[0-9a-f]+)?\.json$/, "/");
     return `<a class="store-link" href="${dashboardUrl}" target="_blank" rel="noopener">${s.name}</a>`;
   }).join(" ");
 }
