@@ -191,4 +191,39 @@
     <div class="empty">{{ t('products.detail_no_history') }}</div>
   {% endif %}
 </section>
+
+<section class="panel">
+  <h2>{{ t('products.purchase_history_title') }}</h2>
+  <p class="note">{{ t('products.purchase_history_note') }}</p>
+  {% if purchase_history %}
+    <div class="table-wrap scroll-y">
+      <table class="sortable">
+        <thead>
+          <tr>
+            <th class="num">{{ t('common.date') }}</th>
+            <th>{{ t('common.supplier') }}</th>
+            <th class="num">{{ t('common.quantity') }}</th>
+            <th class="num">{{ t('products.purchase_col_price_paid') }}</th>
+            <th class="num">{{ t('products.purchase_col_running_cost') }}</th>
+            <th class="num">{{ t('products.purchase_col_new_stock') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in purchase_history %}
+          <tr>
+            <td class="num" data-value="{{ r.purchase_time or '' }}">{{ t.date(r.purchase_time) if r.purchase_time else '—' }}</td>
+            <td class="muted">{{ r.supplier_name or '—' }}</td>
+            <td class="num">{{ t.number(r.qty) }}</td>
+            <td class="num strong" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
+            <td class="num muted" data-value="{{ r.new_cost or 0 }}">{{ t.money(r.new_cost) }}</td>
+            <td class="num" data-value="{{ r.new_stock or 0 }}">{{ t.number(r.new_stock) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">{{ t('products.purchase_history_empty') }}</div>
+  {% endif %}
+</section>
 {% endblock %}

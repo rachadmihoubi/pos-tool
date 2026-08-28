@@ -444,18 +444,39 @@ class Metrics:
     def item_purchase_costs(self) -> pd.DataFrame:
         """
         Per-item weighted-average cost (AVCO) and last purchase cost,
-        computed fresh from `purchases` - never from `Item.Cost`.
+        computed fresh from `purchases` - never from `Item.Cost` and never
+        from `PurchaseEntry.NewCost`.
 
-        `Item.Cost` looks like it should already be "the item's current
-        cost" but it is NOT reliably "last purchase cost": it is also
-        overwritten by `PricingUpdateEntry` (a manual price-edit log,
-        unrelated to purchasing). Checked against every item with
-        purchase history: 18 of 1,567 diverge from their own last
-        purchase's `new_cost`, one cluster of 12 items exactly 2x off via
-        a single bulk `PricingUpdateID` (217, dated 2026-06-04). So both
-        figures here are built the same way, from the same source, rather
-        than trusting a POS-maintained field whose update semantics turned
-        out to be broader than "purchases only".
+        `PurchaseEntry.NewCost` looks like a per-delivery unit cost but is
+        actually R.Lynx's OWN already-computed running weighted-average
+        cost (the exact same AVCO recursion this function implements,
+        updated incrementally per purchase line) - feeding it back into an
+        averaging formula double-averages. The real per-unit input is
+        `Cost / Qty`: `PurchaseEntry.Cost` is the line's net cost
+        (`Amount - TotalItemDiscount`, i.e. `Price * Qty` after the
+        supplier's own discount, when one applies), not `NewCost * Qty` as
+        an earlier pass of this investigation wrongly assumed. `Price`
+        itself is the GROSS list price before that discount, so it is
+        also the wrong input on the ~13% of lines that carry one -
+        checked empirically: `Cost / Qty` reproduces R.Lynx's own
+        `NewCost` (anchored against `OldCost`) on 2,606 of 2,606 valid
+        lines; `Price` only reproduces it on 2,271 of 2,606, failing
+        exactly on the discounted rows, and by overstating cost. This was
+        the shop owner's own catch: he reported the shipped last-cost
+        figures had "lots of digits" and weren't the round numbers he
+        actually pays, which is the signature of `NewCost`'s own internal
+        blending, not real purchase noise.
+
+        The `Item.Cost` divergence noted in an earlier version of this
+        docstring (18 of 1,567 items, one 12-item cluster exactly 2x off
+        via bulk `PricingUpdateID` 217) turned out to run the OPPOSITE
+        direction on inspection: those 12 items each have a purchase line
+        with `OldCost = 0` blended against pre-existing stock, i.e.
+        `PurchaseEntry.NewCost` itself is the corrupted value there and
+        `PricingUpdateID` 217 was the correction, not the damage. Kept
+        here as a reminder that `NewCost` cannot be trusted as ground
+        truth anywhere in this table, not just on the well-known items -
+        `Cost` is the only per-line field this function still uses.
 
         The accumulator only needs `purchases` - no purchase dates, no
         sales table, no interleaving. `new_stock` is R.Lynx's own snapshot
@@ -466,18 +487,26 @@ class Metrics:
         sale, return and stock adjustment that happened since the previous
         purchase, so there is no need to know when any of that happened.
         `entry_id` (PurchaseEntry's own row ID) is a sound ordering key
-        WITHIN one item's own purchase lines - it is NOT a clean global
-        chronological key across the whole table (confirmed: PurchaseID
-        runs backwards against it at 20 points system-wide), so it must
-        never be used for anything beyond per-item ordering.
+        WITHIN one item's own purchase lines for the very large majority
+        of items - it is NOT a clean global chronological key across the
+        whole table (confirmed: PurchaseID runs backwards against it at
+        20 points system-wide), so it must never be used for anything
+        beyond per-item ordering. Checked against `Item.LastPurchasePrice`
+        (which R.Lynx updates from its own notion of "the last purchase"):
+        4 of 1,574 items disagree with the highest-`entry_id` line's own
+        price, so even within-item `entry_id` order is not a perfect
+        guarantee, just a very reliable one.
 
-        A line with non-positive qty or a missing/zero new_cost is
-        skipped for costing purposes, but the running quantity is still
-        resynced to that line's own new_stock (when known) so a later,
-        good line isn't compared against a stale quantity. Items with no
-        usable purchase history at all get no row here - `catalog()`'s
-        merge leaves avg_cost/last_purchase_cost as NaN for them, blank
-        rather than guessed from `Item.Cost`.
+        A line with non-positive qty, a missing `cost`, or a `cost/qty`
+        that isn't strictly positive is skipped for costing purposes, but
+        the running quantity is still resynced to that line's own
+        new_stock (when known) so a later, good line isn't compared
+        against a stale quantity. There is deliberately no fallback to
+        `NewCost` for a bad final line - that would silently reintroduce
+        the exact bug this function exists to avoid on the single most
+        visible figure. Items with no usable purchase history at all get
+        no row here - `catalog()`'s merge leaves avg_cost/last_purchase_cost
+        as NaN for them, blank rather than guessed from `Item.Cost`.
 
         Display-only for now: this does not feed stock_value, markup_pct,
         dead_stock or any other existing diagnostic - see CLAUDE.md.
@@ -495,23 +524,24 @@ class Metrics:
             running_avg: float | None = None
             last_cost: float | None = None
             for row in group.itertuples():
-                qty, new_cost, new_stock = row.qty, row.new_cost, row.new_stock
-                bad = (pd.isna(qty) or qty <= 0 or pd.isna(new_cost) or new_cost == 0
-                       or pd.isna(new_stock))
+                qty, cost, new_stock = row.qty, row.cost, row.new_stock
+                bad = pd.isna(qty) or qty <= 0 or pd.isna(cost) or pd.isna(new_stock)
+                raw = (cost / qty) if not bad else None
+                bad = bad or raw is None or raw <= 0
                 if bad:
                     if not pd.isna(new_stock):
                         running_qty = new_stock
                     continue
                 before = new_stock - qty
                 if running_avg is None:
-                    running_avg = new_cost
+                    running_avg = raw
                 else:
                     carry = min(max(before, 0.0), running_qty)
                     denom = carry + qty
-                    running_avg = ((carry * running_avg + qty * new_cost) / denom
-                                   if denom > 0 else new_cost)
+                    running_avg = ((carry * running_avg + qty * raw) / denom
+                                   if denom > 0 else raw)
                 running_qty = new_stock
-                last_cost = new_cost
+                last_cost = raw
             if last_cost is not None:
                 records.append({"item_id": item_id, "avg_cost": running_avg,
                                  "last_purchase_cost": last_cost})
@@ -1992,11 +2022,21 @@ class Metrics:
         s = (self.sales[self.sales["item_id"] == item_id]
              .sort_values("ticket_time", ascending=False))
 
+        pu = self.purchases
+        pu = pu[(pu["item_id"] == item_id) & (pu["is_purchase"])]
+        pu = pu.merge(self.suppliers[["supplier_id", "supplier_name"]],
+                      on="supplier_id", how="left")
+        pu["supplier_name"] = pu["supplier_name"].fillna("")
+        pu = pu.sort_values("entry_id", ascending=False)
+
         return {
             "summary": summary_row,
             "family": family_row,
             "sales_history": s[["ticket_time", "receipt_id", "qty", "price",
                                 "amount", "gross_profit"]],
+            "purchase_history": pu[["entry_id", "purchase_time", "purchase_id",
+                                    "supplier_name", "qty", "price", "new_cost",
+                                    "new_stock"]],
         }
 
     # =====================================================================
