@@ -273,6 +273,7 @@ class Metrics:
         """The product catalogue, with stock valued at cost."""
         df = self._read("""
             SELECT i.ID AS item_id, i.ItemNo AS item_no, i.ItemName AS item_name,
+                   i.Reference AS reference,
                    i.ItemFamilyID AS family_id, i.Stock AS stock,
                    i.StockAlert AS stock_alert, i.Cost AS cost, i.Price AS price,
                    i.LastSold AS last_sold, i.LastPurchased AS last_purchased,
@@ -289,6 +290,10 @@ class Metrics:
         df["date_created"] = pd.to_datetime(df["date_created"], errors="coerce")
         df["inactive"] = df["inactive"].fillna(0).astype(int).astype(bool)
         df["family_name"] = df["family_name"].fillna("—")
+        # "." is R.Lynx's own placeholder for "no reference set" (seen on
+        # generic/catch-all items) - not a real reference, so treat it the
+        # same as a blank one rather than showing it as if it were real.
+        df["reference"] = df["reference"].mask(df["reference"].isin(["", "."]))
 
         # Stock value at cost. Rows with negative stock are POS mistakes; they
         # are kept in the total (so it matches the books) and reported on
@@ -1432,8 +1437,8 @@ class Metrics:
         name, family/brand, quantity, cost, price. A thin, sorted view over
         `items` - no new business logic, just what a search screen needs.
         """
-        cols = ["item_id", "item_no", "item_name", "family_name", "stock",
-                "cost", "price", "inactive"]
+        cols = ["item_id", "item_no", "reference", "item_name", "family_name",
+                "stock", "cost", "price", "inactive"]
         return self.items[cols].sort_values("item_name").reset_index(drop=True)
 
     def inventory_summary(self) -> dict[str, Any]:

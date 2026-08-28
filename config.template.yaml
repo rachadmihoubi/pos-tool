@@ -315,6 +315,16 @@ remote:
   # Where the exported static files are written before being uploaded.
   export_dir: "remote-site"
 
+  # Optional. If set, the multi-store hub's cross-store stock search gets
+  # a second, cost-bearing stock file at stock-<this value>.json instead
+  # of the plain public stock.json (which never includes cost). This is
+  # NOT a server-checked secret - Cloudflare Pages' static hosting can't
+  # validate it - it's an unguessable filename: only whoever can log into
+  # the hub (via hub-site/stores.json) knows the URL. Generate one with:
+  #   python -c "import secrets; print(secrets.token_hex(16))"
+  # Leave blank to keep stock.json public/price-only, no cost exposed.
+  stock_json_token: ""
+
 
 # -----------------------------------------------------------------------------
 #  THE WATCHER - notices when the POS saves new sales and refreshes the tool.

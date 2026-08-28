@@ -1,11 +1,16 @@
 // app.js - hub page logic: renders store links, fetches every store's
-// stock.json (CORS-open, no login needed - see
+// stock file (CORS-open, no login needed - see
 // docs/superpowers/specs/2026-08-27-component5-hub-design.md), merges the
 // results client-side, and supports a live text search. A store whose
 // fetch fails (offline PC, no internet, still being provisioned) is shown
 // as "unreachable" instead of breaking the other stores' results -
 // Promise.allSettled, not Promise.all, is what keeps one bad store from
 // taking down the rest.
+//
+// The URL in stores.json may point at a plain "stock.json" (price, no
+// cost) or a store-specific "stock-<token>.json" (cost, no price) - see
+// export_static.py's module docstring. This page doesn't care which;
+// it just renders whichever of item.cost / item.price is present.
 
 let allItems = [];
 
@@ -54,10 +59,10 @@ function renderResults(items) {
   body.innerHTML = items.map(item => `
     <tr>
       <td>${item.store}</td>
-      <td>${item.item_no ?? ""}</td>
+      <td>${item.reference ?? ""}</td>
       <td>${item.name ?? ""}</td>
       <td>${item.stock ?? ""}</td>
-      <td>${item.price ?? ""}</td>
+      <td>${item.cost ?? item.price ?? ""}</td>
     </tr>
   `).join("");
 }
@@ -70,7 +75,7 @@ function applySearch() {
   }
   const filtered = allItems.filter(item =>
     (item.name ?? "").toLowerCase().includes(q) ||
-    (item.item_no ?? "").toLowerCase().includes(q)
+    (item.reference ?? "").toLowerCase().includes(q)
   );
   renderResults(filtered.slice(0, 200));
 }

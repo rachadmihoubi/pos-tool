@@ -11,6 +11,7 @@ substitute for opening the deployed page in a real browser once it's live.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 HUB_DIR = Path(__file__).resolve().parent.parent / "hub-site"
@@ -29,7 +30,10 @@ def test_stores_json_is_valid_and_shaped_correctly():
     for store in data["stores"]:
         assert isinstance(store["name"], str) and store["name"]
         assert isinstance(store["url"], str) and store["url"].startswith("https://")
-        assert store["url"].endswith("/stock.json")
+        # Either the plain public "stock.json" (price, no cost) or a
+        # store-specific "stock-<token>.json" (cost, no price) - see
+        # export_static.py's module docstring.
+        assert re.fullmatch(r".*/stock(-[0-9a-f]+)?\.json", store["url"])
 
 
 def test_index_html_references_its_own_assets():
@@ -43,8 +47,8 @@ def test_index_html_references_its_own_assets():
 
 def test_app_js_uses_the_real_stock_json_field_names():
     js = (HUB_DIR / "app.js").read_text(encoding="utf-8")
-    for field in ("item_no", "name", "stock", "price"):
-        assert field in js, f"app.js never references stock.json's {field!r} field"
+    for field in ("reference", "name", "stock", "price", "cost"):
+        assert field in js, f"app.js never references stock file's {field!r} field"
     assert "stores.json" in js
     assert "Promise.allSettled" in js, \
         "must use allSettled, not Promise.all, so one unreachable store doesn't hide the rest"

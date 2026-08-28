@@ -39,13 +39,25 @@ per-day revenue rollup (see `Metrics.daily_rollup()`) that lets the Today
 page's remote custom-range picker sum an arbitrary range client-side,
 since a truly arbitrary range can't be pre-rendered at all.
 
-`stock.json` (item code, name, quantity, price - no cost/margin) is for
-Component 5's multi-store hub: a cross-store stock search whose JS fetches
-this one file directly from each store's own Cloudflare Pages project. See
-docs/superpowers/specs/2026-08-27-component5-hub-design.md for why this
-one path needs an Access Bypass policy (everything else on this domain
-stays gated to the owner's email as before) and why the hub can't simply
-share a login session across stores.
+`stock.json` (item reference, name, quantity, price - no cost/margin) is
+for Component 5's multi-store hub: a cross-store stock search whose JS
+fetches this one file directly from each store's own Cloudflare Pages
+project. See docs/superpowers/specs/2026-08-27-component5-hub-design.md
+for why this one path needs an Access Bypass policy (everything else on
+this domain stays gated to the owner's email as before) and why the hub
+can't simply share a login session across stores.
+
+`remote.stock_json_token`, if set in config.yaml, switches this to a
+second, cost-bearing file instead: `stock-<token>.json`, filename chosen
+so the URL itself (known only to whoever can log into the hub, via
+hub-site/stores.json) is the only thing gating it - real Access-checked
+auth isn't possible here since Cloudflare Pages Direct Upload (this
+project's whole deploy mechanism, chosen specifically to avoid needing
+Node.js/wrangler on a customer PC) doesn't support Pages Functions, and
+browser fetch() can't carry Access service-token headers across origins
+either. Without a token configured, behaviour is unchanged (public
+stock.json, price only, no cost) - a missing token fails safe rather than
+silently exposing cost on the well-known public filename.
 """
 
 from __future__ import annotations
@@ -177,16 +189,26 @@ def export(cfg: Config | None = None) -> Path:
         # this store's domain stays gated). Inactive (discontinued) items
         # are excluded - a cross-store "do they have it" search has no use
         # for a product this store no longer carries at all.
+        stock_token = cfg.get("remote.stock_json_token", "")
+        stock_filename = f"stock-{stock_token}.json" if stock_token else "stock.json"
+
         catalog = m.catalog()
         stock_records = []
         for _, row in catalog[~catalog["inactive"]].iterrows():
-            stock_records.append({
-                "item_no": str(row["item_no"]) if pd.notna(row["item_no"]) else None,
+            record = {
+                "reference": str(row["reference"]) if pd.notna(row["reference"]) else None,
                 "name": row["item_name"],
                 "stock": float(row["stock"]) if pd.notna(row["stock"]) else None,
-                "price": float(row["price"]) if pd.notna(row["price"]) else None,
-            })
-        (out_dir / "stock.json").write_text(
+            }
+            # A configured token is what makes this filename unguessable,
+            # so cost only ever goes into the tokenized file - never into
+            # the well-known public "stock.json" name (see module docstring).
+            if stock_token:
+                record["cost"] = float(row["cost"]) if pd.notna(row["cost"]) else None
+            else:
+                record["price"] = float(row["price"]) if pd.notna(row["price"]) else None
+            stock_records.append(record)
+        (out_dir / stock_filename).write_text(
             json.dumps(stock_records, ensure_ascii=False), encoding="utf-8")
 
         # The hub page (a different Cloudflare Pages origin) fetches this
@@ -197,7 +219,7 @@ def export(cfg: Config | None = None) -> Path:
         # poslib/remote.py for why "_headers" has to actually be uploaded
         # for Cloudflare to read this.
         (out_dir / "_headers").write_text(
-            "/stock.json\n  Access-Control-Allow-Origin: *\n", encoding="utf-8")
+            f"/{stock_filename}\n  Access-Control-Allow-Origin: *\n", encoding="utf-8")
 
         presets = _today_preset_ranges(today)
 

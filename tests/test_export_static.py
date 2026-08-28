@@ -224,17 +224,21 @@ class TestExport:
         _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
         out_dir = export_static.export(cfg)
 
-        stock_path = out_dir / "stock.json"
+        token = cfg.get("remote.stock_json_token", "")
+        stock_path = out_dir / (f"stock-{token}.json" if token else "stock.json")
         assert stock_path.is_file()
         records = json.loads(stock_path.read_text(encoding="utf-8"))
         assert isinstance(records, list)
         if records:
-            for key in ("item_no", "name", "stock", "price"):
+            # A configured token switches the file to cost instead of
+            # price (see export_static.py's module docstring) - the two
+            # never appear together, and neither ever appears with the
+            # other money/internal fields this file must stay lean on.
+            money_key, other_money_key = ("cost", "price") if token else ("price", "cost")
+            for key in ("reference", "name", "stock", money_key):
                 assert key in records[0]
-            # No cost/margin/family/internal IDs - this one file is
-            # reachable without an Access login (see
-            # docs/superpowers/specs/2026-08-27-component5-hub-design.md).
-            for forbidden in ("cost", "margin", "family_name", "item_id", "inactive"):
+            for forbidden in ("margin", "family_name", "item_id", "item_no", "inactive",
+                              other_money_key):
                 assert forbidden not in records[0]
 
     def test_stock_json_excludes_inactive_items(self, cfg, metrics, monkeypatch, tmp_path):
@@ -243,21 +247,26 @@ class TestExport:
         catalog = metrics.catalog()
         if not catalog["inactive"].any():
             pytest.skip("no inactive items in this database to check against")
-        inactive_item_nos = set(catalog.loc[catalog["inactive"], "item_no"].astype(str))
+        inactive_names = set(catalog.loc[catalog["inactive"], "item_name"])
 
+        token = cfg.get("remote.stock_json_token", "")
         out_dir = export_static.export(cfg)
-        records = json.loads((out_dir / "stock.json").read_text(encoding="utf-8"))
-        exported_item_nos = {r["item_no"] for r in records}
-        assert not (inactive_item_nos & exported_item_nos)
+        stock_path = out_dir / (f"stock-{token}.json" if token else "stock.json")
+        records = json.loads(stock_path.read_text(encoding="utf-8"))
+        exported_names = {r["name"] for r in records}
+        assert not (inactive_names & exported_names)
 
     def test_headers_file_grants_cors_on_stock_json(self, cfg, monkeypatch, tmp_path):
         _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
         out_dir = export_static.export(cfg)
 
+        token = cfg.get("remote.stock_json_token", "")
+        stock_filename = f"stock-{token}.json" if token else "stock.json"
+
         headers_path = out_dir / "_headers"
         assert headers_path.is_file()
         content = headers_path.read_text(encoding="utf-8")
-        assert "/stock.json" in content
+        assert f"/{stock_filename}" in content
         assert "Access-Control-Allow-Origin" in content
 
 
