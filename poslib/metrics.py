@@ -305,6 +305,19 @@ class Metrics:
             df["cost"].fillna(0) > 0,
             (df["price"].fillna(0) - df["cost"].fillna(0)) / df["cost"].replace(0, np.nan),
             np.nan)
+
+        # Wholesale box view: R.Lynx's own "QtyPerParcel" ("Colis" in the
+        # French UI) is how many individual pieces come in one box/case -
+        # e.g. 24 for most items in this database. A qty_per_parcel of 0/1/
+        # NaN means "no box packaging tracked for this item" - stock_boxes/
+        # stock_remainder stay NaN rather than a misleading "1 box per
+        # piece" split. Floor division so a partly-broken-open box shows as
+        # whole boxes plus the loose pieces left over, not a fractional box.
+        has_boxes = df["qty_per_parcel"].fillna(0) > 1
+        df["stock_boxes"] = np.where(
+            has_boxes, np.floor(df["stock"].fillna(0) / df["qty_per_parcel"]), np.nan)
+        df["stock_remainder"] = np.where(
+            has_boxes, df["stock"].fillna(0) - df["stock_boxes"] * df["qty_per_parcel"], np.nan)
         return df
 
     @cached_property
@@ -1434,11 +1447,14 @@ class Metrics:
     def catalog(self) -> pd.DataFrame:
         """
         The full product catalogue for the Stock catalog screen: reference,
-        name, family/brand, quantity, cost, price. A thin, sorted view over
-        `items` - no new business logic, just what a search screen needs.
+        name, family/brand, quantity (in pieces and, where R.Lynx tracks a
+        box size, in whole boxes + leftover pieces too), cost, price. A
+        thin, sorted view over `items` - no new business logic, just what a
+        search screen needs.
         """
         cols = ["item_id", "item_no", "reference", "item_name", "family_name",
-                "stock", "cost", "price", "inactive"]
+                "stock", "qty_per_parcel", "stock_boxes", "stock_remainder",
+                "cost", "price", "inactive"]
         return self.items[cols].sort_values("item_name").reset_index(drop=True)
 
     def inventory_summary(self) -> dict[str, Any]:

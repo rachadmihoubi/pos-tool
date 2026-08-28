@@ -39,13 +39,15 @@ per-day revenue rollup (see `Metrics.daily_rollup()`) that lets the Today
 page's remote custom-range picker sum an arbitrary range client-side,
 since a truly arbitrary range can't be pre-rendered at all.
 
-`stock.json` (item reference, name, quantity, price - no cost/margin) is
-for Component 5's multi-store hub: a cross-store stock search whose JS
-fetches this one file directly from each store's own Cloudflare Pages
-project. See docs/superpowers/specs/2026-08-27-component5-hub-design.md
-for why this one path needs an Access Bypass policy (everything else on
-this domain stays gated to the owner's email as before) and why the hub
-can't simply share a login session across stores.
+`stock.json` (item reference, name, quantity - in pieces and, where R.Lynx
+tracks a box size (`Item.QtyPerParcel`, "Colis"), in whole boxes plus
+leftover pieces too - and price, no cost/margin) is for Component 5's
+multi-store hub: a cross-store stock search whose JS fetches this one file
+directly from each store's own Cloudflare Pages project. See
+docs/superpowers/specs/2026-08-27-component5-hub-design.md for why this
+one path needs an Access Bypass policy (everything else on this domain
+stays gated to the owner's email as before) and why the hub can't simply
+share a login session across stores.
 
 `remote.stock_json_token`, if set in config.yaml, switches this to a
 second, cost-bearing file instead: `stock-<token>.json`, filename chosen
@@ -199,6 +201,9 @@ def export(cfg: Config | None = None) -> Path:
                 "reference": str(row["reference"]) if pd.notna(row["reference"]) else None,
                 "name": row["item_name"],
                 "stock": float(row["stock"]) if pd.notna(row["stock"]) else None,
+                "boxes": float(row["stock_boxes"]) if pd.notna(row["stock_boxes"]) else None,
+                "boxes_remainder": (float(row["stock_remainder"])
+                                     if pd.notna(row["stock_remainder"]) else None),
             }
             # A configured token is what makes this filename unguessable,
             # so cost only ever goes into the tokenized file - never into

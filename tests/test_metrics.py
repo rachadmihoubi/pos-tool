@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -726,12 +727,37 @@ class TestCatalog:
     def test_catalog_columns(self, metrics: Metrics):
         cat = metrics.catalog()
         for col in ("item_id", "item_no", "item_name", "family_name",
-                    "stock", "cost", "price"):
+                    "stock", "qty_per_parcel", "stock_boxes", "stock_remainder",
+                    "cost", "price"):
             assert col in cat.columns
 
     def test_catalog_sorted_by_name(self, metrics: Metrics):
         cat = metrics.catalog()
         assert list(cat["item_name"]) == sorted(cat["item_name"])
+
+    def test_stock_boxes_reconstructs_stock_for_boxed_items(self, metrics: Metrics):
+        """
+        Wholesale box view: for any item with a real box size
+        (QtyPerParcel/"Colis" > 1), whole boxes * box size + leftover
+        pieces must add back up to the exact piece-level stock figure -
+        this is just stock re-expressed in two units, never a different
+        number.
+        """
+        cat = metrics.catalog()
+        boxed = cat[cat["stock_boxes"].notna()]
+        if boxed.empty:
+            pytest.skip("no items with a tracked box size in this database")
+        reconstructed = boxed["stock_boxes"] * boxed["qty_per_parcel"] + boxed["stock_remainder"]
+        assert np.allclose(reconstructed, boxed["stock"].fillna(0))
+        assert (boxed["qty_per_parcel"] > 1).all()
+
+    def test_stock_boxes_is_none_without_a_tracked_box_size(self, metrics: Metrics):
+        cat = metrics.catalog()
+        unboxed = cat[cat["qty_per_parcel"].fillna(0) <= 1]
+        if unboxed.empty:
+            pytest.skip("every item in this database has a tracked box size")
+        assert unboxed["stock_boxes"].isna().all()
+        assert unboxed["stock_remainder"].isna().all()
 
 
 class TestFamilyMarginOutliers:

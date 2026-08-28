@@ -385,7 +385,8 @@
   "catalog": {
     "title": "Catalogue produits",
     "subtitle": "Tous les produits - référence, famille, quantité et prix.",
-    "col_reference": "Référence"
+    "col_reference": "Référence",
+    "col_boxes": "Colis"
   },
 
   "products": {

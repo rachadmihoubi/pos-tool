@@ -235,10 +235,10 @@ class TestExport:
             # never appear together, and neither ever appears with the
             # other money/internal fields this file must stay lean on.
             money_key, other_money_key = ("cost", "price") if token else ("price", "cost")
-            for key in ("reference", "name", "stock", money_key):
+            for key in ("reference", "name", "stock", "boxes", "boxes_remainder", money_key):
                 assert key in records[0]
             for forbidden in ("margin", "family_name", "item_id", "item_no", "inactive",
-                              other_money_key):
+                              "qty_per_parcel", other_money_key):
                 assert forbidden not in records[0]
 
     def test_stock_json_excludes_inactive_items(self, cfg, metrics, monkeypatch, tmp_path):

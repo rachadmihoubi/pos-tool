@@ -54,6 +54,11 @@ async function loadAllStock(stores) {
   return items;
 }
 
+function formatBoxes(item) {
+  if (item.boxes == null) return "";
+  return item.boxes_remainder ? `${item.boxes} (+${item.boxes_remainder})` : `${item.boxes}`;
+}
+
 function renderResults(items) {
   const body = document.getElementById("results-body");
   body.innerHTML = items.map(item => `
@@ -62,6 +67,7 @@ function renderResults(items) {
       <td>${item.reference ?? ""}</td>
       <td>${item.name ?? ""}</td>
       <td>${item.stock ?? ""}</td>
+      <td>${formatBoxes(item)}</td>
       <td>${item.cost ?? item.price ?? ""}</td>
     </tr>
   `).join("");

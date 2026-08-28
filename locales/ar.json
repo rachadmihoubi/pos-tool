@@ -385,7 +385,8 @@
   "catalog": {
     "title": "كتالوج المنتجات",
     "subtitle": "كل منتج - المرجع، العلامة، الكمية والسعر.",
-    "col_reference": "المرجع"
+    "col_reference": "المرجع",
+    "col_boxes": "الكراتين"
   },
 
   "products": {

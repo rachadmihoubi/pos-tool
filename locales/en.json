@@ -385,7 +385,8 @@
   "catalog": {
     "title": "Stock catalog",
     "subtitle": "Every product - reference, family, quantity and price.",
-    "col_reference": "Reference"
+    "col_reference": "Reference",
+    "col_boxes": "Boxes"
   },
 
   "products": {
