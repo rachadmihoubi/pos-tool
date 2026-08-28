@@ -186,15 +186,26 @@ print(f"OK: child saw POS_TOOL_ENVTEST={value}")
 sys.exit(0)
 ```
 
-`packaging/_envtest.iss`:
+`packaging/_envtest.iss` — **as actually built and run (2026-08-28)**, not
+the interactive-`MsgBox` draft this plan originally sketched: `MsgBox` was
+replaced with `SaveStringToFile` from the start, since a headless/silent
+run must never block on a dialog nobody is present to click (the same
+constraint Task 6's real wizard page also has to satisfy — see that task's
+section below). `PrivilegesRequired=lowest` was also added, installing to
+`{localappdata}\EnvTest` instead of `{autopf}\EnvTest`, purely to keep this
+*throwaway test* from triggering a UAC prompt on a non-admin dev shell —
+the real `setup.iss` still defaults to `admin` and is unaffected by this:
 
 ```pascal
 [Setup]
 AppName=EnvTest
 AppVersion=1.0
-DefaultDirName={autopf}\EnvTest
+DefaultDirName={localappdata}\EnvTest
+PrivilegesRequired=lowest
 OutputDir=.
 OutputBaseFilename=EnvTestSetup
+DisableProgramGroupPage=yes
+DisableWelcomePage=yes
 
 [Code]
 function SetEnvironmentVariableW(lpName, lpValue: String): Boolean;
@@ -205,24 +216,36 @@ var
   ResultCode: Integer;
   Output: TExecOutput;
   I: Integer;
+  Report: String;
+  SetOk: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
-    if not SetEnvironmentVariableW('POS_TOOL_ENVTEST', 'hello-from-installer') then
-      MsgBox('SetEnvironmentVariableW itself failed.', mbError, MB_OK);
+    Report := '';
+
+    SetOk := SetEnvironmentVariableW('POS_TOOL_ENVTEST', 'hello-from-installer');
+    if SetOk then
+      Report := Report + 'SetEnvironmentVariableW: OK' + #13#10
+    else
+      Report := Report + 'SetEnvironmentVariableW: FAILED' + #13#10;
 
     if ExecAndCaptureOutput(ExpandConstant('{sys}\cmd.exe'),
        '/c python "' + ExpandConstant('{src}\_envtest_child.py') + '"',
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode, Output) then
     begin
+      Report := Report + 'ExecAndCaptureOutput: launched OK' + #13#10;
       for I := 0 to GetArrayLength(Output.StdOut) - 1 do
-        MsgBox('stdout: ' + Output.StdOut[I], mbInformation, MB_OK);
-      MsgBox('Exit code: ' + IntToStr(ResultCode), mbInformation, MB_OK);
+        Report := Report + 'stdout: ' + Output.StdOut[I] + #13#10;
+      for I := 0 to GetArrayLength(Output.StdErr) - 1 do
+        Report := Report + 'stderr: ' + Output.StdErr[I] + #13#10;
+      Report := Report + 'Exit code: ' + IntToStr(ResultCode) + #13#10;
     end
     else
-      MsgBox('ExecAndCaptureOutput itself failed to launch.', mbError, MB_OK);
+      Report := Report + 'ExecAndCaptureOutput: FAILED TO LAUNCH' + #13#10;
 
     SetEnvironmentVariableW('POS_TOOL_ENVTEST', '');
+
+    SaveStringToFile(ExpandConstant('{src}\_envtest_result.txt'), Report, False);
   end;
 end;
 ```
@@ -231,15 +254,24 @@ end;
 
 ```bash
 ISCC.exe packaging\_envtest.iss
-dist-installer\EnvTestSetup.exe
+packaging\EnvTestSetup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=<path>
 ```
 
-(Adjust `ISCC.exe`'s path to wherever `winget install JRSoftware.InnoSetup`
-put it — `packaging/publish_release.py`'s own build step already calls
-`ISCC.exe` for the real installer and has the confirmed path if needed.)
+`ISCC.exe`'s confirmed path on this machine:
+`C:\Users\RACHAD\AppData\Local\Programs\Inno Setup 6\ISCC.exe` (matches
+`packaging/publish_release.py`'s own `_ISCC_FALLBACK` constant). `OutputDir=.`
+placed the built `EnvTestSetup.exe` in `packaging/` alongside the `.iss`
+source, not `dist-installer/`.
 
-Run the installer, watch for the `MsgBox` sequence. Expected: `stdout: OK:
-child saw POS_TOOL_ENVTEST=hello-from-installer`, exit code `0`.
+Read `packaging/_envtest_result.txt` back afterward instead of watching for
+a `MsgBox` sequence. Expected content: `SetEnvironmentVariableW: OK` /
+`ExecAndCaptureOutput: launched OK` / `stdout: OK: child saw
+POS_TOOL_ENVTEST=hello-from-installer` / `Exit code: 0`.
+
+**Actually confirmed, 2026-08-28**: exactly this content was captured on
+the first attempt — see
+`.superpowers/sdd/2026-08-28-component5-cloudflare-auto-provisioning/task-2-report.md`
+for the full build/run log and cleanup verification.
 
 - [ ] **Step 3: Handle a real failure if it happens**
 
@@ -252,7 +284,9 @@ exe path rather than through `cmd.exe /c`, and re-test. Do not proceed to
 Task 6 until real captured output confirms the variable crosses the process
 boundary — this is exactly the kind of claim this project's own
 `CLAUDE.md` has been burned by asserting without a real test (see the
-`_redirects` bug history).
+`_redirects` bug history). **Not needed in practice** — the `cmd.exe /c`
+path worked on the first attempt (see Step 2 above), so this fallback was
+never exercised.
 
 - [ ] **Step 4: Record the proven snippet and clean up**
 
@@ -1612,16 +1646,22 @@ created that directory yet; without it, a `SaveStringToFile` on a missing
 directory silently returns `False` and the one diagnostic that matters most
 (that the launch itself failed) is lost.
 
-**Confirmed the log cannot leak the newly-minted credential:** `provision_store`'s
-`ProvisionResult.message` (`poslib/provision.py` / Task 4's orchestrator, plan
-line ~1081) never includes the minted watcher token's value or the powerful
-provisioning token on either the success or any `ProvisionError` path — it
-reports project/app/token *names* and *ids* only, and explicitly tells the
-operator to revoke the one-time token by hand. Since `ProvisionMessage`
-above is built only from this same stdout, persisting it to a file (instead
-of a `MsgBox` that vanished on click) does not newly expose a secret to
-disk — worth confirming explicitly given this plan's own token-handling
-discipline (env var only, never argv/disk) for the *input* token.
+**Design intent, not yet re-confirmed against real code — the log must not
+leak the newly-minted credential:** Task 4's orchestrator (`provision_store`/
+`ProvisionResult`, this plan's own draft above, around line ~1081) is **not
+yet implemented** — only Task 3's helper functions
+(`verify_token`/`create_pages_project`/`find_watcher_token`/
+`mint_watcher_token`/etc.) exist today in `poslib/provision.py`. Per that
+draft's own design, `ProvisionResult.message` is meant to carry only
+project/app/token *names* and *ids* on both the success and any
+`ProvisionError` path — never the minted watcher token's value or the
+powerful provisioning token — and to explicitly tell the operator to revoke
+the one-time token by hand. If that design holds when Task 4 is actually
+built, persisting `ProvisionMessage` to a file (instead of a `MsgBox` that
+vanished on click) would not newly expose a secret to disk. **This must be
+re-verified against Task 4's real, implemented `provision_store` once it
+exists** — treat it as an open check for Task 4/Task 6's smoke test, not
+something already confirmed.
 
 - [ ] **Step 4: Manual smoke test — build and run against a disposable target**
 
