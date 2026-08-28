@@ -441,6 +441,84 @@ class Metrics:
         return df
 
     @cached_property
+    def item_purchase_costs(self) -> pd.DataFrame:
+        """
+        Per-item weighted-average cost (AVCO) and last purchase cost,
+        computed fresh from `purchases` - never from `Item.Cost`.
+
+        `Item.Cost` looks like it should already be "the item's current
+        cost" but it is NOT reliably "last purchase cost": it is also
+        overwritten by `PricingUpdateEntry` (a manual price-edit log,
+        unrelated to purchasing). Checked against every item with
+        purchase history: 18 of 1,567 diverge from their own last
+        purchase's `new_cost`, one cluster of 12 items exactly 2x off via
+        a single bulk `PricingUpdateID` (217, dated 2026-06-04). So both
+        figures here are built the same way, from the same source, rather
+        than trusting a POS-maintained field whose update semantics turned
+        out to be broader than "purchases only".
+
+        The accumulator only needs `purchases` - no purchase dates, no
+        sales table, no interleaving. `new_stock` is R.Lynx's own snapshot
+        of the item's total stock level immediately AFTER this purchase
+        line was applied, so `new_stock - qty` is the stock on hand the
+        instant before this delivery landed - i.e. exactly the quantity
+        that was carrying the old average. That already nets out every
+        sale, return and stock adjustment that happened since the previous
+        purchase, so there is no need to know when any of that happened.
+        `entry_id` (PurchaseEntry's own row ID) is a sound ordering key
+        WITHIN one item's own purchase lines - it is NOT a clean global
+        chronological key across the whole table (confirmed: PurchaseID
+        runs backwards against it at 20 points system-wide), so it must
+        never be used for anything beyond per-item ordering.
+
+        A line with non-positive qty or a missing/zero new_cost is
+        skipped for costing purposes, but the running quantity is still
+        resynced to that line's own new_stock (when known) so a later,
+        good line isn't compared against a stale quantity. Items with no
+        usable purchase history at all get no row here - `catalog()`'s
+        merge leaves avg_cost/last_purchase_cost as NaN for them, blank
+        rather than guessed from `Item.Cost`.
+
+        Display-only for now: this does not feed stock_value, markup_pct,
+        dead_stock or any other existing diagnostic - see CLAUDE.md.
+        """
+        cols = ["item_id", "avg_cost", "last_purchase_cost"]
+        p = self.purchases
+        if p.empty:
+            return pd.DataFrame(columns=cols)
+
+        p = p[p["is_purchase"]].sort_values(["item_id", "entry_id"])
+
+        records: list[dict[str, Any]] = []
+        for item_id, group in p.groupby("item_id", sort=False):
+            running_qty: float | None = None
+            running_avg: float | None = None
+            last_cost: float | None = None
+            for row in group.itertuples():
+                qty, new_cost, new_stock = row.qty, row.new_cost, row.new_stock
+                bad = (pd.isna(qty) or qty <= 0 or pd.isna(new_cost) or new_cost == 0
+                       or pd.isna(new_stock))
+                if bad:
+                    if not pd.isna(new_stock):
+                        running_qty = new_stock
+                    continue
+                before = new_stock - qty
+                if running_avg is None:
+                    running_avg = new_cost
+                else:
+                    carry = min(max(before, 0.0), running_qty)
+                    denom = carry + qty
+                    running_avg = ((carry * running_avg + qty * new_cost) / denom
+                                   if denom > 0 else new_cost)
+                running_qty = new_stock
+                last_cost = new_cost
+            if last_cost is not None:
+                records.append({"item_id": item_id, "avg_cost": running_avg,
+                                 "last_purchase_cost": last_cost})
+
+        return pd.DataFrame.from_records(records, columns=cols)
+
+    @cached_property
     def supplier_payments(self) -> pd.DataFrame:
         """
         Money paid to suppliers - the `ItemID = -2` "Paiement de règlement"
@@ -1448,14 +1526,17 @@ class Metrics:
         """
         The full product catalogue for the Stock catalog screen: reference,
         name, family/brand, quantity (in pieces and, where R.Lynx tracks a
-        box size, in whole boxes + leftover pieces too), cost, price. A
-        thin, sorted view over `items` - no new business logic, just what a
-        search screen needs.
+        box size, in whole boxes + leftover pieces too), cost, price, plus
+        the weighted-average and last-purchase cost from
+        `item_purchase_costs` (NaN for items with no usable purchase
+        history - blank, not guessed). `cost` (Item.Cost) stays untouched
+        alongside them, still the field every existing diagnostic reads.
         """
         cols = ["item_id", "item_no", "reference", "item_name", "family_name",
                 "stock", "qty_per_parcel", "stock_boxes", "stock_remainder",
                 "cost", "price", "inactive"]
-        return self.items[cols].sort_values("item_name").reset_index(drop=True)
+        df = self.items[cols].merge(self.item_purchase_costs, on="item_id", how="left")
+        return df.sort_values("item_name").reset_index(drop=True)
 
     def inventory_summary(self) -> dict[str, Any]:
         """The stock picture in one set of numbers."""

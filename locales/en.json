@@ -386,7 +386,9 @@
     "title": "Stock catalog",
     "subtitle": "Every product - reference, family, quantity and price.",
     "col_reference": "Reference",
-    "col_boxes": "Boxes"
+    "col_boxes": "Boxes",
+    "col_avg_cost": "Avg cost",
+    "col_last_cost": "Last cost"
   },
 
   "products": {

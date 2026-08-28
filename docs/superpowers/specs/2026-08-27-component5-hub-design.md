@@ -202,37 +202,33 @@ this test manually drove each API call to verify the *mechanism*; wiring
 it into `packaging/setup.iss`/the installer wizard is still a separate,
 not-yet-built step.
 
-## Deferred to after this component: weighted-average cost
+## Deferred to after this component: weighted-average cost — DONE 2026-08-28
 
 The owner also asked for a real inventory-accounting feature, explicitly
 **not** part of this component and not to be started until Component 5
-is done:
+was done:
 
 > if I bought at a high price and sold half, then bought at a lower
 > price, calculate the average price of the new + remaining stock
 
-This is the standard **weighted-average cost (AVCO)** inventory costing
-method. Today, `Metrics.items`/`catalog()`'s `cost` column is read
-straight from R.Lynx's own `Item.Cost` field - a single point-in-time
-value R.Lynx itself maintains, not something this tool computes. The new
-feature would instead reconstruct each item's own purchase/sale history
-(`purchases()` already has the purchase-line data; `lines`/`is_sale`
-already has the sale-line data) in chronological order and run it through
-a stateful accumulator: a purchase updates the weighted-average cost
-(`new_avg = (old_qty * old_avg + purchased_qty * purchase_unit_cost) /
-(old_qty + purchased_qty)`); a sale reduces quantity without changing the
-average (standard AVCO - the average only moves on a purchase, never a
-sale). The result should surface **both** on the Stock catalog screen
-(replacing or sitting alongside the existing `cost` column - which to do
-needs its own small design decision when this is picked up) **and** in
-`stock.json`/the hub's cross-store view, since the owner asked for it in
-both places. Not started. When picked up, this needs its own careful
-design pass (where exactly in `metrics.py` this lives, how "purchase
-price" is defined when a `PurchaseEntry` line's own unit cost is missing
-or zero, whether a floor of zero applies, how this interacts with the
-existing `stock_value`/`markup_pct`/`dead_stock`/`stockout_risk`
-calculations that already read the old single `cost` column) - not
-attempted here.
+Built once Component 5 was phone-verified, per the owner's own sequencing
+— see CLAUDE.md's "Weighted-average cost (AVCO) + last purchase cost
+(2026-08-28)" section for the full writeup (both `Item.Cost` discoveries,
+the `PurchaseEntry.NewStock`-chain accumulator that avoids needing
+purchase dates or a sales-table interleave, and the materiality numbers).
+Short version of what changed from this section's original framing,
+found by the mandatory pre-build Opus sanity-check: a chronological
+purchase+sale interleave (as sketched above) was the wrong approach even
+with perfect dates, because it would silently ignore `ItemAdjustment`
+(stock corrections outside both purchases and sales); the accumulator
+instead uses `PurchaseEntry.NewStock` alone, which already nets out
+everything since the previous purchase. `Metrics.item_purchase_costs`
+(a new standalone `cached_property`, not folded into `items`) computes
+`avg_cost` and `last_purchase_cost`; `catalog()` merges them in and the
+existing `cost` column is untouched, so `stock_value`/`markup_pct`/
+`dead_stock`/`stockout_risk` are all unaffected — display-only, both
+figures shown side by side on the Stock catalog screen and in
+`stock-<token>.json`/the hub's cross-store view.
 
 ## What's next (build order for this component)
 

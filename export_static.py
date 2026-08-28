@@ -210,6 +210,11 @@ def export(cfg: Config | None = None) -> Path:
             # the well-known public "stock.json" name (see module docstring).
             if stock_token:
                 record["cost"] = float(row["cost"]) if pd.notna(row["cost"]) else None
+                record["avg_cost"] = (float(row["avg_cost"])
+                                       if pd.notna(row["avg_cost"]) else None)
+                record["last_purchase_cost"] = (float(row["last_purchase_cost"])
+                                                 if pd.notna(row["last_purchase_cost"])
+                                                 else None)
             else:
                 record["price"] = float(row["price"]) if pd.notna(row["price"]) else None
             stock_records.append(record)

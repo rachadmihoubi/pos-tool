@@ -47,7 +47,8 @@ def test_index_html_references_its_own_assets():
 
 def test_app_js_uses_the_real_stock_json_field_names():
     js = (HUB_DIR / "app.js").read_text(encoding="utf-8")
-    for field in ("reference", "name", "stock", "price", "cost", "boxes", "boxes_remainder"):
+    for field in ("reference", "name", "stock", "price", "cost", "boxes", "boxes_remainder",
+                  "avg_cost", "last_purchase_cost"):
         assert field in js, f"app.js never references stock file's {field!r} field"
     assert "stores.json" in js
     assert "Promise.allSettled" in js, \

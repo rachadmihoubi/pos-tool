@@ -386,7 +386,9 @@
     "title": "Catalogue produits",
     "subtitle": "Tous les produits - référence, famille, quantité et prix.",
     "col_reference": "Référence",
-    "col_boxes": "Colis"
+    "col_boxes": "Colis",
+    "col_avg_cost": "Coût moyen",
+    "col_last_cost": "Dernier coût"
   },
 
   "products": {

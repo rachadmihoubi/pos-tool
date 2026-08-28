@@ -241,6 +241,28 @@ class TestExport:
                               "qty_per_parcel", other_money_key):
                 assert forbidden not in records[0]
 
+    def test_stock_json_has_purchase_costs_only_when_tokenized(self, cfg, monkeypatch, tmp_path):
+        """
+        avg_cost/last_purchase_cost are cost figures, same sensitivity as
+        the existing "cost" field - they may only ever appear on the
+        unguessable stock-<token>.json filename, never on the public
+        stock.json.
+        """
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+
+        token = cfg.get("remote.stock_json_token", "")
+        stock_path = out_dir / (f"stock-{token}.json" if token else "stock.json")
+        records = json.loads(stock_path.read_text(encoding="utf-8"))
+        if not records:
+            pytest.skip("no active items to check")
+        if token:
+            assert "avg_cost" in records[0]
+            assert "last_purchase_cost" in records[0]
+        else:
+            assert "avg_cost" not in records[0]
+            assert "last_purchase_cost" not in records[0]
+
     def test_stock_json_excludes_inactive_items(self, cfg, metrics, monkeypatch, tmp_path):
         _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
 

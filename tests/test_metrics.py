@@ -728,7 +728,7 @@ class TestCatalog:
         cat = metrics.catalog()
         for col in ("item_id", "item_no", "item_name", "family_name",
                     "stock", "qty_per_parcel", "stock_boxes", "stock_remainder",
-                    "cost", "price"):
+                    "cost", "price", "avg_cost", "last_purchase_cost"):
             assert col in cat.columns
 
     def test_catalog_sorted_by_name(self, metrics: Metrics):
@@ -758,6 +758,74 @@ class TestCatalog:
             pytest.skip("every item in this database has a tracked box size")
         assert unboxed["stock_boxes"].isna().all()
         assert unboxed["stock_remainder"].isna().all()
+
+    def test_catalog_row_count_unaffected_by_purchase_cost_merge(self, metrics: Metrics):
+        """
+        item_purchase_costs is one row per item_id - merging it into
+        catalog() must never duplicate or drop rows.
+        """
+        cat = metrics.catalog()
+        assert len(cat) == len(metrics.items)
+
+    def test_items_never_purchased_have_no_purchase_cost(self, metrics: Metrics):
+        cat = metrics.catalog()
+        purchased_ids = set(metrics.item_purchase_costs["item_id"])
+        never_purchased = cat[~cat["item_id"].isin(purchased_ids)]
+        if never_purchased.empty:
+            pytest.skip("every item in this database has purchase history")
+        assert never_purchased["avg_cost"].isna().all()
+        assert never_purchased["last_purchase_cost"].isna().all()
+
+    def test_purchase_cost_present_only_where_purchase_history_exists(self, metrics: Metrics):
+        ipc = metrics.item_purchase_costs
+        if ipc.empty:
+            pytest.skip("no purchase history in this database")
+        assert ipc["avg_cost"].notna().all()
+        assert ipc["last_purchase_cost"].notna().all()
+        assert (ipc["avg_cost"] > 0).all()
+        assert (ipc["last_purchase_cost"] > 0).all()
+
+    def test_last_purchase_cost_matches_last_valid_purchase_entry(self, metrics: Metrics):
+        """
+        Independent re-derivation: for each item with purchase history,
+        last_purchase_cost must equal new_cost of that item's own
+        highest-entry_id valid line (qty > 0, new_cost not null/zero) -
+        entry_id is a sound ordering key within one item's own lines.
+        """
+        p = metrics.purchases
+        if p.empty:
+            pytest.skip("no purchase data in this database")
+        valid = p[p["is_purchase"] & (p["qty"] > 0)
+                  & p["new_cost"].notna() & (p["new_cost"] != 0)]
+        if valid.empty:
+            pytest.skip("no valid purchase lines in this database")
+        last_by_item = (valid.sort_values("entry_id")
+                        .groupby("item_id")["new_cost"].last())
+
+        ipc = metrics.item_purchase_costs.set_index("item_id")["last_purchase_cost"]
+        common = last_by_item.index.intersection(ipc.index)
+        assert len(common) > 0
+        assert np.allclose(last_by_item.loc[common], ipc.loc[common])
+
+    def test_avg_cost_equals_last_cost_for_single_purchase_items(self, metrics: Metrics):
+        """
+        An item bought exactly once has no averaging to do - its avg_cost
+        must equal that one purchase's cost exactly.
+        """
+        p = metrics.purchases
+        if p.empty:
+            pytest.skip("no purchase data in this database")
+        valid = p[p["is_purchase"] & (p["qty"] > 0)
+                  & p["new_cost"].notna() & (p["new_cost"] != 0)]
+        counts = valid.groupby("item_id").size()
+        single = counts[counts == 1].index
+        if len(single) == 0:
+            pytest.skip("no single-purchase items in this database")
+        ipc = metrics.item_purchase_costs.set_index("item_id")
+        common = [i for i in single if i in ipc.index]
+        assert len(common) > 0
+        subset = ipc.loc[common]
+        assert np.allclose(subset["avg_cost"], subset["last_purchase_cost"])
 
 
 class TestFamilyMarginOutliers:

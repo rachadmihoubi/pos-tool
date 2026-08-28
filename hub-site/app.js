@@ -8,9 +8,11 @@
 // taking down the rest.
 //
 // The URL in stores.json may point at a plain "stock.json" (price, no
-// cost) or a store-specific "stock-<token>.json" (cost, no price) - see
-// export_static.py's module docstring. This page doesn't care which;
-// it just renders whichever of item.cost / item.price is present.
+// cost) or a store-specific "stock-<token>.json" (cost, avg_cost and
+// last_purchase_cost, no price) - see export_static.py's module
+// docstring. This page doesn't care which; it renders avg_cost/
+// last_purchase_cost when present, falling back to price/cost for a
+// store with no token configured (see renderResults).
 
 let allItems = [];
 
@@ -68,7 +70,8 @@ function renderResults(items) {
       <td>${item.name ?? ""}</td>
       <td>${item.stock ?? ""}</td>
       <td>${formatBoxes(item)}</td>
-      <td>${item.cost ?? item.price ?? ""}</td>
+      <td>${item.avg_cost ?? item.price ?? ""}</td>
+      <td>${item.last_purchase_cost ?? item.price ?? ""}</td>
     </tr>
   `).join("");
 }

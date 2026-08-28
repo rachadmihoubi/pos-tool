@@ -21,7 +21,8 @@
           <th>{{ t('common.family') }}</th>
           <th class="num">{{ t('common.stock') }}</th>
           <th class="num">{{ t('catalog.col_boxes') }}</th>
-          <th class="num">{{ t('common.cost') }}</th>
+          <th class="num">{{ t('catalog.col_avg_cost') }}</th>
+          <th class="num">{{ t('catalog.col_last_cost') }}</th>
           <th class="num">{{ t('common.price') }}</th>
         </tr>
       </thead>
@@ -40,7 +41,8 @@
               {{ t.number(r.stock_boxes) }}{% if r.stock_remainder %} <span class="muted">(+{{ t.number(r.stock_remainder) }})</span>{% endif %}
             {% else %}—{% endif %}
           </td>
-          <td class="num" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+          <td class="num" data-value="{{ r.avg_cost or 0 }}">{{ t.money(r.avg_cost) }}</td>
+          <td class="num" data-value="{{ r.last_purchase_cost or 0 }}">{{ t.money(r.last_purchase_cost) }}</td>
           <td class="num strong" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
         </tr>
         {% endfor %}
