@@ -768,6 +768,39 @@ file, since the watcher only auto-pushes on new till activity). Hub
 redeploy not needed — this change doesn't touch `hub-site/` or
 `stock.json`.
 
+**Verified — and the disposable-subdomain trick is now broken, don't rely
+on it without re-checking.** The established "check a Cloudflare Pages
+deployment via its own unguarded per-deploy subdomain" trick (used
+repeatedly earlier in this file) no longer works: `curl` with no
+cookies/JS to `https://baf18b7c.promakeupmihoubipos.pages.dev/en/catalog`
+got a 302 straight to the Cloudflare Access login, same as the production
+hostname. Most likely cause: the Access application's
+`self_hosted_domains` got broadened (to a wildcard covering
+`*.promakeupmihoubipos.pages.dev`) during the stock-token repoint work
+earlier on 2026-08-28 (see "Hub search shows cost, not price" above,
+where `domain`/`self_hosted_domains`/`destinations[].uri` were all
+updated together) — plausible but not confirmed by inspecting the Access
+app config directly. **Don't assume any future per-deploy subdomain is
+unguarded** — check with a bare `curl` first, the same way this was
+caught.
+
+Verification was done directly against the exported static files on disk
+instead (no Cloudflare, no login needed): file counts matched exactly
+(1,599 files in `remote-site/en/products/`, 671 in
+`remote-site/en/customers/`); `catalog.html` contains exactly 1,599
+`<a href="/en/products/...">` links; sampled pages
+(`products/1.html`, `products/595.html` = item DB786,
+`customers/10.html`) had no `Traceback`/`Undefined`/`werkzeug` error
+markers, real headings (`Article divers`, an Arabic customer name), and
+DB786's page correctly showed its known divergent purchase cost
+(`2725.53`) under a real "Purchase history" section. This confirms the
+exported HTML itself is correct. **What it does not confirm**: whether
+Cloudflare Access, once authenticated, correctly serves these same files
+on the real gated domain — that still needs the owner's own phone,
+logged in, per this file's established "don't declare a deploy fully
+verified until the owner's phone confirms it" practice (see the
+`_redirects` bug history above, which burned this exact shortcut twice).
+
 ### The actual product goal (owner's own words, 2026-08-26) — read this before prioritizing anything
 
 The owner does not want a local dashboard. He already has R.Lynx's own POS
