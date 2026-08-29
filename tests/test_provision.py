@@ -377,6 +377,10 @@ def test_create_broad_access_app_returns_existing_id_when_correctly_scoped():
             "id": "app1",
             "domain": "storeb.pages.dev",
             "self_hosted_domains": ["storeb.pages.dev", "*.storeb.pages.dev"],
+            "destinations": [
+                {"type": "public", "uri": "storeb.pages.dev"},
+                {"type": "public", "uri": "*.storeb.pages.dev"},
+            ],
         }],
     })})
     app_id = provision.create_broad_access_app(session, "acct1", "storeb.pages.dev", "owner@example.com")
@@ -400,6 +404,26 @@ def test_create_broad_access_app_raises_when_existing_app_under_scoped():
         provision.create_broad_access_app(session, "acct1", "storeb.pages.dev", "owner@example.com")
 
 
+def test_create_broad_access_app_raises_when_destinations_desynced_from_self_hosted_domains():
+    # self_hosted_domains carries the wildcard but destinations[] does not -
+    # the exact asymmetric-desync shape docs/superpowers/specs/2026-08-29-
+    # store-access-app-shapes.md warns about (a PUT touching only one of
+    # the two fields, per CLAUDE.md's own incident history). Checking only
+    # self_hosted_domains would silently accept this as already-provisioned
+    # even though destinations[] leaves the wildcard ungated.
+    session = FakeSession({("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {
+        "success": True,
+        "result": [{
+            "id": "app1",
+            "domain": "storeb.pages.dev",
+            "self_hosted_domains": ["storeb.pages.dev", "*.storeb.pages.dev"],
+            "destinations": [{"type": "public", "uri": "storeb.pages.dev"}],
+        }],
+    })})
+    with pytest.raises(provision.ProvisionError, match="under-scoped|wildcard"):
+        provision.create_broad_access_app(session, "acct1", "storeb.pages.dev", "owner@example.com")
+
+
 def test_create_broad_access_app_creates_with_correct_payload_shape():
     session = FakeSession({
         ("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {"success": True, "result": []}),
@@ -408,6 +432,10 @@ def test_create_broad_access_app_creates_with_correct_payload_shape():
             "result": {
                 "id": "appNew",
                 "self_hosted_domains": ["storeb.pages.dev", "*.storeb.pages.dev"],
+                "destinations": [
+                    {"type": "public", "uri": "storeb.pages.dev"},
+                    {"type": "public", "uri": "*.storeb.pages.dev"},
+                ],
             },
         }),
     })
@@ -588,13 +616,19 @@ def test_provision_store_happy_path_full_sequence(tmp_path, monkeypatch):
         }),
         ("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {"success": True, "result": []}),
         # Same fixture serves both the broad and bypass app POSTs - the
-        # bypass path never reads self_hosted_domains, so the wildcard
-        # entries here are harmless for it.
+        # bypass path never reads self_hosted_domains/destinations, so the
+        # wildcard entries here are harmless for it. Both fields carry the
+        # wildcard so the broad app's post-create verification (which now
+        # checks self_hosted_domains AND destinations[]) passes.
         ("POST", "/accounts/acct1/access/apps"): FakeResponse(200, {
             "success": True,
             "result": {
                 "id": "appX",
                 "self_hosted_domains": ["storeb.pages.dev", "*.storeb.pages.dev"],
+                "destinations": [
+                    {"type": "public", "uri": "storeb.pages.dev"},
+                    {"type": "public", "uri": "*.storeb.pages.dev"},
+                ],
             },
         }),
     })
@@ -633,6 +667,158 @@ def test_provision_store_happy_path_full_sequence(tmp_path, monkeypatch):
 
     assert push_calls == [("storeb", export_dir)]
     assert (export_dir / "index.html").is_file()
+
+
+def test_provision_store_reuses_existing_stock_json_token(tmp_path, monkeypatch):
+    # Task 4 fix round, Minor finding: a store with an already-generated
+    # remote.stock_json_token (e.g. from a previous partial provisioning
+    # run) must reuse it rather than mint a fresh one - a fresh token here
+    # would orphan the bypass Access app's already-configured filename.
+    config_path = tmp_path / "config.yaml"
+    _write_minimal_config(config_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            'stock_json_token: ""', 'stock_json_token: "existingtoken123"'
+        ),
+        encoding="utf-8",
+    )
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "SMTP_PASSWORD=\nCLOUDFLARE_API_TOKEN=\nCLOUDFLARE_ACCOUNT_ID=\n", encoding="utf-8"
+    )
+    export_dir = tmp_path / "remote-site"
+    cfg = FakeCfg(config_path, env_path, export_dir, stock_json_token="existingtoken123")
+
+    fake_session = FakeSession({
+        ("GET", "/user/tokens/verify"): FakeResponse(200, {
+            "success": True, "result": {"id": "tok0", "status": "active"},
+        }),
+        ("GET", "/pages/projects/storeb"): FakeResponse(404, {"success": False}),
+        ("POST", "/pages/projects"): FakeResponse(200, {"success": True, "result": {"name": "storeb"}}),
+        ("GET", "/user/tokens"): FakeResponse(200, {"success": True, "result": []}),
+        ("GET", "/user/tokens/permission_groups"): FakeResponse(200, {
+            "success": True, "result": [{"id": "g2", "name": "Cloudflare Pages Write"}],
+        }),
+        ("POST", "/user/tokens"): FakeResponse(200, {
+            "success": True, "result": {"id": "tok_abc", "value": "secretval"},
+        }),
+        ("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {"success": True, "result": []}),
+        ("POST", "/accounts/acct1/access/apps"): FakeResponse(200, {
+            "success": True,
+            "result": {
+                "id": "appX",
+                "self_hosted_domains": ["storeb.pages.dev", "*.storeb.pages.dev"],
+                "destinations": [
+                    {"type": "public", "uri": "storeb.pages.dev"},
+                    {"type": "public", "uri": "*.storeb.pages.dev"},
+                ],
+            },
+        }),
+    })
+    monkeypatch.setattr(provision.requests, "Session", lambda: fake_session)
+    monkeypatch.setattr(provision._remote, "push_remote", lambda fresh_cfg, **kw: True)
+    monkeypatch.setattr(
+        provision, "verify_reachable",
+        lambda url, *, expect_status, **kw: True,
+    )
+
+    result = provision.provision_store(
+        cfg,
+        powerful_token="powerful123",
+        account_id="acct1",
+        project_slug="storeb",
+        owner_email="owner@example.com",
+    )
+
+    assert result.ok is True
+
+    # The pre-existing token is still the one on disk - not overwritten
+    # with a freshly generated value.
+    config_text = config_path.read_text(encoding="utf-8")
+    assert 'stock_json_token: "existingtoken123"' in config_text
+
+    # The bypass Access app must be created for the EXISTING token's
+    # filename, not a freshly generated one.
+    access_post_calls = [
+        c for c in fake_session.calls
+        if c[0] == "POST" and c[1].endswith("/access/apps")
+    ]
+    assert len(access_post_calls) == 2  # broad app, then bypass app
+    bypass_payload = access_post_calls[1][2]["json"]
+    assert bypass_payload["domain"] == "storeb.pages.dev/stock-existingtoken123.json"
+
+    # The placeholder site was written under the existing token's filename.
+    assert (export_dir / "stock-existingtoken123.json").is_file()
+
+
+def test_provision_store_returns_ok_when_provision_record_write_fails(tmp_path, monkeypatch):
+    # Task 4 fix round, Important finding #2: write_provision_record can
+    # raise OSError (disk full, permission denied). By the time it's
+    # called, remote.enabled has already been flipped True and the store
+    # is correctly gated - provision_store must still return a
+    # ProvisionResult (never raise), with ok=True since the store really
+    # is provisioned; only the local record file failed to write.
+    config_path = tmp_path / "config.yaml"
+    _write_minimal_config(config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "SMTP_PASSWORD=\nCLOUDFLARE_API_TOKEN=\nCLOUDFLARE_ACCOUNT_ID=\n", encoding="utf-8"
+    )
+    export_dir = tmp_path / "remote-site"
+    cfg = FakeCfg(config_path, env_path, export_dir)
+
+    fake_session = FakeSession({
+        ("GET", "/user/tokens/verify"): FakeResponse(200, {
+            "success": True, "result": {"id": "tok0", "status": "active"},
+        }),
+        ("GET", "/pages/projects/storeb"): FakeResponse(404, {"success": False}),
+        ("POST", "/pages/projects"): FakeResponse(200, {"success": True, "result": {"name": "storeb"}}),
+        ("GET", "/user/tokens"): FakeResponse(200, {"success": True, "result": []}),
+        ("GET", "/user/tokens/permission_groups"): FakeResponse(200, {
+            "success": True, "result": [{"id": "g2", "name": "Cloudflare Pages Write"}],
+        }),
+        ("POST", "/user/tokens"): FakeResponse(200, {
+            "success": True, "result": {"id": "tok_abc", "value": "secretval"},
+        }),
+        ("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {"success": True, "result": []}),
+        ("POST", "/accounts/acct1/access/apps"): FakeResponse(200, {
+            "success": True,
+            "result": {
+                "id": "appX",
+                "self_hosted_domains": ["storeb.pages.dev", "*.storeb.pages.dev"],
+                "destinations": [
+                    {"type": "public", "uri": "storeb.pages.dev"},
+                    {"type": "public", "uri": "*.storeb.pages.dev"},
+                ],
+            },
+        }),
+    })
+    monkeypatch.setattr(provision.requests, "Session", lambda: fake_session)
+    monkeypatch.setattr(provision._remote, "push_remote", lambda fresh_cfg, **kw: True)
+    monkeypatch.setattr(
+        provision, "verify_reachable",
+        lambda url, *, expect_status, **kw: True,
+    )
+
+    def raise_oserror(path, record):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(provision, "write_provision_record", raise_oserror)
+
+    result = provision.provision_store(
+        cfg,
+        powerful_token="powerful123",
+        account_id="acct1",
+        project_slug="storeb",
+        owner_email="owner@example.com",
+    )
+
+    # Must not raise - and must still report the store as provisioned,
+    # since remote.enabled was already flipped True before this failure.
+    assert result.ok is True
+    assert "disk full" in result.message
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "remote:\n  enabled: true" in config_text
 
 
 def test_provision_store_refuses_when_watcher_token_already_exists(tmp_path, monkeypatch):

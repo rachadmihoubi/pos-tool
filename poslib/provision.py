@@ -274,6 +274,24 @@ def access_app_exists(session: requests.Session, account_id: str, domain: str) -
     return _find_access_app(session, account_id, domain) is not None
 
 
+def _covers_wildcard(app: dict, wildcard: str) -> bool:
+    """
+    True only if `wildcard` (e.g. `*.storeb.pages.dev`) appears in BOTH
+    self_hosted_domains AND destinations[] - per
+    docs/superpowers/specs/2026-08-29-store-access-app-shapes.md, Cloudflare
+    treats these as two fields that must be kept in sync together (a PUT
+    updating only one desyncs them - error 12130 - and this is exactly the
+    shape of the confirmed live hub gap: self_hosted_domains alone looking
+    fine while destinations[] silently lacks the wildcard, or vice versa).
+    Checking only one field is not enough to trust an app as correctly
+    scoped.
+    """
+    self_hosted = app.get("self_hosted_domains") or []
+    destinations = app.get("destinations") or []
+    dest_uris = {d.get("uri") for d in destinations if isinstance(d, dict)}
+    return wildcard in self_hosted and wildcard in dest_uris
+
+
 def create_broad_access_app(session: requests.Session, account_id: str, domain: str,
                              owner_email: str) -> str:
     """
@@ -281,19 +299,20 @@ def create_broad_access_app(session: requests.Session, account_id: str, domain: 
     `<project>.pages.dev` domain, including its `*.<project>.pages.dev`
     preview-deployment subdomains. Idempotent: if an app already exists for
     this domain it is reused - UNLESS it exists but is missing the
-    wildcard, in which case this raises rather than silently accepting an
-    under-scoped app (a previous partial run, or a hand-created app, could
-    otherwise leave preview subdomains ungated exactly like the confirmed
-    live hub gap).
+    wildcard in either self_hosted_domains or destinations[], in which case
+    this raises rather than silently accepting an under-scoped app (a
+    previous partial run, or a hand-created app, could otherwise leave
+    preview subdomains ungated exactly like the confirmed live hub gap -
+    which manifested as exactly this kind of two-field desync).
     """
     wildcard = f"*.{domain}"
     existing = _find_access_app(session, account_id, domain)
     if existing is not None:
-        covered = existing.get("self_hosted_domains") or []
-        if wildcard not in covered:
+        if not _covers_wildcard(existing, wildcard):
             raise ProvisionError(
                 f"An Access application for '{domain}' already exists but does "
-                f"not cover '{wildcard}' - it is under-scoped (same class of "
+                f"not cover '{wildcard}' in both self_hosted_domains and "
+                "destinations[] - it is under-scoped (same class of "
                 "gap as the hub's own broad app - see "
                 "docs/superpowers/specs/2026-08-29-store-access-app-shapes.md). "
                 "This needs a human to fix it in the Cloudflare Zero Trust "
@@ -329,10 +348,11 @@ def create_broad_access_app(session: requests.Session, account_id: str, domain: 
             f"{data.get('errors')}"
         )
     result = data["result"]
-    if wildcard not in (result.get("self_hosted_domains") or []):
+    if not _covers_wildcard(result, wildcard):
         raise ProvisionError(
             f"Cloudflare accepted the Access application for '{domain}' but its "
-            f"response does not confirm '{wildcard}' is covered - refusing to "
+            f"response does not confirm '{wildcard}' is covered in both "
+            "self_hosted_domains and destinations[] - refusing to "
             "continue rather than risk shipping an ungated preview-subdomain "
             "gap. Check the app in the Zero Trust dashboard."
         )
@@ -533,12 +553,30 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
         _flip_remote_enabled(cfg.config_path, True)
 
         record_path = cfg.config_path.parent / f"provision-record-{project_slug}.json"
-        write_provision_record(record_path, {
+        record = {
             "project": project_slug,
             "broad_access_app_id": broad_app_id,
             "bypass_access_app_id": bypass_app_id,
             "watcher_token_id": watcher_token_id,
-        })
+        }
+        try:
+            write_provision_record(record_path, record)
+        except OSError as exc:
+            # remote.enabled is already flipped True and the store is
+            # correctly gated at this point - this is a broken local-file
+            # write, not a provisioning failure, so ok stays True. See
+            # this fix round's Finding #2: provision_store must always
+            # return a ProvisionResult, never raise, so callers like
+            # main.py's CLI dispatch can rely on the return value alone.
+            return ProvisionResult(
+                True,
+                f"Provisioned '{project_slug}' successfully, but could not "
+                f"write the local provision record to {record_path}: {exc}. "
+                "The store is live and gated; note the following ids by hand "
+                f"for future reference: broad_access_app_id={broad_app_id}, "
+                f"bypass_access_app_id={bypass_app_id}, "
+                f"watcher_token_id={watcher_token_id}.",
+            )
 
         return ProvisionResult(
             True,
