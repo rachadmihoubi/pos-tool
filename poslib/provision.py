@@ -462,6 +462,29 @@ def write_placeholder_site(export_dir: Path, stock_json_filename: str) -> None:
     (export_dir / stock_json_filename).write_text("[]", encoding="utf-8")
 
 
+def _push_placeholder_with_retry(cfg: Config, project_slug: str, export_dir: Path,
+                                  *, max_attempts: int = 3, delay_seconds: float = 10.0) -> bool:
+    """
+    Retries push_remote a few times before giving up. Real installs hit
+    genuine transient network failures here (a live install on 2026-08-29
+    failed with "Connection aborted... The write operation timed out" -
+    the till PC's own internet connection stalling mid-upload, nothing to
+    do with Cloudflare or this code). A push failure this early is far more
+    disruptive than an ordinary watcher's own next-cycle retry: it fails
+    the whole provisioning run and leaves the just-minted watcher token
+    orphaned (see find_watcher_token's refusal on any retry), forcing a
+    manual dashboard cleanup before trying again. A few automatic retries
+    here removes that friction for exactly the kind of flaky-connection
+    till PC this tool is meant to run on.
+    """
+    for attempt in range(max_attempts):
+        if _remote.push_remote(cfg, project=project_slug, export_dir=export_dir):
+            return True
+        if attempt < max_attempts - 1:
+            time.sleep(delay_seconds)
+    return False
+
+
 def _flip_remote_enabled(config_path: Path, value: bool) -> None:
     """
     Line-based patch of just the `remote:` block's `enabled:` key. Separate
@@ -568,7 +591,7 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
         export_dir = cfg.path("remote.export_dir", "remote-site")
         write_placeholder_site(export_dir, stock_json_filename)
 
-        pushed = _remote.push_remote(fresh_cfg, project=project_slug, export_dir=export_dir)
+        pushed = _push_placeholder_with_retry(fresh_cfg, project_slug, export_dir)
         if not pushed:
             raise ProvisionError(
                 "The first push to Cloudflare Pages failed - check the logs "

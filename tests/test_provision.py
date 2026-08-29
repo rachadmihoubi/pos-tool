@@ -608,6 +608,44 @@ def test_write_placeholder_site_creates_index_and_stock_files(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# _push_placeholder_with_retry - regression coverage for a real live-install
+# failure 2026-08-29: push_remote failed with "Connection aborted... The
+# write operation timed out" (a genuine transient network stall on the till
+# PC), which fails the whole provisioning run and orphans the just-minted
+# watcher token. A few automatic retries removes that friction.
+# ---------------------------------------------------------------------------
+
+def test_push_placeholder_with_retry_succeeds_first_try(monkeypatch):
+    monkeypatch.setattr(provision.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("should not sleep")))
+    calls = []
+    monkeypatch.setattr(provision._remote, "push_remote", lambda cfg, **kw: calls.append(1) or True)
+    ok = provision._push_placeholder_with_retry(object(), "storeb", Path("remote-site"))
+    assert ok is True
+    assert len(calls) == 1
+
+
+def test_push_placeholder_with_retry_retries_then_succeeds(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(provision.time, "sleep", lambda s: sleeps.append(s))
+    results = iter([False, False, True])
+    monkeypatch.setattr(provision._remote, "push_remote", lambda cfg, **kw: next(results))
+    ok = provision._push_placeholder_with_retry(object(), "storeb", Path("remote-site"), delay_seconds=0)
+    assert ok is True
+    assert len(sleeps) == 2
+
+
+def test_push_placeholder_with_retry_gives_up_after_max_attempts(monkeypatch):
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
+    calls = []
+    monkeypatch.setattr(provision._remote, "push_remote", lambda cfg, **kw: calls.append(1) or False)
+    ok = provision._push_placeholder_with_retry(
+        object(), "storeb", Path("remote-site"), max_attempts=3, delay_seconds=0
+    )
+    assert ok is False
+    assert len(calls) == 3
+
+
+# ---------------------------------------------------------------------------
 # Task 4, Step 4 - flips remote.enabled to true, the very last step of a
 # successful provisioning run. Separate from patch_config_remote_section
 # because `enabled` is a bare boolean, not a quoted string.
