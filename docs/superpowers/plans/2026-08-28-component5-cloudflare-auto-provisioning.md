@@ -1,5 +1,26 @@
 # Component 5: installer-driven Cloudflare auto-provisioning — Implementation Plan
 
+> **Verified 2026-08-29** (on store #1's own till PC, resumed here per the
+> branch's own SDD progress notes): Task 7's live end-to-end run, done via
+> the plan's own sanctioned `python -c`-equivalent route (a scripted
+> `provision_store()` call against a disposable throwaway project, isolated
+> from this machine's real config.yaml/.env via `SHOP_ANALYSIS_DATA_DIR`)
+> rather than the built installer. Caught and fixed two real bugs the code
+> review had missed: `get_pages_edit_permission_group_id`'s substring match
+> false-positived on unrelated "Custom Pages" Access permission groups
+> (fixed to an exact-name match), and both Access-app-creation calls were
+> missing the required `"type": "self_hosted"` field, rejected by Cloudflare
+> with a 400 (fixed). After both fixes: a full live run succeeded
+> end-to-end (project created, watcher token minted, both Access apps
+> created with correct wildcard coverage, reachability independently
+> confirmed with a raw `curl`, `remote.enabled` flipped `true`), a same-args
+> re-run correctly refused instead of duplicating anything, and a full
+> account-wide listing after teardown confirmed zero leftover resources.
+> See commit `98e32d7`. **Task 6 Step 4 (the actual Setup.exe/wizard-page/
+> Pascal-Script smoke test) is still open** - this run exercised
+> `provision_store()` directly, not the installer's env-var-passing
+> mechanism.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** When rachad installs Shop Analysis on a brand-new store's PC, the
