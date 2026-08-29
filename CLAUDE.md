@@ -639,10 +639,8 @@ this file:**
   flagged in this file's "Weighted-average cost" section above; not
   touched here since it's unrelated to this fix.
 
-Related commits: (fill in once committed — see this file's own git log for
-the actual hashes; this placeholder exists so the next reader doesn't
-mistake this paragraph for a still-open TODO on the code itself, which is
-already done).
+Related commits: `dd1a462` (timeout tuples, step logging, catch-all
+handler, idempotent token reuse, watchdog — this whole subsection).
 
 ### Cleanup needed before/when resuming
 
