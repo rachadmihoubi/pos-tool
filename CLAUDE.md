@@ -423,6 +423,139 @@ Key decisions worth knowing without re-reading the whole spec:
   owner's own eyes do the matching; a real combined total would need a
   manual product-linking step, not built.
 
+## Store #1 migration to the packaged installer — PAUSED, STUCK, 2026-08-29
+
+**Status: blocked, needs debugging. Do not just retry the installer again
+without reading this whole section first — the same hang has now survived
+three real attempts and one root-cause fix already.**
+
+### What this was
+
+This machine (the real till PC, referred to elsewhere in this file as "the
+dev PC" from a different session's perspective — see the till-PC-identity
+memory note) is store #1, real name **Pro Makeup Boumati** (the owner's 3
+stores are Boumati/this one, Setif, Eulma — "promakeupmihoubipos" was an
+earlier placeholder project name from before the real store names were
+known). Store #1 has run since the original build via a plain `git clone`
++ `install-startup.bat` (tasks "Shop Analysis - Dashboard"/"- Digest"),
+predating the packaged installer entirely. The owner wants all 3 real
+stores standardized on the same installer + Cloudflare auto-provisioning
+flow, so this session attempted migrating store #1 first, as a real
+(non-test) install — not a disposable verification run like the ones in
+the SDD progress section above.
+
+**Decisions already made and acted on:**
+- New, permanent Cloudflare project name: `promakeupboumati` (not reusing
+  `promakeupmihoubipos` — the owner hadn't bookmarked any link yet, so no
+  disruption either way; `promakeupmihoubipos` was kept, unchanged, to
+  become the **kept git-clone dev copy's** own staging/dev target, since
+  its `config.yaml`/`.env` already point there and need no reconfiguring).
+- Owner-only Access email: `rachadm23@gmail.com` for now (can be changed
+  later the same way the hub's own Access app was corrected earlier).
+- **The old git-clone setup's scheduled tasks are currently DISABLED** —
+  the user ran `schtasks /change /tn "Shop Analysis - Dashboard" /disable`
+  and same for `"- Digest"` from an elevated prompt, and the running
+  `watcher.py` process was killed. **The git-clone folder itself is
+  untouched** (kept intentionally for dev work — the user will explicitly
+  prompt for that mode when wanted) but **it is not currently pushing to
+  Cloudflare and nothing is currently keeping this store's remote
+  dashboard fresh.** `promakeupmihoubipos.pages.dev` will keep serving
+  whatever it last had cached until either the old tasks are manually
+  re-enabled or the new install finishes successfully and takes over.
+
+### What's actually broken
+
+Three real installer runs in a row got stuck on the "Setting up Cloudflare
+remote access" step, needing an elevated `taskkill` to recover from each
+(the process runs at the installer's own elevated token, so a non-admin
+session/Task Manager can't end it — confirmed twice):
+
+1. **First stuck run**: ~28+ minutes, zero new log output the whole time.
+   Recovered by killing the process from an elevated prompt.
+2. **Second run** (after deleting the orphaned watcher token from the
+   first): failed *cleanly* this time, in a few minutes, with `Connection
+   aborted... The write operation timed out` during the placeholder push.
+   Fixed with `_push_placeholder_with_retry` (3 attempts, 10s apart) -
+   commit `ff86064`, published as `v1.0.3`.
+3. **Third run** (after deleting that run's token too, *and* the user
+   switched to a different, better internet connection specifically to
+   rule out a one-off connection quality issue): **stuck again**, 11+
+   minutes, zero new log output - the same symptom as run 1, surviving
+   the retry fix and the network change both. Diagnosed as a real,
+   reproducible bug: `nslookup api.cloudflare.com` returns IPv6 (AAAA)
+   addresses before IPv4 on **both** networks tested, and Python's
+   `requests`/urllib3 has no happy-eyeballs fallback - it tries addresses
+   in DNS order, so an IPv6 address that's unroutable but not actively
+   refused (common) silently stalls each connection attempt for the OS's
+   own TCP connect timeout before ever trying IPv4. Across the ~10
+   sequential Cloudflare calls one provisioning run makes, that compounds
+   into a many-minute hang. Fixed by forcing IPv4-only DNS resolution
+   process-wide (`urllib3.util.connection.allowed_gai_family`, patched
+   from `poslib/remote.py` since `poslib/provision.py` already imports
+   it) - commit `2409f85`, published as `v1.0.4`, verified directly with a
+   live request under the patched resolver before shipping.
+4. **Fourth attempt, using `v1.0.4`: still reported stuck.** This is the
+   open, unresolved problem - the IPv4 fix was verified to work in a
+   direct Python check but **has not been confirmed to actually fix a
+   real installer run**. The user asked to stop debugging live and pick
+   this back up from the dev PC instead, before that confirmation
+   happened. **Open questions for whoever resumes this:**
+   - Was the user's 4th attempt actually running the new `v1.0.4` build
+     (freshly downloaded), or could a stale `Setup.exe`/cached download
+     have been reused? Worth confirming explicitly before assuming the
+     IPv4 fix itself is insufficient.
+   - If it really was `v1.0.4` and it still hung: the IPv4 patch forces
+     `urllib3`'s address family, but `poslib/provision.py`'s own
+     `requests.Session()` instances are separate from `remote.py`'s - the
+     patch is process-global (`urllib3.util.connection.allowed_gai_family`
+     is monkeypatched at the module level, which should affect every
+     `requests`/urllib3 call in the process regardless of which module
+     created the session) so this *should* cover `provision.py`'s direct
+     Cloudflare calls too, but this reasoning has not been verified
+     against a real stuck run the way the fix itself was verified against
+     a live *working* one. Re-confirm this assumption first.
+   - Consider adding real, visible progress logging inside
+     `provision_store()` (a `log.info` before/after each major step -
+     `verify_token`, `create_pages_project`, `mint_watcher_token`,
+     `push_remote`, each Access app, each `verify_reachable` call) so a
+     future stuck run's *exact* stall point shows up in
+     `%LOCALAPPDATA%\Shop Analysis\logs\pos-tool.log` immediately, instead
+     of having to infer it indirectly from `config.yaml`/`.env` write
+     timestamps the way this session had to.
+   - Consider a hard, sane upper bound (e.g. a few minutes total) on the
+     *whole* `provision_store()` call, so a still-unknown future hang
+     fails loudly with a clear "took too long, giving up" error instead of
+     silently consuming the installer session for 10-30+ minutes again.
+
+### Cleanup needed before/when resuming
+
+- **Multiple orphaned `pos-tool watcher - promakeupboumati` API tokens**
+  likely exist on the real account by now (one per stuck attempt whose
+  token wasn't deleted before the next retry) - list and clean up
+  `/user/tokens` for anything named that before the next attempt, or
+  `provision_store`'s own refusal-on-duplicate check will block it anyway
+  (which is itself the signal to go clean up).
+- The **`promakeupboumati` Pages project** itself is fine to keep/reuse -
+  every attempt's `create_pages_project` call is idempotent.
+- **No Access applications exist yet** for `promakeupboumati` - every
+  attempt failed before reaching that step, so there is nothing to clean
+  up there.
+- This machine's own install state (`Program Files\Shop Analysis`,
+  `%LOCALAPPDATA%\Shop Analysis`, whether a `ShopAnalysis.exe
+  --provision-cloudflare` process is still running) was **not
+  re-verified** after the user's last "still stuck" report, per their
+  explicit "don't do anything, just commit this" - check it fresh before
+  touching anything.
+- **The old git-clone setup's scheduled tasks are still disabled** (see
+  above) - re-enabling them (`schtasks /change /tn "..." /enable`, both
+  task names) restores store #1's remote sync via the *old* mechanism if
+  a quick stopgap is wanted while this installer issue gets sorted out,
+  independent of finishing the migration.
+
+Related commits this session: `98e32d7`, `2ba2acb`, `f840460` (earlier,
+unrelated Component 5 fixes, all already verified working), then
+`ff86064` (push retry), `2409f85` (IPv4 fix) for this specific incident.
+
 ## Hub search shows cost, not price (2026-08-27/28) — and why it's an unguessable filename, not a real login
 
 The owner asked for two changes to the hub's cross-store search after his
