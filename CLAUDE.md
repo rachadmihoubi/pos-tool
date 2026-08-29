@@ -384,12 +384,27 @@ worked exactly as intended:
   second one. Commit `f840460`. Not scoped to Component 5, but caught live
   during this session's testing and worth fixing rather than leaving a
   known crash in place.
-- **Task 1's still-open, out-of-plan-scope gap remains open**: the hub's
-  own live Access app (id `a972fabb-67e2-4217-ab16-29c885892857`) is still
-  missing the wildcard scoping found during Task 1's audit — not fixed by
-  this plan (it only affects the hub's own preview-subdomain gating, not
-  the per-store provisioning this plan built), tracked here as a known
-  follow-up.
+- **Task 1's out-of-plan-scope gap — FIXED separately the same day,
+  2026-08-29**: the hub's own live Access app (id
+  `a972fabb-67e2-4217-ab16-29c885892857`) was missing the wildcard scoping
+  found during Task 1's audit (every `<hash>.promakeupmihoubi-hub.pages.dev`
+  preview deployment was reachable without logging in). Fixed with a `PUT`
+  mirroring store #1's already-correct shape: `self_hosted_domains` and
+  `destinations[]` both gained the `*.promakeupmihoubi-hub.pages.dev`
+  wildcard entry, the existing owner-only policy sent back unchanged
+  (same email, same `reusable: false`) so nothing else about the app's
+  behavior changed. The `aud` tag (what ties an existing login session to
+  this app) stayed identical across the `PUT`, confirmed in the response,
+  so the owner's existing session was not invalidated. Verified live
+  immediately after (no propagation delay needed this time): a bare,
+  cookie-less `curl -sI` against the bare hub URL and both
+  previously-ungated preview hashes from Task 1's own findings
+  (`5dc8a56e...`, `e786f12d...`) all returned `302` (gated) - the exact
+  same two URLs that returned `200` (ungated) before the fix. This was a
+  live edit to the real, in-use hub's own Access config (not a disposable
+  test resource), done with a narrowly-scoped disposable token
+  (`Access: Apps and Policies:Edit` only, no `Pages`/`User API Tokens`
+  needed since nothing else was created), revoked immediately after.
 - **Task 8 (docs)**: this CLAUDE.md update plus the `.env.example` note
   below.
 
@@ -1020,17 +1035,6 @@ built — see "Weighted-average cost (AVCO) + last purchase cost" below.
   `poslib/metrics.py`, new diagnostic rules in `poslib/diagnostics.py`, new
   owner-entered data in `poslib/ownerdata.py` (never in a file `etl.py`
   rebuilds) — see the architecture rules at the bottom of `README.md`.
-- **The hub's own live Access app is missing wildcard preview-subdomain
-  coverage** (id `a972fabb-67e2-4217-ab16-29c885892857`, found during
-  Component 5's Task 1 audit, 2026-08-29) — every per-deployment preview
-  subdomain of `promakeupmihoubi-hub.pages.dev` is currently reachable
-  without logging in, the same class of gap `create_broad_access_app` now
-  prevents for every newly *provisioned* store. Fixing the hub's own
-  pre-existing app needs a `PUT` adding the wildcard to both
-  `self_hosted_domains` and `destinations[]` together (see
-  `docs/superpowers/specs/2026-08-29-store-access-app-shapes.md`) — not
-  done as part of Component 5, since that plan only covered newly
-  provisioned stores, not fixing the hub's own already-live app.
 - **Work tree cleaned 2026-08-26**: removed `build/`, `dist/`,
   `dist-installer/` (regenerable PyInstaller/Inno Setup output),
   `.wrangler/` (stale, wrangler no longer used), `__pycache__`/

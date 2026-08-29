@@ -80,15 +80,19 @@ CLAUDE.md's own history:
 | `https://e786f12d.promakeupmihoubi-hub.pages.dev/` | `200 OK` — **ungated** |
 | `https://promakeupmihoubi-hub.pages.dev/` (bare, sanity check) | `302 Found` — gated, as expected |
 
-This reproduces exactly the bypass CLAUDE.md documents being used
-deliberately in the past. **This is a live gap on the hub's own Access app
-today**, separate from and not fixed by this plan (this plan only touches
-per-store provisioning, not the hub). Recommended follow-up, not blocking:
-a `PUT` to app id `a972fabb-67e2-4217-ab16-29c885892857` adding
-`*.promakeupmihoubi-hub.pages.dev` to both `self_hosted_domains` and
-`destinations[]`, mirroring store #1's already-correct shape above. Left
-for the user to decide on and execute separately (needs write scope this
-task's token did not have, and is outside this plan's scope).
+This reproduced exactly the bypass CLAUDE.md documents being used
+deliberately in the past. This was a live gap on the hub's own Access app,
+separate from and not fixed by this plan (this plan only touches per-store
+provisioning, not the hub).
+
+**FIXED 2026-08-29, same day, separately from this plan** (needed write
+scope this task's own token deliberately didn't have): a `PUT` to app id
+`a972fabb-67e2-4217-ab16-29c885892857` added `*.promakeupmihoubi-hub.pages.dev`
+to both `self_hosted_domains` and `destinations[]`, mirroring store #1's
+already-correct shape above exactly, with the existing owner-only policy
+sent back unchanged. Verified immediately after with a bare `curl -sI`:
+both preview URLs in the table above now return `302` instead of `200`.
+See `CLAUDE.md`'s Component 5 SDD progress section for the full record.
 
 ### 3. Store #1 narrow stock.json bypass app — id `c5d4cdc6-afc4-43bd-984b-fd86454df55d`
 
