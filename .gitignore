@@ -31,6 +31,7 @@ Desktop.ini
 cache.db
 cache.db-journal
 cache.building
+cache.lock
 
 # The POS database itself and any working copy of it. Never commit business data.
 *.dblx
