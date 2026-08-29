@@ -25,14 +25,39 @@ import base64
 import json
 import logging
 import mimetypes
+import socket
 from pathlib import Path
 
 import requests
+import urllib3.util.connection as _urllib3_connection
 from blake3 import blake3
 
 from .config import Config
 
 log = logging.getLogger(__name__)
+
+# Force IPv4-only DNS resolution for every requests call in this process.
+# Reproduced live 2026-08-29 on two separate real networks (a home router
+# and, after switching networks to rule out a one-off ISP issue, a mobile
+# connection too): api.cloudflare.com's DNS answer lists IPv6 (AAAA)
+# addresses before the IPv4 ones, and Python's connection logic tries them
+# in that order - urllib3/socket has no "happy eyeballs" fallback, so if
+# IPv6 is unroutable but not actively refused (the common case: assigned
+# an address, no real upstream route), each attempt silently stalls for
+# the OS's own TCP connect timeout before falling back to IPv4. Across the
+# ~10 sequential Cloudflare API calls a single provisioning run makes,
+# that compounds into many minutes of apparent hang - exactly what two
+# real installs hit before this fix (see poslib/provision.py's git
+# history). Cloudflare's API is fully IPv4-reachable, so there is no
+# reason to ever risk the IPv6 path here. This patches urllib3's address-
+# family selection process-wide, not just for this module's own session -
+# poslib/provision.py imports this module specifically so its own direct
+# Cloudflare calls get the same protection from one place.
+def _force_ipv4_only() -> None:
+    _urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
+
+
+_force_ipv4_only()
 
 _API_BASE = "https://api.cloudflare.com/client/v4"
 _REQUEST_TIMEOUT_SECONDS = 30

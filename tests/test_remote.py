@@ -14,11 +14,24 @@ alone.
 from __future__ import annotations
 
 import base64
+import socket
 
 import pytest
 import requests
+import urllib3.util.connection as urllib3_connection
 
 from poslib import remote
+
+
+def test_importing_remote_forces_ipv4_only_dns_resolution():
+    """
+    Regression test for a real, twice-reproduced live hang (2026-08-29, two
+    separate networks): DNS for api.cloudflare.com lists IPv6 before IPv4,
+    and urllib3 has no happy-eyeballs fallback - an unroutable-but-not-
+    refused IPv6 address stalls each connection attempt. Importing
+    poslib.remote must force IPv4-only resolution process-wide.
+    """
+    assert urllib3_connection.allowed_gai_family() == socket.AF_INET
 
 
 class FakeConfig:
