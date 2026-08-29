@@ -1151,6 +1151,21 @@ built — see "Weighted-average cost (AVCO) + last purchase cost" below.
 
 ## What's left (optional, not blocking)
 
+- **Adding a newly provisioned store to the cross-store hub is still a
+  manual step** (`INSTALL_GUIDE.md`'s Step 6: edit `hub-site/stores.json`,
+  run `tools/deploy_hub.py`, commit) - real friction surfaced 2026-08-29
+  when the owner pointed out he won't have this repo/Cloudflare
+  credentials set up on whatever machine he's using at a *different*
+  store's PC, with no Claude Code session to lean on either. The owner's
+  own call: worth automating eventually (folding this into
+  `poslib/provision.py`'s own flow, or having the installer write the new
+  store's name/URL somewhere obviously easy to find/paste from later), but
+  explicitly **not now** - deferred, not started. Today's actual guidance
+  for this gap: the hub-update step never has to happen on-site at the new
+  store at all - it's fully decoupled from the install itself (the store
+  works completely on its own the moment `Setup.exe` finishes), so it can
+  wait until whoever's doing it is next at a machine that already has this
+  repo + working Cloudflare credentials (or a Claude Code session).
 - **`.env` is empty on every machine** (gitignored, by design). Email and
   Telegram digest channels are wired up but need real credentials. WhatsApp
   additionally needs Meta template approval — see
