@@ -33,10 +33,18 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 
 import app
 import watcher
-from poslib.provision import provision_store
+from poslib.provision import ProvisionResult, provision_store
+
+# 40 minutes: well above the ~31-minute worst case for every network call
+# in provision_store timing out on its own (6 verify_reachable attempts x2
+# + 5 post_access_app attempts x2 + 3 push retries, each a handful of
+# poslib/remote.py's (10, 30)-bounded calls) - see
+# _run_provisioning_with_watchdog's docstring.
+_PROVISIONING_TIMEOUT_SECONDS = 40 * 60
 
 
 def _apply_update(argv: list[str]) -> int:
@@ -71,6 +79,63 @@ def _apply_update(argv: list[str]) -> int:
     setup_logging(cfg)
     check_and_apply_update(cfg)
     return 0
+
+
+def _run_provisioning_with_watchdog(
+    cfg, *, token: str, account_id: str, project_slug: str, owner_email: str,
+    timeout_seconds: float = _PROVISIONING_TIMEOUT_SECONDS,
+):
+    """
+    Runs provision_store on a daemon thread and waits up to timeout_seconds.
+    Returns the ProvisionResult on completion, or None if the timeout
+    elapsed first - the caller must treat None as a hard failure and exit
+    the process (see _provision_cloudflare), since a thread this stuck
+    cannot be cancelled and the process would otherwise hang forever
+    waiting on it at interpreter shutdown.
+
+    provision_store's individual Cloudflare API calls are all bounded by
+    poslib/remote.py's (10, 30) connect/read timeout tuple - but the DNS
+    resolution behind each connection attempt (socket.getaddrinfo, called
+    once per address inside urllib3) is NOT covered by that timeout and can
+    still hang indefinitely on a broken resolver. This is the hard backstop
+    for that remaining case - see CLAUDE.md's "Store #1 migration ...
+    PAUSED, STUCK" section for the incident this is fixing. Only safe to
+    have added once a killed run became safe to retry - see
+    poslib/provision.py's try_reuse_existing_watcher_token and
+    _atomic_write_text, both added in the same fix round.
+
+    Split out from _provision_cloudflare so the timeout path itself is
+    testable without actually calling os._exit.
+    """
+    result_holder: list = []
+
+    def _run() -> None:
+        try:
+            result_holder.append(provision_store(
+                cfg, powerful_token=token, account_id=account_id,
+                project_slug=project_slug, owner_email=owner_email,
+            ))
+        except BaseException as exc:
+            # provision_store's own catch-all only covers Exception - a
+            # log.exception() call inside it can itself raise (this
+            # project has a documented, recurring log-rotation
+            # PermissionError when the watcher holds the log file open,
+            # see CLAUDE.md's deploy_hub.py note) and BaseException
+            # subclasses (SystemExit, KeyboardInterrupt) escape it
+            # entirely. Without this, the thread dies having appended
+            # nothing, and the read below (result_holder[0]) raises
+            # IndexError instead of the real cause - in a console=False
+            # build that traceback goes nowhere, so this is the only way
+            # the actual failure reaches the log/caller at all.
+            result_holder.append(ProvisionResult(False, f"Provisioning crashed: {exc!r}"))
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+
+    if thread.is_alive():
+        return None
+    return result_holder[0]
 
 
 def _provision_cloudflare(argv: list[str]) -> int:
@@ -110,10 +175,27 @@ def _provision_cloudflare(argv: list[str]) -> int:
 
     setup_logging(cfg)
 
-    result = provision_store(
-        cfg, powerful_token=token, account_id=args.account_id,
+    result = _run_provisioning_with_watchdog(
+        cfg, token=token, account_id=args.account_id,
         project_slug=args.project_slug, owner_email=args.owner_email,
     )
+
+    if result is None:
+        print(
+            "\nProvisioning is taking far longer than expected (40+ minutes) "
+            "and may be stuck - stopping here. Check the log file for the "
+            "last step reached, then try again; earlier steps are safe to "
+            "retry (provision.py's own steps check-before-create, and the "
+            "watcher token is now reused rather than refused if a previous "
+            "run got this far before being interrupted).\n"
+        )
+        # Not logging.shutdown(): it acquires every handler's lock, and if
+        # the still-alive stuck thread is itself blocked inside a log
+        # emit(), this would hang on the one line whose entire job is to
+        # not hang. FileHandler.emit() already flushes on every record, so
+        # nothing is lost by skipping it.
+        os._exit(1)
+
     print(result.message)
     return 0 if result.ok else 1
 

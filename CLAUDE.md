@@ -423,11 +423,14 @@ Key decisions worth knowing without re-reading the whole spec:
   owner's own eyes do the matching; a real combined total would need a
   manual product-linking step, not built.
 
-## Store #1 migration to the packaged installer — PAUSED, STUCK, 2026-08-29
+## Store #1 migration to the packaged installer — PAUSED, STUCK, 2026-08-29 (dev-PC fixes applied same day, live re-verification still outstanding)
 
-**Status: blocked, needs debugging. Do not just retry the installer again
-without reading this whole section first — the same hang has now survived
-three real attempts and one root-cause fix already.**
+**Status: a full round of fixes for this incident is written, tested, and
+committed on the dev PC — but per this file's own repeated "don't call it
+fixed until it's confirmed on the real thing" rule (see the `_redirects`
+section further down, which says "don't repeat that a third time"), this
+is NOT yet confirmed to fix the actual hang. Read the "Dev-PC fix round"
+subsection below before attempting another real install.**
 
 ### What this was
 
@@ -526,6 +529,120 @@ session/Task Manager can't end it — confirmed twice):
      *whole* `provision_store()` call, so a still-unknown future hang
      fails loudly with a clear "took too long, giving up" error instead of
      silently consuming the installer session for 10-30+ minutes again.
+
+### Dev-PC fix round (2026-08-29) — implemented and tested, NOT live-verified
+
+An opus-reviewer subagent (per the global CLAUDE.md's mandatory
+installer/elevation gate) reviewed a fix plan against this section's own
+"Open questions" list above before any code was written, and gave this
+priority order: (1) split the request timeout into a `(connect, read)`
+tuple, since a single float is re-armed per DNS-resolved address and an
+unroutable IPv6 address can cost the full timeout before urllib3 falls
+back to IPv4 — this compounds with the IPv4-forcing monkeypatch already
+shipped as `2409f85`, it doesn't replace it; (2) add per-attempt/per-step
+elapsed-time logging in the actual silent windows; (3) a catch-all
+exception handler so `provision_store` can never raise past its own
+boundary; (4) only last, and only once a killed run is safe to retry, a
+watchdog thread with a hard timeout. All four are now implemented in
+`poslib/provision.py`, `poslib/remote.py`, and `main.py`, with new tests
+in `tests/test_provision.py`/`tests/test_main.py` (54 and 14 tests
+respectively) and the full suite green (381 passed, `test_export_static.py`
+deselected per its own documented ~3.9-min real-database cost).
+
+**What's confirmed** (dev-PC test coverage, not a real installer run):
+- Every Cloudflare call in `provision.py`/`remote.py` now carries the
+  bounded `(10, 30)` connect/read timeout tuple (`_REQUEST_TIMEOUT_SECONDS`
+  in both files).
+- Per-step (`provision_store`'s own major steps) and per-attempt
+  (`verify_reachable`, `_post_access_app`, `_push_placeholder_with_retry`,
+  `push_remote`) elapsed times are now logged to
+  `%LOCALAPPDATA%\Shop Analysis\logs\pos-tool.log` — directly answering
+  this section's own "consider adding real, visible progress logging"
+  open question, so a future stuck run's exact stall point shows up in
+  the log immediately instead of having to be inferred from file-write
+  timestamps the way this incident's first three attempts had to be.
+- A preflight log line at the very top of `provision_store` records the
+  build's `current_version()`, whether `urllib3`'s `allowed_gai_family()`
+  is actually forced to IPv4 in this process (confirms the `2409f85`
+  monkeypatch really took effect — the exact thing attempt 4's "open
+  questions" couldn't confirm), and a live DNS resolution of
+  `api.cloudflare.com` showing every address the resolver actually
+  returned.
+- `provision_store` now has a final `except Exception` catch-all
+  (`log.exception` + a `ProvisionResult(False, ...)` return) so it can
+  never raise past its own boundary — before this fix, an unexpected
+  `OSError`/`ValueError`/`ConfigError` could have escaped unhandled into
+  the installer's windowed dialog.
+- **A killed run is now safe to retry** — the load-bearing precondition
+  for the watchdog below. `try_reuse_existing_watcher_token` verifies
+  (live against Cloudflare) whether the token id `.env` already has
+  matches the token Cloudflare says exists under this store's name, and
+  reuses it instead of refusing outright; `patch_env_secrets` is now
+  called immediately after minting/reusing the watcher token — before
+  anything else that could fail or be killed — so that value is never
+  the reason a retry gets refused; `_atomic_write_text` (temp file +
+  `os.replace`) means a process killed mid-write can never leave
+  `config.yaml`/`.env` truncated.
+- `main.py` now runs `provision_store` on a daemon thread with a 40-minute
+  join timeout (`_run_provisioning_with_watchdog`), and on timeout prints
+  a message and calls `os._exit(1)` rather than hanging the installer
+  session forever. The thread's own target function wraps the call in
+  `try/except BaseException` so even a crash *inside* the catch-all above
+  (this project has a documented, recurring log-rotation `PermissionError`
+  when the watcher process holds `logs/pos-tool.log` open — see the
+  `deploy_hub.py` note further down this file) still produces a
+  `ProvisionResult` rather than leaving nothing for the watchdog to read.
+
+**What's reasoning, not measurement**: that unbounded `socket.getaddrinfo()`
+(called once per connection attempt inside urllib3, before `requests`'
+timeout tuple even applies) is a plausible remaining cause of a hang that
+survives the IPv4 fix is a correct general fact about Python's stdlib, but
+that it actually caused *this* incident's attempts 1 and 3 is unproven —
+the new DNS preflight log line is what will actually settle that on the
+next real run, not this write-up. The 40-minute watchdog timeout is
+arithmetic (~31-minute worst case across every retry/backoff constant in
+`verify_reachable`/`_post_access_app`/`_push_placeholder_with_retry`,
+doubled for the two Access-app verification calls), not a measurement of a
+healthy run's real cost — **note this bound would not have fired on any
+of the four recorded attempts above (11–28 minutes each)**; it's a
+backstop against a still-longer future hang, not a fix for the specific
+hangs already seen. The new per-step timing logs will show what a healthy
+run actually costs on the next real attempt, and that measurement — not
+this arithmetic — is the better basis for tightening the bound later if
+wanted.
+
+**What's still unverified — needs the real till PC and the owner's
+go-ahead for live Cloudflare use, same as the standing rule elsewhere in
+this file:**
+- Whether any of this actually fixes the hang. Nothing here has been run
+  against a real stuck installer.
+- Whether the DNS preflight log line, on the next real attempt, actually
+  shows an unroutable IPv6 address (confirming the working theory) or
+  shows something else entirely (meaning the real cause is still
+  undiagnosed).
+- **Checked directly this session (2026-08-29), not assumed**: both old
+  git-clone scheduled tasks ("Shop Analysis - Dashboard", "Shop Analysis
+  - Digest") are now `Scheduled Task State: Enabled` with a `Last Run
+  Time` of today and `Last Result: 0` — someone re-enabled them since the
+  "PAUSED, STUCK" section above was written (that section had them
+  disabled). So **store #1's remote dashboard is currently being kept
+  fresh by the old mechanism**, not left stale. This fix round did not
+  touch that state either way — re-check it's still true before assuming
+  it going forward. Also checked: no `ShopAnalysis.exe` process is
+  currently running and `C:\Program Files\Shop Analysis` does not exist
+  (no stuck provisioning process, no lingering packaged install), but
+  `%LOCALAPPDATA%\Shop Analysis` still exists — leftover data dir from a
+  prior attempt, harmless but worth knowing it's there. Separately (and
+  not part of this incident): this machine has four stray `pythonw.exe`
+  processes running (two from `.venv\Scripts`, two from the global
+  `Python312` install) — the same duplicate-watcher pattern already
+  flagged in this file's "Weighted-average cost" section above; not
+  touched here since it's unrelated to this fix.
+
+Related commits: (fill in once committed — see this file's own git log for
+the actual hashes; this placeholder exists so the next reader doesn't
+mistake this paragraph for a still-open TODO on the code itself, which is
+already done).
 
 ### Cleanup needed before/when resuming
 

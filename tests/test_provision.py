@@ -113,6 +113,51 @@ def test_find_watcher_token_returns_none_if_absent():
     assert provision.find_watcher_token(session, "pos-tool watcher - storeb") is None
 
 
+def test_try_reuse_existing_watcher_token_returns_value_when_env_matches(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("CLOUDFLARE_API_TOKEN=savedvalue123\n", encoding="utf-8")
+    fake_session = FakeSession({("GET", "/user/tokens/verify"): FakeResponse(200, {
+        "success": True, "result": {"id": "tok1", "status": "active"},
+    })})
+    monkeypatch.setattr(provision.requests, "Session", lambda: fake_session)
+    result = provision.try_reuse_existing_watcher_token(env_path, "tok1")
+    assert result == "savedvalue123"
+
+
+def test_try_reuse_existing_watcher_token_returns_none_when_id_mismatches(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("CLOUDFLARE_API_TOKEN=savedvalue123\n", encoding="utf-8")
+    fake_session = FakeSession({("GET", "/user/tokens/verify"): FakeResponse(200, {
+        "success": True, "result": {"id": "some-other-token", "status": "active"},
+    })})
+    monkeypatch.setattr(provision.requests, "Session", lambda: fake_session)
+    assert provision.try_reuse_existing_watcher_token(env_path, "tok1") is None
+
+
+def test_try_reuse_existing_watcher_token_returns_none_when_env_blank(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("CLOUDFLARE_API_TOKEN=\n", encoding="utf-8")
+    assert provision.try_reuse_existing_watcher_token(env_path, "tok1") is None
+
+
+def test_try_reuse_existing_watcher_token_returns_none_when_verify_fails(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("CLOUDFLARE_API_TOKEN=savedvalue123\n", encoding="utf-8")
+    fake_session = FakeSession({("GET", "/user/tokens/verify"): FakeResponse(200, {
+        "success": False, "errors": ["Invalid token"],
+    })})
+    monkeypatch.setattr(provision.requests, "Session", lambda: fake_session)
+    assert provision.try_reuse_existing_watcher_token(env_path, "tok1") is None
+
+
+def test_atomic_write_text_replaces_file_and_leaves_no_tmp_behind(tmp_path):
+    target = tmp_path / "config.yaml"
+    target.write_text("old content", encoding="utf-8")
+    provision._atomic_write_text(target, "new content")
+    assert target.read_text(encoding="utf-8") == "new content"
+    assert not (tmp_path / "config.yaml.tmp").exists()
+
+
 def test_get_pages_edit_permission_group_id_matches_exact_name_only():
     """
     Regression test for a real bug found live 2026-08-29: a substring match
@@ -228,6 +273,21 @@ def test_verify_token_raises_when_success_false():
     })})
     with pytest.raises(provision.ProvisionError, match="not valid or not active"):
         provision.verify_token(session)
+
+
+def test_verify_token_raises_clear_error_on_non_json_response():
+    class _HtmlResponse:
+        status_code = 502
+
+        def json(self):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    class _HtmlSession:
+        def get(self, url, **kw):
+            return _HtmlResponse()
+
+    with pytest.raises(provision.ProvisionError, match="wasn't valid JSON"):
+        provision.verify_token(_HtmlSession())
 
 
 def test_create_pages_project_raises_on_api_error():
@@ -971,6 +1031,67 @@ def test_provision_store_refuses_when_watcher_token_already_exists(tmp_path, mon
 
     assert result.ok is False
     assert "already exists" in result.message
+
+
+def test_provision_store_reuses_watcher_token_when_env_already_has_it(tmp_path, monkeypatch):
+    # Simulates a previous run that minted the watcher token, wrote it to
+    # .env, then got killed before finishing (a crash, an elevated
+    # taskkill, the future watchdog) - re-running must not refuse just
+    # because find_watcher_token sees the token already exists; it must
+    # notice the value in .env is that same token and continue.
+    config_path = tmp_path / "config.yaml"
+    _write_minimal_config(config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "SMTP_PASSWORD=\nCLOUDFLARE_API_TOKEN=alreadyminted\nCLOUDFLARE_ACCOUNT_ID=\n",
+        encoding="utf-8",
+    )
+    export_dir = tmp_path / "remote-site"
+    cfg = FakeCfg(config_path, env_path, export_dir)
+
+    fake_session = FakeSession({
+        ("GET", "/user/tokens/verify"): FakeResponse(200, {
+            "success": True, "result": {"id": "tok1", "status": "active"},
+        }),
+        ("GET", "/pages/projects/storeb"): FakeResponse(200, {"success": True}),
+        ("GET", "/user/tokens"): FakeResponse(200, {
+            "success": True,
+            "result": [{"id": "tok1", "name": "pos-tool watcher - storeb"}],
+        }),
+        ("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {"success": True, "result": []}),
+        ("POST", "/accounts/acct1/access/apps"): FakeResponse(200, {
+            "success": True,
+            "result": {
+                "id": "appX",
+                "self_hosted_domains": ["storeb.pages.dev", "*.storeb.pages.dev"],
+                "destinations": [
+                    {"type": "public", "uri": "storeb.pages.dev"},
+                    {"type": "public", "uri": "*.storeb.pages.dev"},
+                ],
+            },
+        }),
+    })
+    monkeypatch.setattr(provision.requests, "Session", lambda: fake_session)
+    monkeypatch.setattr(provision._remote, "push_remote", lambda fresh_cfg, **kw: True)
+    monkeypatch.setattr(
+        provision, "verify_reachable",
+        lambda url, *, expect_status, **kw: True,
+    )
+
+    result = provision.provision_store(
+        cfg,
+        powerful_token="powerful123",
+        account_id="acct1",
+        project_slug="storeb",
+        owner_email="owner@example.com",
+    )
+
+    assert result.ok is True
+    # No POST /user/tokens call - a second token must never be minted.
+    mint_calls = [c for c in fake_session.calls if c[0] == "POST" and c[1].endswith("/user/tokens")]
+    assert mint_calls == []
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "CLOUDFLARE_API_TOKEN=alreadyminted" in env_text
 
 
 def test_provision_store_rejects_invalid_slug(tmp_path):

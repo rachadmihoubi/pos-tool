@@ -26,6 +26,7 @@ import json
 import logging
 import mimetypes
 import socket
+import time
 from pathlib import Path
 
 import requests
@@ -60,8 +61,16 @@ def _force_ipv4_only() -> None:
 _force_ipv4_only()
 
 _API_BASE = "https://api.cloudflare.com/client/v4"
-_REQUEST_TIMEOUT_SECONDS = 30
-_UPLOAD_TIMEOUT_SECONDS = 120
+# (connect, read) tuples, not a single float - a single timeout is re-armed
+# per resolved address by urllib3's connect loop (util/connection.py), so on
+# a network where IPv6 addresses are unroutable but not actively refused, a
+# 30s single timeout can cost 30s per address tried before falling back to
+# IPv4, not 30s total. A short connect timeout bounds that per-address cost
+# without shortening how long a slow-but-working transfer is allowed to run.
+# See CLAUDE.md's "Store #1 migration ... PAUSED, STUCK" section - this is
+# the mechanism behind the 11-28 minute installer hangs recorded there.
+_REQUEST_TIMEOUT_SECONDS = (10, 30)
+_UPLOAD_TIMEOUT_SECONDS = (10, 120)
 # Cloudflare's own limits (wrangler's ceiling is 1000/bucket; batching
 # tighter than that leaves headroom without needing to tune it further).
 _MAX_FILES_PER_UPLOAD_BATCH = 500
@@ -279,17 +288,32 @@ def push_remote(cfg: Config, *, project: str | None = None,
         session = requests.Session()
         session.headers["Authorization"] = f"Bearer {api_token}"
 
+        # Per-step timing, not just a final success/failure line - this is
+        # the one place a stuck installer provisioning run (which retries
+        # this whole function up to 3x) was silent for the longest, see the
+        # comment on _REQUEST_TIMEOUT_SECONDS above.
+        step_start = time.monotonic()
         jwt = _get_upload_token(session, account_id, project)
+        log.info("push_remote(%s): got upload token in %.1fs", project, time.monotonic() - step_start)
         if not jwt:
             return False
 
-        if not _upload_assets(session, jwt, files):
+        step_start = time.monotonic()
+        uploaded = _upload_assets(session, jwt, files)
+        log.info("push_remote(%s): uploaded %d asset(s) in %.1fs",
+                  project, len(files), time.monotonic() - step_start)
+        if not uploaded:
             return False
 
-        if not _upsert_hashes(session, jwt, [key for key, _data, _ctype in files]):
+        step_start = time.monotonic()
+        upserted = _upsert_hashes(session, jwt, [key for key, _data, _ctype in files])
+        log.info("push_remote(%s): upserted hashes in %.1fs", project, time.monotonic() - step_start)
+        if not upserted:
             return False
 
+        step_start = time.monotonic()
         url = _create_deployment(session, account_id, project, manifest, redirects_content)
+        log.info("push_remote(%s): created deployment in %.1fs", project, time.monotonic() - step_start)
         if url is None:
             return False
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 import main as main_module
 
 
@@ -204,3 +206,112 @@ def test_provision_cloudflare_fails_cleanly_with_no_token_set(monkeypatch, capsy
 
     assert rc == 1
     assert "POS_TOOL_PROVISION_TOKEN" in capsys.readouterr().out
+
+
+class TestRunProvisioningWithWatchdog:
+    """
+    _run_provisioning_with_watchdog is split out from _provision_cloudflare
+    specifically so this timeout path can be tested without actually
+    calling os._exit (which would kill the pytest process itself) - see its
+    docstring in main.py.
+    """
+
+    def test_returns_result_when_provision_store_finishes_in_time(self, monkeypatch):
+        import poslib.provision as provision_module
+
+        def fake_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email):
+            return provision_module.ProvisionResult(True, "done")
+
+        monkeypatch.setattr(main_module, "provision_store", fake_provision_store)
+
+        result = main_module._run_provisioning_with_watchdog(
+            object(), token="tok", account_id="acct1",
+            project_slug="storeb", owner_email="owner@x.com",
+            timeout_seconds=5,
+        )
+
+        assert result is not None
+        assert result.ok is True
+        assert result.message == "done"
+
+    def test_returns_none_when_provision_store_exceeds_timeout(self, monkeypatch):
+        import threading
+
+        def hanging_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email):
+            # Blocks well past the short timeout below, standing in for a
+            # genuinely stuck DNS resolution or network call - a real
+            # provision_store never actually needs killing at the OS level
+            # here because it's a daemon thread; the test process just
+            # stops waiting on it and exits normally.
+            threading.Event().wait(30)
+
+        monkeypatch.setattr(main_module, "provision_store", hanging_provision_store)
+
+        result = main_module._run_provisioning_with_watchdog(
+            object(), token="tok", account_id="acct1",
+            project_slug="storeb", owner_email="owner@x.com",
+            timeout_seconds=0.2,
+        )
+
+        assert result is None
+
+    def test_returns_a_failure_result_when_provision_store_raises(self, monkeypatch):
+        # provision_store's own catch-all only covers Exception - a
+        # log.exception() call inside it can itself raise (this project has
+        # a documented, recurring log-rotation PermissionError when the
+        # watcher holds the log file open) and BaseException subclasses
+        # escape it entirely. Without _run's own try/except, the thread
+        # would die having appended nothing to result_holder, and the read
+        # in _run_provisioning_with_watchdog (result_holder[0]) would raise
+        # IndexError instead of surfacing the real cause.
+        def exploding_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email):
+            raise RuntimeError("log rotation permission error")
+
+        monkeypatch.setattr(main_module, "provision_store", exploding_provision_store)
+
+        result = main_module._run_provisioning_with_watchdog(
+            object(), token="tok", account_id="acct1",
+            project_slug="storeb", owner_email="owner@x.com",
+            timeout_seconds=5,
+        )
+
+        assert result is not None
+        assert result.ok is False
+        assert "log rotation permission error" in result.message
+
+    def test_provision_cloudflare_exits_process_on_timeout(self, monkeypatch, capsys):
+        calls = _patch_provision_cloudflare_deps(monkeypatch)
+
+        monkeypatch.setattr(
+            main_module, "_run_provisioning_with_watchdog",
+            lambda cfg, **kw: None,
+        )
+        exit_calls = []
+
+        class _FakeExit(BaseException):
+            pass
+
+        def fake_exit(code):
+            # The real os._exit() never returns - it terminates the process
+            # immediately. A plain no-op mock would let control fall through
+            # into `result.message` with result still None and crash with
+            # an unrelated AttributeError, so this raises to mimic that
+            # "never returns" contract instead.
+            exit_calls.append(code)
+            raise _FakeExit(code)
+
+        monkeypatch.setattr(main_module.os, "_exit", fake_exit)
+
+        os.environ["POS_TOOL_PROVISION_TOKEN"] = "tok"
+        try:
+            with pytest.raises(_FakeExit):
+                main_module._provision_cloudflare([
+                    "--account-id", "acct1", "--project-slug", "storeb",
+                    "--owner-email", "owner@x.com",
+                ])
+        finally:
+            os.environ.pop("POS_TOOL_PROVISION_TOKEN", None)
+
+        assert exit_calls == [1]
+        assert "taking far longer than expected" in capsys.readouterr().out
+        assert calls["provision_store"] == []  # never actually invoked directly

@@ -25,8 +25,11 @@ real, if narrow, security liability.
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 import secrets as _secrets
+import socket
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,13 +40,68 @@ import requests
 from . import remote as _remote
 from .config import Config
 
+log = logging.getLogger(__name__)
+
 _API_BASE = "https://api.cloudflare.com/client/v4"
-_REQUEST_TIMEOUT_SECONDS = 30
+# (connect, read), not a single float - see the matching comment on
+# poslib/remote.py's own _REQUEST_TIMEOUT_SECONDS for why: a single timeout
+# is re-armed per resolved address, so an unroutable-but-not-refused IPv6
+# address can cost the full timeout before urllib3 falls back to IPv4.
+_REQUEST_TIMEOUT_SECONDS = (10, 30)
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,56}[a-z0-9])?$")
+
+
+def _urllib3_gai_family_name() -> str:
+    """
+    The current value of urllib3's allowed_gai_family() as a readable name,
+    for the preflight log line - directly confirms whether poslib/remote.py's
+    _force_ipv4_only() monkeypatch actually took effect in this process
+    (import order matters: it must happen before any Cloudflare request is
+    made). See CLAUDE.md's "Store #1 migration ... PAUSED, STUCK" section.
+    """
+    try:
+        import urllib3.util.connection as _conn
+        family = _conn.allowed_gai_family()
+        return {socket.AF_INET: "AF_INET (IPv4-only)",
+                socket.AF_UNSPEC: "AF_UNSPEC (IPv4+IPv6)"}.get(family, str(family))
+    except Exception as exc:
+        return f"<could not determine: {exc}>"
+
+
+def _log_dns_preflight(hostname: str) -> None:
+    """
+    Resolves hostname once, up front, and logs every address returned - a
+    cheap, direct way to see on the next real run whether an unroutable IPv6
+    address is actually present in the resolver's answer, rather than
+    inferring it indirectly from how long a request took.
+    """
+    try:
+        infos = socket.getaddrinfo(hostname, 443, proto=socket.IPPROTO_TCP)
+        addresses = sorted({info[4][0] for info in infos})
+        log.info("DNS preflight for %s: %s", hostname, addresses)
+    except OSError as exc:
+        log.warning("DNS preflight for %s failed: %s", hostname, exc)
 
 
 class ProvisionError(Exception):
     """A provisioning step failed in a way that must stop the whole run."""
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """
+    Write via a temp file + os.replace instead of a direct write_text, so a
+    process killed mid-write (a crash, an elevated taskkill, the watchdog in
+    main.py's _provision_cloudflare) can never leave config.yaml/.env
+    truncated. This matters most for .env: it holds the just-minted watcher
+    token, and a truncated .env loses that value the same way an orphaned
+    Cloudflare-side token does - except silently, with nothing left to even
+    detect and refuse a re-run against (see try_reuse_existing_watcher_token
+    above). os.replace is atomic on Windows when both paths are on the same
+    volume, which a temp file next to the target always is.
+    """
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(text, encoding="utf-8")
+    os.replace(tmp_path, path)
 
 
 def _valid_project_slug(slug: str) -> bool:
@@ -52,7 +110,16 @@ def _valid_project_slug(slug: str) -> bool:
 
 def verify_token(session: requests.Session) -> dict:
     resp = session.get(f"{_API_BASE}/user/tokens/verify", timeout=_REQUEST_TIMEOUT_SECONDS)
-    data = resp.json()
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        # A captive portal or proxy can answer with an HTML page instead of
+        # JSON - this must surface as a clear provisioning failure, not an
+        # unhandled traceback escaping into a windowed error dialog.
+        raise ProvisionError(
+            f"Cloudflare's response to the token check wasn't valid JSON "
+            f"(HTTP {resp.status_code}) - check the network connection: {exc}"
+        ) from exc
     if not data.get("success") or data.get("result", {}).get("status") != "active":
         raise ProvisionError(
             "The provisioning token is not valid or not active. Paste a fresh "
@@ -126,6 +193,50 @@ def mint_watcher_token(session: requests.Session, account_id: str, name: str,
     return result["id"], result["value"]
 
 
+def _read_env_value(env_path: Path, key: str) -> str:
+    if not env_path.is_file():
+        return ""
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if "=" not in stripped or stripped.startswith("#"):
+            continue
+        found_key, _, value = stripped.partition("=")
+        if found_key.strip() == key:
+            return value.strip()
+    return ""
+
+
+def try_reuse_existing_watcher_token(env_path: Path, expected_token_id: str) -> str | None:
+    """
+    A previous run that minted the watcher token, wrote it to .env, then
+    got killed (crash, elevated taskkill, the watchdog in
+    _provision_cloudflare) before finishing leaves find_watcher_token
+    refusing every re-run forever - the token's value can't be recovered
+    from Cloudflare after creation, so without this the only fix was
+    deleting the orphaned token by hand and re-running from scratch. This
+    checks whether the value already sitting in .env is actually that same
+    token (verified live against Cloudflare, not just "a value is present")
+    and reuses it instead of refusing. Returns the token value if it can be
+    reused, None if not (caller must fall back to the existing refusal).
+    """
+    candidate = _read_env_value(env_path, "CLOUDFLARE_API_TOKEN")
+    if not candidate:
+        return None
+    probe = requests.Session()
+    probe.headers["Authorization"] = f"Bearer {candidate}"
+    try:
+        resp = probe.get(f"{_API_BASE}/user/tokens/verify", timeout=_REQUEST_TIMEOUT_SECONDS)
+        data = resp.json()
+    except (requests.RequestException, ValueError):
+        return None
+    if not data.get("success"):
+        return None
+    result = data.get("result", {})
+    if result.get("status") == "active" and result.get("id") == expected_token_id:
+        return candidate
+    return None
+
+
 _PAGES_EDIT_GROUP_NAMES = {"Pages Write", "Pages Edit"}
 
 
@@ -183,7 +294,7 @@ def patch_env_secrets(env_path: Path, updates: dict[str, str]) -> None:
             lines[i] = f"{key}={remaining.pop(key)}"
     for key, value in remaining.items():
         lines.append(f"{key}={value}")
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(env_path, "\n".join(lines) + "\n")
 
 
 def patch_config_remote_section(config_path: Path, updates: dict[str, str]) -> None:
@@ -213,7 +324,7 @@ def patch_config_remote_section(config_path: Path, updates: dict[str, str]) -> N
             f"config.yaml's remote: section has no key(s) {list(remaining)} to patch - "
             "the template may have changed. This needs a human to check."
         )
-    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(config_path, "\n".join(lines) + "\n")
 
 
 def verify_reachable(url: str, *, expect_status: int, max_attempts: int = 6,
@@ -228,12 +339,19 @@ def verify_reachable(url: str, *, expect_status: int, max_attempts: int = 6,
     for the broad app; a 200 IS the success condition for the bypass path.
     """
     for attempt in range(max_attempts):
+        attempt_start = time.monotonic()
         try:
             resp = requests.get(url, allow_redirects=False, timeout=_REQUEST_TIMEOUT_SECONDS)
+            elapsed = time.monotonic() - attempt_start
             if resp.status_code == expect_status:
+                log.info("verify_reachable(%s): got expected %d on attempt %d/%d (%.1fs)",
+                          url, expect_status, attempt + 1, max_attempts, elapsed)
                 return True
-        except requests.RequestException:
-            pass
+            log.info("verify_reachable(%s): attempt %d/%d got %d, wanted %d (%.1fs)",
+                      url, attempt + 1, max_attempts, resp.status_code, expect_status, elapsed)
+        except requests.RequestException as exc:
+            log.info("verify_reachable(%s): attempt %d/%d raised %s (%.1fs)",
+                      url, attempt + 1, max_attempts, exc, time.monotonic() - attempt_start)
         if attempt < max_attempts - 1:
             time.sleep(delay_seconds)
     return False
@@ -247,7 +365,7 @@ def write_provision_record(path: Path, record: dict[str, Any]) -> None:
     dashboard.
     """
     import json
-    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    _atomic_write_text(path, json.dumps(record, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -284,10 +402,15 @@ def _post_access_app(session: requests.Session, account_id: str, body: dict,
     over the timing gap, not a real validation failure.
     """
     last_resp: requests.Response | None = None
+    domain = body.get("domain", "?")
     for attempt in range(max_attempts):
+        attempt_start = time.monotonic()
         resp = session.post(f"{_API_BASE}/accounts/{account_id}/access/apps",
                             json=body, timeout=_REQUEST_TIMEOUT_SECONDS)
+        elapsed = time.monotonic() - attempt_start
         if resp.status_code < 400:
+            log.info("_post_access_app(%s): succeeded on attempt %d/%d (%.1fs)",
+                      domain, attempt + 1, max_attempts, elapsed)
             return resp
         last_resp = resp
         try:
@@ -298,6 +421,8 @@ def _post_access_app(session: requests.Session, account_id: str, body: dict,
             e.get("code") == 12130 and "does not belong to zone" in e.get("message", "")
             for e in errors
         )
+        log.info("_post_access_app(%s): attempt %d/%d got %d (%.1fs, transient=%s)",
+                  domain, attempt + 1, max_attempts, resp.status_code, elapsed, transient)
         if not transient or attempt == max_attempts - 1:
             return resp
         time.sleep(delay_seconds)
@@ -478,7 +603,12 @@ def _push_placeholder_with_retry(cfg: Config, project_slug: str, export_dir: Pat
     till PC this tool is meant to run on.
     """
     for attempt in range(max_attempts):
-        if _remote.push_remote(cfg, project=project_slug, export_dir=export_dir):
+        attempt_start = time.monotonic()
+        ok = _remote.push_remote(cfg, project=project_slug, export_dir=export_dir)
+        log.info("_push_placeholder_with_retry(%s): attempt %d/%d %s (%.1fs)",
+                  project_slug, attempt + 1, max_attempts,
+                  "succeeded" if ok else "failed", time.monotonic() - attempt_start)
+        if ok:
             return True
         if attempt < max_attempts - 1:
             time.sleep(delay_seconds)
@@ -512,7 +642,7 @@ def _flip_remote_enabled(config_path: Path, value: bool) -> None:
             "config.yaml's remote: section has no 'enabled' key to flip - the "
             "template may have changed. This needs a human to check."
         )
-    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(config_path, "\n".join(lines) + "\n")
 
 
 @dataclass
@@ -545,27 +675,66 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
             "ending with a letter or digit.",
         )
 
+    # Preflight facts, logged once at the top - settles two of CLAUDE.md's
+    # "Store #1 migration ... PAUSED, STUCK" open questions from the log
+    # alone, without needing to reproduce anything: was this build actually
+    # the one with the IPv4 fix, and did the fix's monkeypatch really take
+    # effect in this process.
+    try:
+        from .updater import current_version
+        log.info("provision_store(%s): starting, build version %s, "
+                  "allowed_gai_family=%s", project_slug, current_version(),
+                  _urllib3_gai_family_name())
+        _log_dns_preflight("api.cloudflare.com")
+    except Exception:
+        log.exception("provision_store(%s): preflight logging failed (non-fatal)", project_slug)
+
+    overall_start = time.monotonic()
     try:
         session = requests.Session()
         session.headers["Authorization"] = f"Bearer {powerful_token}"
 
+        log.info("provision_store(%s): verifying provisioning token", project_slug)
         verify_token(session)
+
+        log.info("provision_store(%s): creating/reusing Pages project", project_slug)
         create_pages_project(session, account_id, project_slug)
 
         watcher_token_name = f"pos-tool watcher - {project_slug}"
-        if find_watcher_token(session, watcher_token_name) is not None:
-            raise ProvisionError(
-                f"A Cloudflare API token named '{watcher_token_name}' already "
-                "exists - refusing to mint a second one, since a token's value "
-                "can't be recovered after creation and this store may already "
-                "be provisioned. Check .env and the Cloudflare dashboard; "
-                "revoke the old token by hand first if this really is a "
-                "fresh setup."
+        log.info("provision_store(%s): checking for an existing watcher token", project_slug)
+        existing_token = find_watcher_token(session, watcher_token_name)
+        if existing_token is not None:
+            reused_value = try_reuse_existing_watcher_token(cfg.env_path, existing_token["id"])
+            if reused_value is None:
+                raise ProvisionError(
+                    f"A Cloudflare API token named '{watcher_token_name}' already "
+                    "exists - refusing to mint a second one, since a token's value "
+                    "can't be recovered after creation and this store may already "
+                    "be provisioned. Check .env and the Cloudflare dashboard; "
+                    "revoke the old token by hand first if this really is a "
+                    "fresh setup."
+                )
+            log.info("provision_store(%s): reusing existing watcher token %s "
+                      "(matches .env, an earlier run must have been interrupted "
+                      "after minting)", project_slug, existing_token["id"])
+            watcher_token_id, watcher_token_value = existing_token["id"], reused_value
+        else:
+            log.info("provision_store(%s): minting a new watcher token", project_slug)
+            group_id = get_pages_edit_permission_group_id(session)
+            watcher_token_id, watcher_token_value = mint_watcher_token(
+                session, account_id, watcher_token_name, group_id
             )
-        group_id = get_pages_edit_permission_group_id(session)
-        watcher_token_id, watcher_token_value = mint_watcher_token(
-            session, account_id, watcher_token_name, group_id
-        )
+
+        # Written immediately after mint/reuse - before anything else that
+        # could fail or be killed (the watchdog in main.py included) - so
+        # try_reuse_existing_watcher_token always has a value to recover on
+        # any re-run past this point. account_id is a function argument,
+        # nothing else is needed to write this now rather than later.
+        log.info("provision_store(%s): saving watcher token to .env", project_slug)
+        patch_env_secrets(cfg.env_path, {
+            "CLOUDFLARE_API_TOKEN": watcher_token_value,
+            "CLOUDFLARE_ACCOUNT_ID": account_id,
+        })
 
         # Reuse an already-generated stock token if a previous partial run
         # got this far - a fresh token here would orphan the bypass Access
@@ -575,13 +744,10 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
             stock_json_token = _secrets.token_hex(16)
         stock_json_filename = f"stock-{stock_json_token}.json"
 
+        log.info("provision_store(%s): patching config.yaml", project_slug)
         patch_config_remote_section(cfg.config_path, {
             "cloudflare_project_name": project_slug,
             "stock_json_token": stock_json_token,
-        })
-        patch_env_secrets(cfg.env_path, {
-            "CLOUDFLARE_API_TOKEN": watcher_token_value,
-            "CLOUDFLARE_ACCOUNT_ID": account_id,
         })
 
         # Re-read from disk rather than trust the pre-patch instance - see
@@ -591,6 +757,7 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
         export_dir = cfg.path("remote.export_dir", "remote-site")
         write_placeholder_site(export_dir, stock_json_filename)
 
+        log.info("provision_store(%s): pushing placeholder site", project_slug)
         pushed = _push_placeholder_with_retry(fresh_cfg, project_slug, export_dir)
         if not pushed:
             raise ProvisionError(
@@ -599,11 +766,14 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
             )
 
         domain = f"{project_slug}.pages.dev"
+        log.info("provision_store(%s): creating broad (owner-only) Access app", project_slug)
         broad_app_id = create_broad_access_app(session, account_id, domain, owner_email)
+        log.info("provision_store(%s): creating bypass Access app", project_slug)
         bypass_app_id = create_bypass_access_app(
             session, account_id, f"{domain}/{stock_json_filename}"
         )
 
+        log.info("provision_store(%s): verifying reachability", project_slug)
         broad_reachable = verify_reachable(f"https://{domain}/", expect_status=302)
         bypass_reachable = verify_reachable(
             f"https://{domain}/{stock_json_filename}", expect_status=200
@@ -616,6 +786,7 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
                 "before assuming this failed."
             )
 
+        log.info("provision_store(%s): flipping remote.enabled on", project_slug)
         _flip_remote_enabled(cfg.config_path, True)
 
         record_path = cfg.config_path.parent / f"provision-record-{project_slug}.json"
@@ -634,6 +805,8 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
             # this fix round's Finding #2: provision_store must always
             # return a ProvisionResult, never raise, so callers like
             # main.py's CLI dispatch can rely on the return value alone.
+            log.info("provision_store(%s): succeeded in %.1fs (record write failed: %s)",
+                      project_slug, time.monotonic() - overall_start, exc)
             return ProvisionResult(
                 True,
                 f"Provisioned '{project_slug}' successfully, but could not "
@@ -644,6 +817,8 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
                 f"watcher_token_id={watcher_token_id}.",
             )
 
+        log.info("provision_store(%s): succeeded in %.1fs",
+                  project_slug, time.monotonic() - overall_start)
         return ProvisionResult(
             True,
             f"Store '{project_slug}' is set up and live at https://{domain}/. "
@@ -651,6 +826,20 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
             "installer only provisions the individual store.",
         )
     except ProvisionError as exc:
+        log.info("provision_store(%s): failed after %.1fs: %s",
+                  project_slug, time.monotonic() - overall_start, exc)
         return ProvisionResult(False, str(exc))
     except requests.RequestException as exc:
+        log.info("provision_store(%s): network error after %.1fs: %s",
+                  project_slug, time.monotonic() - overall_start, exc)
         return ProvisionResult(False, f"Network error while talking to Cloudflare: {exc}")
+    except Exception as exc:
+        # Must never raise past this function - main.py's CLI dispatch and
+        # the future watchdog thread both rely on always getting a
+        # ProvisionResult back, never an exception. Before this, an
+        # unexpected OSError/ValueError/ConfigError (e.g. a captive-portal
+        # HTML response, a disk-full write) escaped unhandled into the
+        # installer's windowed dialog - logged and bounded now instead.
+        log.exception("provision_store(%s): unexpected error after %.1fs",
+                       project_slug, time.monotonic() - overall_start)
+        return ProvisionResult(False, f"Unexpected error while provisioning: {exc}")
