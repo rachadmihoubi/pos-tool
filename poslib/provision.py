@@ -269,6 +269,41 @@ def write_provision_record(path: Path, record: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _post_access_app(session: requests.Session, account_id: str, body: dict,
+                      *, max_attempts: int = 5, delay_seconds: float = 5.0) -> requests.Response:
+    """
+    POST /access/apps, retrying briefly on Cloudflare's own eventual-
+    consistency window. Live-reproduced 2026-08-29: creating the bypass app
+    for a project's /stock-<token>.json path immediately after creating that
+    same project's broad app can transiently 400 with "access.api.error.
+    invalid_request: domain does not belong to zone" (error 12130) for a few
+    seconds, before Cloudflare's own domain index catches up to the broad
+    app having just registered the bare domain. A genuinely malformed
+    request returns the same error code/class but never resolves on retry,
+    so it still surfaces once max_attempts is exhausted - this only papers
+    over the timing gap, not a real validation failure.
+    """
+    last_resp: requests.Response | None = None
+    for attempt in range(max_attempts):
+        resp = session.post(f"{_API_BASE}/accounts/{account_id}/access/apps",
+                            json=body, timeout=_REQUEST_TIMEOUT_SECONDS)
+        if resp.status_code < 400:
+            return resp
+        last_resp = resp
+        try:
+            errors = resp.json().get("errors", [])
+        except ValueError:
+            errors = []
+        transient = any(
+            e.get("code") == 12130 and "does not belong to zone" in e.get("message", "")
+            for e in errors
+        )
+        if not transient or attempt == max_attempts - 1:
+            return resp
+        time.sleep(delay_seconds)
+    return last_resp
+
+
 def _find_access_app(session: requests.Session, account_id: str, domain: str) -> dict | None:
     resp = session.get(
         f"{_API_BASE}/accounts/{account_id}/access/apps",
@@ -333,27 +368,23 @@ def create_broad_access_app(session: requests.Session, account_id: str, domain: 
             )
         return existing["id"]
 
-    resp = session.post(
-        f"{_API_BASE}/accounts/{account_id}/access/apps",
-        json={
-            "type": "self_hosted",
-            "name": f"Store - {domain}",
-            "domain": domain,
-            "self_hosted_domains": [domain, wildcard],
-            "destinations": [
-                {"type": "public", "uri": domain},
-                {"type": "public", "uri": wildcard},
-            ],
-            "session_duration": "24h",
-            "policies": [{
-                "decision": "allow",
-                "include": [{"email": {"email": owner_email}}],
-                "name": "owner only",
-                "reusable": True,
-            }],
-        },
-        timeout=_REQUEST_TIMEOUT_SECONDS,
-    )
+    resp = _post_access_app(session, account_id, {
+        "type": "self_hosted",
+        "name": f"Store - {domain}",
+        "domain": domain,
+        "self_hosted_domains": [domain, wildcard],
+        "destinations": [
+            {"type": "public", "uri": domain},
+            {"type": "public", "uri": wildcard},
+        ],
+        "session_duration": "24h",
+        "policies": [{
+            "decision": "allow",
+            "include": [{"email": {"email": owner_email}}],
+            "name": "owner only",
+            "reusable": True,
+        }],
+    })
     resp.raise_for_status()
     data = resp.json()
     if not data.get("success"):
@@ -386,24 +417,20 @@ def create_bypass_access_app(session: requests.Session, account_id: str,
     if existing is not None:
         return existing["id"]
 
-    resp = session.post(
-        f"{_API_BASE}/accounts/{account_id}/access/apps",
-        json={
-            "type": "self_hosted",
-            "name": f"Store - {path_domain} (public bypass)",
-            "domain": path_domain,
-            "self_hosted_domains": [path_domain],
-            "destinations": [{"type": "public", "uri": path_domain}],
-            "session_duration": "24h",
-            "policies": [{
-                "decision": "bypass",
-                "include": [{"everyone": {}}],
-                "name": "public bypass",
-                "reusable": False,
-            }],
-        },
-        timeout=_REQUEST_TIMEOUT_SECONDS,
-    )
+    resp = _post_access_app(session, account_id, {
+        "type": "self_hosted",
+        "name": f"Store - {path_domain} (public bypass)",
+        "domain": path_domain,
+        "self_hosted_domains": [path_domain],
+        "destinations": [{"type": "public", "uri": path_domain}],
+        "session_duration": "24h",
+        "policies": [{
+            "decision": "bypass",
+            "include": [{"everyone": {}}],
+            "name": "public bypass",
+            "reusable": False,
+        }],
+    })
     resp.raise_for_status()
     data = resp.json()
     if not data.get("success"):

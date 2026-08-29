@@ -523,6 +523,76 @@ def test_create_bypass_access_app_creates_if_missing():
     assert "*" not in str(payload)
 
 
+class _SequencedPostSession:
+    """
+    Like FakeSession but POST can return a different response on each call -
+    needed to simulate Cloudflare's real, live-reproduced eventual-
+    consistency behavior (see _post_access_app's docstring): the bypass
+    app's domain transiently 400s with "domain does not belong to zone"
+    right after the broad app registers it, then succeeds moments later.
+    GET always returns get_response (no existing app, so create is always
+    attempted).
+    """
+
+    def __init__(self, post_responses: list, get_response=None):
+        self._post_responses = list(post_responses)
+        self._get_response = get_response or FakeResponse(200, {"success": True, "result": []})
+        self.post_calls = 0
+        self.sleep_calls = 0
+        self.headers = {}
+
+    def get(self, url, **kw):
+        return self._get_response
+
+    def post(self, url, **kw):
+        resp = self._post_responses[self.post_calls]
+        self.post_calls += 1
+        return resp
+
+
+_TRANSIENT_ZONE_ERROR = FakeResponse(400, {
+    "success": False,
+    "errors": [{"code": 12130, "message": "access.api.error.invalid_request: domain does not belong to zone"}],
+})
+
+
+def test_post_access_app_retries_transient_zone_error_then_succeeds(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(provision.time, "sleep", lambda s: sleeps.append(s))
+
+    session = _SequencedPostSession([
+        _TRANSIENT_ZONE_ERROR,
+        _TRANSIENT_ZONE_ERROR,
+        FakeResponse(201, {"success": True, "result": {"id": "appX"}}),
+    ])
+    resp = provision._post_access_app(session, "acct1", {"domain": "x"}, delay_seconds=0)
+    assert resp.status_code == 201
+    assert session.post_calls == 3
+    assert len(sleeps) == 2  # slept between attempts 1->2 and 2->3, not after the final success
+
+
+def test_post_access_app_gives_up_after_max_attempts_on_persistent_zone_error(monkeypatch):
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
+
+    session = _SequencedPostSession([_TRANSIENT_ZONE_ERROR] * 5)
+    resp = provision._post_access_app(session, "acct1", {"domain": "x"}, max_attempts=5, delay_seconds=0)
+    assert resp.status_code == 400
+    assert session.post_calls == 5
+
+
+def test_post_access_app_does_not_retry_a_different_400(monkeypatch):
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
+
+    other_error = FakeResponse(400, {
+        "success": False,
+        "errors": [{"code": 1000, "message": "some unrelated validation error"}],
+    })
+    session = _SequencedPostSession([other_error, FakeResponse(201, {"success": True, "result": {"id": "appX"}})])
+    resp = provision._post_access_app(session, "acct1", {"domain": "x"})
+    assert resp.status_code == 400
+    assert session.post_calls == 1  # never reached the second, would-succeed response
+
+
 # ---------------------------------------------------------------------------
 # Task 4, Step 2 - placeholder site written before the first push, so the
 # store's Pages project has *something* live before Access apps exist.
