@@ -126,21 +126,33 @@ def mint_watcher_token(session: requests.Session, account_id: str, name: str,
     return result["id"], result["value"]
 
 
+_PAGES_EDIT_GROUP_NAMES = {"Pages Write", "Pages Edit"}
+
+
 def get_pages_edit_permission_group_id(session: requests.Session) -> str:
+    """
+    Matches by exact name, not substring - a live 2026-08-29 run against the
+    real account found a substring match on "pages" + ("edit" or "write")
+    false-positives on several unrelated groups that also happen to contain
+    those words: "Access: Custom Pages Write", "Account Custom Pages Write",
+    "Custom Pages Write" (all Access custom-error-page permissions, zone- or
+    account-scoped, nothing to do with the Cloudflare Pages product). Only
+    "Pages Write" (confirmed live) or "Pages Edit" (the name Cloudflare's own
+    docs use elsewhere) are accepted.
+    """
     resp = session.get(f"{_API_BASE}/user/tokens/permission_groups",
                        timeout=_REQUEST_TIMEOUT_SECONDS)
     resp.raise_for_status()
     data = resp.json()
     matches = [
         g for g in data.get("result", [])
-        if "pages" in g.get("name", "").lower()
-        and ("edit" in g.get("name", "").lower() or "write" in g.get("name", "").lower())
+        if g.get("name", "") in _PAGES_EDIT_GROUP_NAMES
     ]
     if not matches:
         raise ProvisionError(
-            "Could not find a Cloudflare permission group for Pages editing - "
-            "no Pages-related group name contains 'edit' or 'write'. This "
-            "needs a human to check the Cloudflare dashboard's current naming."
+            "Could not find a Cloudflare permission group named 'Pages Write' "
+            "or 'Pages Edit' - Cloudflare may have renamed it. This needs a "
+            "human to check the Cloudflare dashboard's current naming."
         )
     if len(matches) > 1:
         names = ", ".join(m["name"] for m in matches)
@@ -324,6 +336,8 @@ def create_broad_access_app(session: requests.Session, account_id: str, domain: 
     resp = session.post(
         f"{_API_BASE}/accounts/{account_id}/access/apps",
         json={
+            "type": "self_hosted",
+            "name": f"Store - {domain}",
             "domain": domain,
             "self_hosted_domains": [domain, wildcard],
             "destinations": [
@@ -375,6 +389,8 @@ def create_bypass_access_app(session: requests.Session, account_id: str,
     resp = session.post(
         f"{_API_BASE}/accounts/{account_id}/access/apps",
         json={
+            "type": "self_hosted",
+            "name": f"Store - {path_domain} (public bypass)",
             "domain": path_domain,
             "self_hosted_domains": [path_domain],
             "destinations": [{"type": "public", "uri": path_domain}],

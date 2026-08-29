@@ -113,13 +113,23 @@ def test_find_watcher_token_returns_none_if_absent():
     assert provision.find_watcher_token(session, "pos-tool watcher - storeb") is None
 
 
-def test_get_pages_edit_permission_group_id_matches_pages_and_edit_or_write():
+def test_get_pages_edit_permission_group_id_matches_exact_name_only():
+    """
+    Regression test for a real bug found live 2026-08-29: a substring match
+    on "pages" + ("edit" or "write") false-positived on several unrelated
+    Access custom-error-page permission groups that happen to contain those
+    words. Only an exact "Pages Write" (or "Pages Edit") name may match -
+    these fixture names are the actual false positives seen on the real
+    account, not hypothetical.
+    """
     session = FakeSession({("GET", "/user/tokens/permission_groups"): FakeResponse(200, {
         "success": True,
         "result": [
-            {"id": "g1", "name": "Cloudflare Pages Read"},
-            {"id": "g2", "name": "Cloudflare Pages Write"},
-            {"id": "g3", "name": "Zone Read"},
+            {"id": "g1", "name": "Pages Read"},
+            {"id": "g2", "name": "Pages Write"},
+            {"id": "g3", "name": "Access: Custom Pages Write"},
+            {"id": "g4", "name": "Account Custom Pages Write"},
+            {"id": "g5", "name": "Custom Pages Write"},
         ],
     })})
     assert provision.get_pages_edit_permission_group_id(session) == "g2"
@@ -127,9 +137,12 @@ def test_get_pages_edit_permission_group_id_matches_pages_and_edit_or_write():
 
 def test_get_pages_edit_permission_group_id_raises_on_zero_matches():
     session = FakeSession({("GET", "/user/tokens/permission_groups"): FakeResponse(200, {
-        "success": True, "result": [{"id": "g1", "name": "Zone Read"}],
+        "success": True, "result": [
+            {"id": "g1", "name": "Zone Read"},
+            {"id": "g2", "name": "Custom Pages Write"},
+        ],
     })})
-    with pytest.raises(provision.ProvisionError, match="no Pages"):
+    with pytest.raises(provision.ProvisionError, match="Could not find"):
         provision.get_pages_edit_permission_group_id(session)
 
 
@@ -137,8 +150,8 @@ def test_get_pages_edit_permission_group_id_raises_on_multiple_matches():
     session = FakeSession({("GET", "/user/tokens/permission_groups"): FakeResponse(200, {
         "success": True,
         "result": [
-            {"id": "g1", "name": "Cloudflare Pages Write"},
-            {"id": "g2", "name": "Cloudflare Pages Edit Legacy"},
+            {"id": "g1", "name": "Pages Write"},
+            {"id": "g2", "name": "Pages Edit"},
         ],
     })})
     with pytest.raises(provision.ProvisionError, match="multiple"):
@@ -609,7 +622,7 @@ def test_provision_store_happy_path_full_sequence(tmp_path, monkeypatch):
         ("POST", "/pages/projects"): FakeResponse(200, {"success": True, "result": {"name": "storeb"}}),
         ("GET", "/user/tokens"): FakeResponse(200, {"success": True, "result": []}),
         ("GET", "/user/tokens/permission_groups"): FakeResponse(200, {
-            "success": True, "result": [{"id": "g2", "name": "Cloudflare Pages Write"}],
+            "success": True, "result": [{"id": "g2", "name": "Pages Write"}],
         }),
         ("POST", "/user/tokens"): FakeResponse(200, {
             "success": True, "result": {"id": "tok_abc", "value": "secretval"},
@@ -697,7 +710,7 @@ def test_provision_store_reuses_existing_stock_json_token(tmp_path, monkeypatch)
         ("POST", "/pages/projects"): FakeResponse(200, {"success": True, "result": {"name": "storeb"}}),
         ("GET", "/user/tokens"): FakeResponse(200, {"success": True, "result": []}),
         ("GET", "/user/tokens/permission_groups"): FakeResponse(200, {
-            "success": True, "result": [{"id": "g2", "name": "Cloudflare Pages Write"}],
+            "success": True, "result": [{"id": "g2", "name": "Pages Write"}],
         }),
         ("POST", "/user/tokens"): FakeResponse(200, {
             "success": True, "result": {"id": "tok_abc", "value": "secretval"},
@@ -775,7 +788,7 @@ def test_provision_store_returns_ok_when_provision_record_write_fails(tmp_path, 
         ("POST", "/pages/projects"): FakeResponse(200, {"success": True, "result": {"name": "storeb"}}),
         ("GET", "/user/tokens"): FakeResponse(200, {"success": True, "result": []}),
         ("GET", "/user/tokens/permission_groups"): FakeResponse(200, {
-            "success": True, "result": [{"id": "g2", "name": "Cloudflare Pages Write"}],
+            "success": True, "result": [{"id": "g2", "name": "Pages Write"}],
         }),
         ("POST", "/user/tokens"): FakeResponse(200, {
             "success": True, "result": {"id": "tok_abc", "value": "secretval"},
