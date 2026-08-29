@@ -19,12 +19,14 @@ this tool, even if it crashes half way through.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import ctypes.wintypes as wintypes
 import datetime
 import hashlib
 import json
 import logging
+import msvcrt
 import os
 import shutil
 import sqlite3
@@ -45,6 +47,11 @@ log = logging.getLogger(__name__)
 # Picture and attachment columns can be megabytes each and are no use for
 # any report, so we leave them out of the cache to keep it small and fast.
 SKIPPED_COLUMN_TYPES = {TYPE_OLE, TYPE_BINARY}
+
+# How long ETL.refresh() waits for another process's cache rebuild to
+# finish before giving up (see ETL._locked).
+_LOCK_POLL_SECONDS = 0.5
+_LOCK_TIMEOUT_SECONDS = 600
 
 # How an Access column type is stored in SQLite.
 SQLITE_TYPE = {
@@ -227,6 +234,68 @@ class ETL:
         self.source = self.cfg.source_db
         self.cache = self.cfg.cache_db
 
+    # -- cross-process locking -----------------------------------------------
+
+    @contextlib.contextmanager
+    def _locked(self):
+        """
+        Cross-process advisory lock held for the whole refresh() call, not
+        just the rebuild. Without this, two ETL instances started around the
+        same time - e.g. the auto-started watcher and an interactively
+        launched dashboard, both hitting the same real database right after
+        install - can race on the same cache.building temp file: one holds
+        it open via sqlite3.connect while the other's `if tmp_cache.exists():
+        tmp_cache.unlink()` hits a PermissionError ([WinError 32], file in
+        use), crashing the second process outright. Reproduced live
+        2026-08-29 on a real till PC.
+
+        Held for the *entire* refresh(), not just _build_cache(), so a
+        second caller that was blocked waiting for the lock re-checks
+        is_stale() (right after it acquires the lock) and sees the first
+        caller's already-finished rebuild - it just returns instead of
+        rebuilding a second time.
+
+        msvcrt (stdlib, Windows-only) matches the rest of this module's own
+        Windows-only API use (ctypes.wintypes above). Byte-range locks are
+        held per open file handle by the OS itself, so even if a process
+        crashes mid-rebuild without reaching the `finally` below, Windows
+        releases the lock automatically when the handle closes - this can
+        never leave a stale lock that blocks every future run forever.
+        """
+        lock_path = self.cache.with_suffix(".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        f = open(lock_path, "a+b")
+        try:
+            # msvcrt.locking needs at least one byte to lock; a freshly
+            # created lock file is empty.
+            f.seek(0, os.SEEK_END)
+            if f.tell() == 0:
+                f.write(b"0")
+                f.flush()
+            f.seek(0)
+
+            deadline = time.time() + _LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.time() >= deadline:
+                        raise ETLError(
+                            "Another process has been rebuilding the cache "
+                            "for over 10 minutes - giving up rather than "
+                            "waiting forever. If nothing is actually "
+                            f"running, delete {lock_path} and try again."
+                        )
+                    time.sleep(_LOCK_POLL_SECONDS)
+            try:
+                yield
+            finally:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        finally:
+            f.close()
+
     # -- public ------------------------------------------------------------
 
     def is_stale(self) -> tuple[bool, str]:
@@ -262,6 +331,10 @@ class ETL:
 
     def refresh(self, force: bool = False) -> RefreshResult:
         """Rebuild the cache if the database has changed (or if forced)."""
+        with self._locked():
+            return self._refresh_locked(force)
+
+    def _refresh_locked(self, force: bool) -> RefreshResult:
         started = time.time()
 
         stale, reason = self.is_stale()
