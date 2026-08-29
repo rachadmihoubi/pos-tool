@@ -16,10 +16,39 @@
 > confirmed with a raw `curl`, `remote.enabled` flipped `true`), a same-args
 > re-run correctly refused instead of duplicating anything, and a full
 > account-wide listing after teardown confirmed zero leftover resources.
-> See commit `98e32d7`. **Task 6 Step 4 (the actual Setup.exe/wizard-page/
-> Pascal-Script smoke test) is still open** - this run exercised
-> `provision_store()` directly, not the installer's env-var-passing
-> mechanism.
+> See commit `98e32d7`.
+>
+> **Task 6 Step 4 also now done, 2026-08-29, same session.** Built a real
+> `Setup.exe` (`ISCC.exe packaging\setup.iss`) and ran it for real on this
+> till PC, through actual Windows UAC elevation (this session cannot
+> self-elevate, so the user drove the clicking while Claude verified/cleaned
+> up). First real run surfaced a **third** live bug neither prior fix nor
+> code review caught: `create_broad_access_app`/`create_bypass_access_app`
+> calling `session.post` back-to-back for the same project can transiently
+> 400 with `access.api.error.invalid_request: domain does not belong to
+> zone` (error 12130) for a few seconds - Cloudflare's own domain index
+> lagging behind the broad app having just registered the bare domain.
+> Reproduced directly (a domain with no real Pages project behind it 400s
+> the same way, confirming this is genuinely about domain/zone
+> registration, not a payload defect). Fixed with `_post_access_app`, a
+> bounded retry (5 attempts, 5s backoff) that only retries this exact
+> error code+message - any other 400 still surfaces immediately, unretried.
+> See commit `2ba2acb`.
+>
+> After all three fixes: rebuilt the installer and ran it a fourth time,
+> end to end, through real UAC elevation - **clean success**, no error
+> dialog: `cloudflare_provision_log.txt` recorded "Cloudflare setup
+> finished" with the live store URL, and both `GET /` (302, gated) and
+> `GET /stock-<token>.json` (200, `[]`) were independently confirmed with a
+> raw `curl`. This is the first fully clean run of the actual shipped
+> installer mechanism, not just `provision_store()` in isolation. All
+> Cloudflare resources from every test run this session (4 disposable
+> projects, 7 Access apps, 4 minted tokens, both one-time provisioning
+> tokens) were deleted/revoked afterward; the local test installs (Program
+> Files, both scheduled tasks, `%LOCALAPPDATA%\Shop Analysis`) were fully
+> uninstalled and removed each time. **Component 5's installer-driven
+> provisioning is now considered fully code-complete and live-verified -
+> only Task 8 (documentation) remains.**
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
