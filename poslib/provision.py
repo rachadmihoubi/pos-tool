@@ -26,11 +26,16 @@ real, if narrow, security liability.
 from __future__ import annotations
 
 import re
+import secrets as _secrets
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import requests
+
+from . import remote as _remote
+from .config import Config
 
 _API_BASE = "https://api.cloudflare.com/client/v4"
 _REQUEST_TIMEOUT_SECONDS = 30
@@ -231,3 +236,317 @@ def write_provision_record(path: Path, record: dict[str, Any]) -> None:
     """
     import json
     path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Access application creation.
+#
+# The payload shape below is not a guess - it reproduces the exact,
+# live-verified shape recorded in
+# docs/superpowers/specs/2026-08-29-store-access-app-shapes.md (Task 1's
+# read-only investigation against the real Cloudflare account). That
+# investigation also found a live gap on the hub's own broad Access app: its
+# self_hosted_domains/destinations omit the `*.<domain>` wildcard, which
+# leaves every Cloudflare Pages preview-deployment subdomain completely
+# ungated (verified with a bare curl - 200 OK with no Access redirect at
+# all). Both fields must carry the bare hostname AND the wildcard together,
+# or the app is under-scoped - see the post-create verification and the
+# idempotency check in create_broad_access_app below, both of which exist
+# specifically to make sure that gap can never be reproduced by this
+# installer.
+# ---------------------------------------------------------------------------
+
+
+def _find_access_app(session: requests.Session, account_id: str, domain: str) -> dict | None:
+    resp = session.get(
+        f"{_API_BASE}/accounts/{account_id}/access/apps",
+        timeout=_REQUEST_TIMEOUT_SECONDS,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    for app in data.get("result", []):
+        if app.get("domain") == domain:
+            return app
+    return None
+
+
+def access_app_exists(session: requests.Session, account_id: str, domain: str) -> bool:
+    return _find_access_app(session, account_id, domain) is not None
+
+
+def create_broad_access_app(session: requests.Session, account_id: str, domain: str,
+                             owner_email: str) -> str:
+    """
+    Owner-only-gated Access application covering the whole
+    `<project>.pages.dev` domain, including its `*.<project>.pages.dev`
+    preview-deployment subdomains. Idempotent: if an app already exists for
+    this domain it is reused - UNLESS it exists but is missing the
+    wildcard, in which case this raises rather than silently accepting an
+    under-scoped app (a previous partial run, or a hand-created app, could
+    otherwise leave preview subdomains ungated exactly like the confirmed
+    live hub gap).
+    """
+    wildcard = f"*.{domain}"
+    existing = _find_access_app(session, account_id, domain)
+    if existing is not None:
+        covered = existing.get("self_hosted_domains") or []
+        if wildcard not in covered:
+            raise ProvisionError(
+                f"An Access application for '{domain}' already exists but does "
+                f"not cover '{wildcard}' - it is under-scoped (same class of "
+                "gap as the hub's own broad app - see "
+                "docs/superpowers/specs/2026-08-29-store-access-app-shapes.md). "
+                "This needs a human to fix it in the Cloudflare Zero Trust "
+                "dashboard (add the wildcard to both self_hosted_domains and "
+                "destinations) before this can be re-run."
+            )
+        return existing["id"]
+
+    resp = session.post(
+        f"{_API_BASE}/accounts/{account_id}/access/apps",
+        json={
+            "domain": domain,
+            "self_hosted_domains": [domain, wildcard],
+            "destinations": [
+                {"type": "public", "uri": domain},
+                {"type": "public", "uri": wildcard},
+            ],
+            "session_duration": "24h",
+            "policies": [{
+                "decision": "allow",
+                "include": [{"email": {"email": owner_email}}],
+                "name": "owner only",
+                "reusable": True,
+            }],
+        },
+        timeout=_REQUEST_TIMEOUT_SECONDS,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if not data.get("success"):
+        raise ProvisionError(
+            f"Could not create the owner-only Access application for '{domain}': "
+            f"{data.get('errors')}"
+        )
+    result = data["result"]
+    if wildcard not in (result.get("self_hosted_domains") or []):
+        raise ProvisionError(
+            f"Cloudflare accepted the Access application for '{domain}' but its "
+            f"response does not confirm '{wildcard}' is covered - refusing to "
+            "continue rather than risk shipping an ungated preview-subdomain "
+            "gap. Check the app in the Zero Trust dashboard."
+        )
+    return result["id"]
+
+
+def create_bypass_access_app(session: requests.Session, account_id: str,
+                              path_domain: str) -> str:
+    """
+    Narrow, deliberately unauthenticated Access application scoped to exactly
+    one file (`<project>.pages.dev/stock-<token>.json`) - never a wildcard.
+    This is what makes the cross-store hub's stock search reachable without
+    a login while the rest of the store's site stays owner-only. Idempotent:
+    reused if an app already exists for this exact path.
+    """
+    existing = _find_access_app(session, account_id, path_domain)
+    if existing is not None:
+        return existing["id"]
+
+    resp = session.post(
+        f"{_API_BASE}/accounts/{account_id}/access/apps",
+        json={
+            "domain": path_domain,
+            "self_hosted_domains": [path_domain],
+            "destinations": [{"type": "public", "uri": path_domain}],
+            "session_duration": "24h",
+            "policies": [{
+                "decision": "bypass",
+                "include": [{"everyone": {}}],
+                "name": "public bypass",
+                "reusable": False,
+            }],
+        },
+        timeout=_REQUEST_TIMEOUT_SECONDS,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if not data.get("success"):
+        raise ProvisionError(
+            f"Could not create the public bypass Access application for "
+            f"'{path_domain}': {data.get('errors')}"
+        )
+    return data["result"]["id"]
+
+
+def write_placeholder_site(export_dir: Path, stock_json_filename: str) -> None:
+    """
+    A minimal placeholder page + empty stock JSON, written and pushed
+    BEFORE either Access application exists - so the Pages project has
+    something live (not a 404) the moment it's created, and so the first
+    real push (once Access is wired up) isn't the very first content the
+    project ever serves. The placeholder is always this literal content -
+    never the real exporter - precisely because pushing happens before the
+    bypass Access app protects/exposes the stock file as designed.
+    """
+    export_dir.mkdir(parents=True, exist_ok=True)
+    (export_dir / "index.html").write_text(
+        "<!doctype html>\n<html><head><meta charset=\"utf-8\">"
+        "<title>Setting up</title></head><body>"
+        "<p>This store is being set up. Check back in a few minutes.</p>"
+        "</body></html>\n",
+        encoding="utf-8",
+    )
+    (export_dir / stock_json_filename).write_text("[]", encoding="utf-8")
+
+
+def _flip_remote_enabled(config_path: Path, value: bool) -> None:
+    """
+    Line-based patch of just the `remote:` block's `enabled:` key. Separate
+    from patch_config_remote_section because `enabled` is a bare boolean,
+    never a quoted string - and because this is deliberately the very last
+    write of a successful provisioning run, done only once everything else
+    (project, tokens, Access apps, first push) has already succeeded.
+    """
+    lines = config_path.read_text(encoding="utf-8").splitlines()
+    in_remote = False
+    flipped = False
+    for i, line in enumerate(lines):
+        if re.match(r"^remote:\s*$", line):
+            in_remote = True
+            continue
+        if in_remote and re.match(r"^\S", line):  # dedent = new top-level section
+            in_remote = False
+        if in_remote:
+            m = re.match(r"^(\s+)enabled:", line)
+            if m:
+                lines[i] = f"{m.group(1)}enabled: {'true' if value else 'false'}"
+                flipped = True
+    if not flipped:
+        raise ProvisionError(
+            "config.yaml's remote: section has no 'enabled' key to flip - the "
+            "template may have changed. This needs a human to check."
+        )
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@dataclass
+class ProvisionResult:
+    ok: bool
+    message: str
+
+
+def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
+                     project_slug: str, owner_email: str) -> ProvisionResult:
+    """
+    One-time, idempotent setup of a new store: Cloudflare Pages project,
+    watcher token (Pages:Edit only), a placeholder first push, both Access
+    applications (owner-only broad + unauthenticated stock.json bypass),
+    reachability verification, then flips remote.enabled on. Every step
+    before token minting checks-before-creating, so a failed run can simply
+    be re-run - token minting is the deliberate exception (see
+    find_watcher_token's use below and this module's own docstring).
+
+    `cfg` is the store's existing Config (config.yaml/.env not yet
+    patched). A fresh Config is constructed from the same paths after
+    patching, so the values pushed to Cloudflare are read back from disk,
+    not assumed from the pre-patch instance.
+    """
+    if not _valid_project_slug(project_slug):
+        return ProvisionResult(
+            False,
+            f"'{project_slug}' is not a valid Cloudflare Pages project name - "
+            "use lowercase letters, digits and hyphens only, starting and "
+            "ending with a letter or digit.",
+        )
+
+    try:
+        session = requests.Session()
+        session.headers["Authorization"] = f"Bearer {powerful_token}"
+
+        verify_token(session)
+        create_pages_project(session, account_id, project_slug)
+
+        watcher_token_name = f"pos-tool watcher - {project_slug}"
+        if find_watcher_token(session, watcher_token_name) is not None:
+            raise ProvisionError(
+                f"A Cloudflare API token named '{watcher_token_name}' already "
+                "exists - refusing to mint a second one, since a token's value "
+                "can't be recovered after creation and this store may already "
+                "be provisioned. Check .env and the Cloudflare dashboard; "
+                "revoke the old token by hand first if this really is a "
+                "fresh setup."
+            )
+        group_id = get_pages_edit_permission_group_id(session)
+        watcher_token_id, watcher_token_value = mint_watcher_token(
+            session, account_id, watcher_token_name, group_id
+        )
+
+        # Reuse an already-generated stock token if a previous partial run
+        # got this far - a fresh token here would orphan the bypass Access
+        # app's filename from the config that gets patched below.
+        stock_json_token = str(cfg.get("remote.stock_json_token", "") or "").strip()
+        if not stock_json_token:
+            stock_json_token = _secrets.token_hex(16)
+        stock_json_filename = f"stock-{stock_json_token}.json"
+
+        patch_config_remote_section(cfg.config_path, {
+            "cloudflare_project_name": project_slug,
+            "stock_json_token": stock_json_token,
+        })
+        patch_env_secrets(cfg.env_path, {
+            "CLOUDFLARE_API_TOKEN": watcher_token_value,
+            "CLOUDFLARE_ACCOUNT_ID": account_id,
+        })
+
+        # Re-read from disk rather than trust the pre-patch instance - see
+        # docstring above.
+        fresh_cfg = Config(cfg.config_path, cfg.env_path)
+
+        export_dir = cfg.path("remote.export_dir", "remote-site")
+        write_placeholder_site(export_dir, stock_json_filename)
+
+        pushed = _remote.push_remote(fresh_cfg, project=project_slug, export_dir=export_dir)
+        if not pushed:
+            raise ProvisionError(
+                "The first push to Cloudflare Pages failed - check the logs "
+                "for details."
+            )
+
+        domain = f"{project_slug}.pages.dev"
+        broad_app_id = create_broad_access_app(session, account_id, domain, owner_email)
+        bypass_app_id = create_bypass_access_app(
+            session, account_id, f"{domain}/{stock_json_filename}"
+        )
+
+        broad_reachable = verify_reachable(f"https://{domain}/", expect_status=302)
+        bypass_reachable = verify_reachable(
+            f"https://{domain}/{stock_json_filename}", expect_status=200
+        )
+        if not broad_reachable or not bypass_reachable:
+            raise ProvisionError(
+                "Could not confirm the store is reachable after provisioning "
+                "- Access changes can take a minute or two to propagate. "
+                "Check the Cloudflare dashboard and try reloading the page "
+                "before assuming this failed."
+            )
+
+        _flip_remote_enabled(cfg.config_path, True)
+
+        record_path = cfg.config_path.parent / f"provision-record-{project_slug}.json"
+        write_provision_record(record_path, {
+            "project": project_slug,
+            "broad_access_app_id": broad_app_id,
+            "bypass_access_app_id": bypass_app_id,
+            "watcher_token_id": watcher_token_id,
+        })
+
+        return ProvisionResult(
+            True,
+            f"Store '{project_slug}' is set up and live at https://{domain}/. "
+            "Remember to add it to the cross-store hub page by hand - this "
+            "installer only provisions the individual store.",
+        )
+    except ProvisionError as exc:
+        return ProvisionResult(False, str(exc))
+    except requests.RequestException as exc:
+        return ProvisionResult(False, f"Network error while talking to Cloudflare: {exc}")

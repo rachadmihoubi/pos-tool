@@ -35,21 +35,21 @@ class FakeSession:
         self.calls = []
         self.headers = {}
 
-    def _match(self, method, url):
+    def _match(self, method, url, kw):
         for (m, suffix), resp in self.responses.items():
             if m == method and url.endswith(suffix):
-                self.calls.append((method, url))
+                self.calls.append((method, url, kw))
                 return resp
         raise AssertionError(f"Unexpected call: {method} {url}")
 
     def get(self, url, **kw):
-        return self._match("GET", url)
+        return self._match("GET", url, kw)
 
     def post(self, url, **kw):
-        return self._match("POST", url)
+        return self._match("POST", url, kw)
 
     def put(self, url, **kw):
-        return self._match("PUT", url)
+        return self._match("PUT", url, kw)
 
 
 def test_valid_project_slug_accepts_lowercase_hyphenated():
@@ -344,3 +344,338 @@ def test_write_provision_record_writes_json(tmp_path):
     provision.write_provision_record(path, {"project": "storeb", "watcher_token_id": "tok2"})
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["project"] == "storeb"
+
+
+# ---------------------------------------------------------------------------
+# Task 4, Step 1 - Access application creation.
+#
+# Payload shape here is not a guess - it reproduces the exact, live-verified
+# shape recorded in docs/superpowers/specs/2026-08-29-store-access-app-shapes.md
+# (Task 1's read-only investigation against the real account). The hub's own
+# broad Access app is missing the wildcard in self_hosted_domains/destinations
+# and that is a confirmed, live, ungated-preview-subdomain security gap - so
+# the wildcard-presence checks below are regression tests for exactly that
+# class of bug, not defensive padding.
+# ---------------------------------------------------------------------------
+
+def test_access_app_exists_matches_by_domain():
+    session = FakeSession({("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {
+        "success": True,
+        "result": [
+            {"id": "app1", "domain": "storea.pages.dev"},
+            {"id": "app2", "domain": "storeb.pages.dev"},
+        ],
+    })})
+    assert provision.access_app_exists(session, "acct1", "storeb.pages.dev") is True
+    assert provision.access_app_exists(session, "acct1", "storec.pages.dev") is False
+
+
+def test_create_broad_access_app_returns_existing_id_when_correctly_scoped():
+    session = FakeSession({("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {
+        "success": True,
+        "result": [{
+            "id": "app1",
+            "domain": "storeb.pages.dev",
+            "self_hosted_domains": ["storeb.pages.dev", "*.storeb.pages.dev"],
+        }],
+    })})
+    app_id = provision.create_broad_access_app(session, "acct1", "storeb.pages.dev", "owner@example.com")
+    assert app_id == "app1"
+    # No POST should have happened - already correctly provisioned.
+    assert all(call[0] != "POST" for call in session.calls)
+
+
+def test_create_broad_access_app_raises_when_existing_app_under_scoped():
+    # An app exists for this domain but its self_hosted_domains has no
+    # wildcard - this is exactly the live hub gap documented in
+    # docs/superpowers/specs/2026-08-29-store-access-app-shapes.md. A
+    # previous partial run or a hand-created app must never be silently
+    # accepted as "already provisioned" - that would ship the same gap
+    # to every new store.
+    session = FakeSession({("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {
+        "success": True,
+        "result": [{"id": "app1", "domain": "storeb.pages.dev"}],
+    })})
+    with pytest.raises(provision.ProvisionError, match="under-scoped|wildcard"):
+        provision.create_broad_access_app(session, "acct1", "storeb.pages.dev", "owner@example.com")
+
+
+def test_create_broad_access_app_creates_with_correct_payload_shape():
+    session = FakeSession({
+        ("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {"success": True, "result": []}),
+        ("POST", "/accounts/acct1/access/apps"): FakeResponse(200, {
+            "success": True,
+            "result": {
+                "id": "appNew",
+                "self_hosted_domains": ["storeb.pages.dev", "*.storeb.pages.dev"],
+            },
+        }),
+    })
+    app_id = provision.create_broad_access_app(session, "acct1", "storeb.pages.dev", "owner@example.com")
+    assert app_id == "appNew"
+
+    post_calls = [c for c in session.calls if c[0] == "POST"]
+    assert len(post_calls) == 1
+    payload = post_calls[0][2]["json"]
+    assert payload["domain"] == "storeb.pages.dev"
+    assert payload["self_hosted_domains"] == ["storeb.pages.dev", "*.storeb.pages.dev"]
+    assert payload["destinations"] == [
+        {"type": "public", "uri": "storeb.pages.dev"},
+        {"type": "public", "uri": "*.storeb.pages.dev"},
+    ]
+    assert payload["session_duration"] == "24h"
+    policy = payload["policies"][0]
+    assert policy["decision"] == "allow"
+    assert policy["include"] == [{"email": {"email": "owner@example.com"}}]
+    assert policy["reusable"] is True
+    assert policy["name"]
+
+
+def test_create_broad_access_app_raises_when_response_missing_wildcard():
+    # Cloudflare accepted the create but the response doesn't confirm the
+    # wildcard is actually covered - refuse rather than assume success.
+    session = FakeSession({
+        ("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {"success": True, "result": []}),
+        ("POST", "/accounts/acct1/access/apps"): FakeResponse(200, {
+            "success": True,
+            "result": {"id": "appNew", "self_hosted_domains": ["storeb.pages.dev"]},
+        }),
+    })
+    with pytest.raises(provision.ProvisionError, match="wildcard|\\*\\."):
+        provision.create_broad_access_app(session, "acct1", "storeb.pages.dev", "owner@example.com")
+
+
+def test_create_bypass_access_app_skips_if_exists():
+    path_domain = "storeb.pages.dev/stock-abc123.json"
+    session = FakeSession({("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {
+        "success": True,
+        "result": [{"id": "appBypass", "domain": path_domain}],
+    })})
+    app_id = provision.create_bypass_access_app(session, "acct1", path_domain)
+    assert app_id == "appBypass"
+    assert all(call[0] != "POST" for call in session.calls)
+
+
+def test_create_bypass_access_app_creates_if_missing():
+    path_domain = "storeb.pages.dev/stock-abc123.json"
+    session = FakeSession({
+        ("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {"success": True, "result": []}),
+        ("POST", "/accounts/acct1/access/apps"): FakeResponse(200, {
+            "success": True, "result": {"id": "appBypass"},
+        }),
+    })
+    app_id = provision.create_bypass_access_app(session, "acct1", path_domain)
+    assert app_id == "appBypass"
+
+    post_calls = [c for c in session.calls if c[0] == "POST"]
+    assert len(post_calls) == 1
+    payload = post_calls[0][2]["json"]
+    assert payload["domain"] == path_domain
+    assert payload["self_hosted_domains"] == [path_domain]
+    assert payload["destinations"] == [{"type": "public", "uri": path_domain}]
+    policy = payload["policies"][0]
+    assert policy["decision"] == "bypass"
+    assert policy["include"] == [{"everyone": {}}]
+    assert policy["reusable"] is False
+    assert policy["name"]
+    # No wildcard anywhere - this app is deliberately scoped to one exact file.
+    assert "*" not in str(payload)
+
+
+# ---------------------------------------------------------------------------
+# Task 4, Step 2 - placeholder site written before the first push, so the
+# store's Pages project has *something* live before Access apps exist.
+# ---------------------------------------------------------------------------
+
+def test_write_placeholder_site_creates_index_and_stock_files(tmp_path):
+    export_dir = tmp_path / "remote-site"
+    provision.write_placeholder_site(export_dir, "stock-abc123.json")
+    assert (export_dir / "index.html").is_file()
+    stock_path = export_dir / "stock-abc123.json"
+    assert stock_path.is_file()
+    assert json.loads(stock_path.read_text(encoding="utf-8")) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 4, Step 4 - flips remote.enabled to true, the very last step of a
+# successful provisioning run. Separate from patch_config_remote_section
+# because `enabled` is a bare boolean, not a quoted string.
+# ---------------------------------------------------------------------------
+
+def test_flip_remote_enabled_sets_true(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "database:\n"
+        '  path: "x"\n'
+        "\n"
+        "remote:\n"
+        "  enabled: false\n"
+        '  cloudflare_project_name: "storeb"\n'
+        "\n"
+        "watcher:\n"
+        "  enabled: true\n",
+        encoding="utf-8",
+    )
+    provision._flip_remote_enabled(config_path, True)
+    text = config_path.read_text(encoding="utf-8")
+    assert "remote:\n  enabled: true" in text
+    assert "watcher:\n  enabled: true" in text  # untouched, different section
+
+
+# ---------------------------------------------------------------------------
+# Task 4, Step 5 - the full provision_store orchestrator.
+# ---------------------------------------------------------------------------
+
+class FakeCfg:
+    """
+    Minimal stand-in for poslib.config.Config, matching only what
+    provision_store actually calls on the cfg it's handed: config_path,
+    env_path, .get(dotted, default), .path(dotted, default).
+    """
+
+    def __init__(self, config_path, env_path, export_dir, stock_json_token=""):
+        self.config_path = config_path
+        self.env_path = env_path
+        self._export_dir = export_dir
+        self._stock_json_token = stock_json_token
+
+    def get(self, dotted, default=""):
+        if dotted == "remote.stock_json_token":
+            return self._stock_json_token
+        return default
+
+    def path(self, dotted, default=""):
+        return self._export_dir
+
+
+def _write_minimal_config(config_path):
+    config_path.write_text(
+        "database:\n"
+        '  path: "C:/fake/db.dblx"\n'
+        "\n"
+        "remote:\n"
+        "  enabled: false\n"
+        '  cloudflare_project_name: ""\n'
+        "  push_interval_seconds: 90\n"
+        '  export_dir: "remote-site"\n'
+        '  stock_json_token: ""\n',
+        encoding="utf-8",
+    )
+
+
+def test_provision_store_happy_path_full_sequence(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    _write_minimal_config(config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "SMTP_PASSWORD=\nCLOUDFLARE_API_TOKEN=\nCLOUDFLARE_ACCOUNT_ID=\n", encoding="utf-8"
+    )
+    export_dir = tmp_path / "remote-site"
+    cfg = FakeCfg(config_path, env_path, export_dir)
+
+    fake_session = FakeSession({
+        ("GET", "/user/tokens/verify"): FakeResponse(200, {
+            "success": True, "result": {"id": "tok0", "status": "active"},
+        }),
+        ("GET", "/pages/projects/storeb"): FakeResponse(404, {"success": False}),
+        ("POST", "/pages/projects"): FakeResponse(200, {"success": True, "result": {"name": "storeb"}}),
+        ("GET", "/user/tokens"): FakeResponse(200, {"success": True, "result": []}),
+        ("GET", "/user/tokens/permission_groups"): FakeResponse(200, {
+            "success": True, "result": [{"id": "g2", "name": "Cloudflare Pages Write"}],
+        }),
+        ("POST", "/user/tokens"): FakeResponse(200, {
+            "success": True, "result": {"id": "tok_abc", "value": "secretval"},
+        }),
+        ("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {"success": True, "result": []}),
+        # Same fixture serves both the broad and bypass app POSTs - the
+        # bypass path never reads self_hosted_domains, so the wildcard
+        # entries here are harmless for it.
+        ("POST", "/accounts/acct1/access/apps"): FakeResponse(200, {
+            "success": True,
+            "result": {
+                "id": "appX",
+                "self_hosted_domains": ["storeb.pages.dev", "*.storeb.pages.dev"],
+            },
+        }),
+    })
+    monkeypatch.setattr(provision.requests, "Session", lambda: fake_session)
+
+    push_calls = []
+
+    def fake_push_remote(fresh_cfg, *, project=None, export_dir=None):
+        push_calls.append((project, export_dir))
+        return True
+
+    monkeypatch.setattr(provision._remote, "push_remote", fake_push_remote)
+    monkeypatch.setattr(
+        provision, "verify_reachable",
+        lambda url, *, expect_status, **kw: True,
+    )
+
+    result = provision.provision_store(
+        cfg,
+        powerful_token="powerful123",
+        account_id="acct1",
+        project_slug="storeb",
+        owner_email="owner@example.com",
+    )
+
+    assert result.ok is True
+    assert "secretval" not in result.message
+
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "remote:\n  enabled: true" in config_text
+    assert 'cloudflare_project_name: "storeb"' in config_text
+
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "CLOUDFLARE_API_TOKEN=secretval" in env_text
+    assert "CLOUDFLARE_ACCOUNT_ID=acct1" in env_text
+
+    assert push_calls == [("storeb", export_dir)]
+    assert (export_dir / "index.html").is_file()
+
+
+def test_provision_store_refuses_when_watcher_token_already_exists(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    _write_minimal_config(config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text("", encoding="utf-8")
+    cfg = FakeCfg(config_path, env_path, tmp_path / "remote-site")
+
+    fake_session = FakeSession({
+        ("GET", "/user/tokens/verify"): FakeResponse(200, {
+            "success": True, "result": {"id": "tok0", "status": "active"},
+        }),
+        ("GET", "/pages/projects/storeb"): FakeResponse(200, {"success": True}),
+        ("GET", "/user/tokens"): FakeResponse(200, {
+            "success": True,
+            "result": [{"id": "tok1", "name": "pos-tool watcher - storeb"}],
+        }),
+    })
+    monkeypatch.setattr(provision.requests, "Session", lambda: fake_session)
+
+    result = provision.provision_store(
+        cfg,
+        powerful_token="powerful123",
+        account_id="acct1",
+        project_slug="storeb",
+        owner_email="owner@example.com",
+    )
+
+    assert result.ok is False
+    assert "already exists" in result.message
+
+
+def test_provision_store_rejects_invalid_slug(tmp_path):
+    cfg = FakeCfg(tmp_path / "config.yaml", tmp_path / ".env", tmp_path / "remote-site")
+
+    result = provision.provision_store(
+        cfg,
+        powerful_token="powerful123",
+        account_id="acct1",
+        project_slug="Store_B",
+        owner_email="owner@example.com",
+    )
+
+    assert result.ok is False
+    assert "not a valid" in result.message
