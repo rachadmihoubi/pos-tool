@@ -135,3 +135,72 @@ class TestApplyUpdateDispatch:
 
         assert main_module.main(["--apply-update"]) == 1
         assert "bad config" in capsys.readouterr().out
+
+
+def _patch_provision_cloudflare_deps(monkeypatch, *, config_error=None):
+    """
+    poslib.config is imported lazily inside main._provision_cloudflare.
+    poslib.provision.provision_store is imported at module level in main,
+    so must be patched on main_module itself.
+    """
+    import poslib.config as config_module
+    import poslib.provision as provision_module
+
+    calls = {"get_config": 0, "setup_logging": 0, "provision_store": []}
+
+    def fake_get_config():
+        calls["get_config"] += 1
+        if config_error is not None:
+            raise config_error
+        return FakeConfig()
+
+    def fake_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email):
+        calls["provision_store"].append({
+            "cfg": cfg,
+            "powerful_token": powerful_token,
+            "account_id": account_id,
+            "project_slug": project_slug,
+            "owner_email": owner_email,
+        })
+        return provision_module.ProvisionResult(True, "done")
+
+    monkeypatch.setattr(config_module, "get_config", fake_get_config)
+    monkeypatch.setattr(config_module, "setup_logging",
+                        lambda cfg: calls.__setitem__("setup_logging", calls["setup_logging"] + 1))
+    # provision_store is imported at module level in main, so patch it there
+    monkeypatch.setattr(main_module, "provision_store", fake_provision_store)
+    return calls
+
+
+def test_provision_cloudflare_reads_token_from_env_not_argv(monkeypatch, capsys):
+    monkeypatch.setenv("POS_TOOL_PROVISION_TOKEN", "secret-token")
+    calls = _patch_provision_cloudflare_deps(monkeypatch)
+
+    rc = main_module.main([
+        "--provision-cloudflare",
+        "--account-id", "acct1",
+        "--project-slug", "storeb",
+        "--owner-email", "owner@x.com",
+    ])
+
+    assert rc == 0
+    assert len(calls["provision_store"]) == 1
+    assert calls["provision_store"][0]["powerful_token"] == "secret-token"
+    assert calls["provision_store"][0]["account_id"] == "acct1"
+    assert calls["provision_store"][0]["project_slug"] == "storeb"
+    assert calls["provision_store"][0]["owner_email"] == "owner@x.com"
+    assert "POS_TOOL_PROVISION_TOKEN" not in os.environ  # discarded after use
+
+
+def test_provision_cloudflare_fails_cleanly_with_no_token_set(monkeypatch, capsys):
+    monkeypatch.delenv("POS_TOOL_PROVISION_TOKEN", raising=False)
+
+    rc = main_module.main([
+        "--provision-cloudflare",
+        "--account-id", "acct1",
+        "--project-slug", "storeb",
+        "--owner-email", "owner@x.com",
+    ])
+
+    assert rc == 1
+    assert "POS_TOOL_PROVISION_TOKEN" in capsys.readouterr().out
