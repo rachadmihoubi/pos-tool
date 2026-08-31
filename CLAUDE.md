@@ -12,7 +12,8 @@ Patch #3 features + silent background launch + remote viewing + Patch #4
 (Today drill-down, cash-realized sales, Tickets tab, Stock catalog tab,
 supplier purchase drill-down) are all built, tested (214 tests) and — for
 the background launch and remote viewing — actually deployed and verified
-live on this machine. See "What's left" below.
+live on the dev PC (see "Machine identity" above for which physical PC that
+is). See "What's left" below.
 
 ## The one rule that overrides everything else
 
@@ -21,17 +22,53 @@ copied to a temp folder before parsing (`poslib/etl.py:copy_database_readonly`).
 Every change must preserve this. If you're ever tempted to open the source path
 directly for anything other than a read-only copy, stop.
 
-## Machine-specific thing to fix on a new PC
+## Machine identity — check this before assuming which PC you're on
 
-`config.yaml` → `database.path` is currently:
-```
-C:/Users/RACHAD/Desktop/Base de données4.dblx
-```
-This is **this machine's** path — this is a dev PC, not the shop's actual till
-computer (no E: drive here). On a different PC the POS database will be at a
-different location. **Check this path is correct before running anything** —
-`poslib/etl.py` will raise a clear `ETLError` naming the missing file if it's
-wrong, so this fails loudly, not silently.
+This repo is git-synced (via the `SessionStart` hook's `git pull --ff-only`)
+across multiple physical PCs: rachad's own dev PC, and the store till PCs
+(each till computer also doubles as a place to continue developing pos-tool
+"while at work" — a plain git-clone checkout of this same repo, separate
+from that store's own packaged installer / `%LOCALAPPDATA%` install used
+for real production). Because `config.yaml` is git-tracked (see below) and
+genuinely differs per machine, inferring "which PC am I on" indirectly each
+session — file timestamps, whether a particular drive exists, whatever —
+has already caused real confusion at least once (see the 2026-08-29
+"till PC" notes further down this file, under "Store #1 migration...").
+**Don't infer it. Check the hostname against this table.**
+
+At the start of a session, run (PowerShell): `$env:COMPUTERNAME`
+
+| Hostname | Role | This machine's correct `database.path` |
+|---|---|---|
+| `DESKTOP-ERN4KAR` | **Dev PC** — rachad's own machine, not a real store (confirmed directly by the user, 2026-08-31) | `C:/Users/RACHAD/Desktop/pos tools/Base de données4.dblx` |
+| *(not yet recorded)* | Store PC — used both for the real till (packaged install) and for dev work on this git checkout while at work | Fill in on first session there: run `$env:COMPUTERNAME`, add a row to this table with that hostname and that store's real `.dblx` path, and commit it so every future session (on either machine) can look it up instead of re-guessing. |
+
+If a third machine (a second or third store) starts being used for dev
+work on this repo too, add its hostname here the same way — this table is
+meant to grow, not stay at two rows.
+
+### Why this matters: `config.yaml` is git-tracked and shared
+
+`config.yaml` (unlike `.env`, which is gitignored) is committed to this
+repo and pulled on every session start. Most of it — thresholds, digest
+settings, UI defaults — is meant to be shared across machines. But a few
+fields are genuinely machine-specific: `database.path` always, and
+potentially `remote.cloudflare_project_name` / `remote.stock_json_token` if
+a store PC's dev checkout is ever pointed at that store's real Cloudflare
+project instead of the dev/staging one. If two machines each commit
+`config.yaml` with their own different values for these fields, whichever
+machine pulls last silently gets the other machine's value.
+
+**`database.path` mostly fails loudly, not silently** — `poslib/etl.py`
+raises a clear `ETLError` naming the missing file if the path is wrong, so
+a wrong path after a pull is usually caught immediately rather than causing
+quiet bad behavior. **`remote.*` fields would NOT fail loudly** — a wrong
+project name or token would just silently push to (or fail to reach) the
+wrong Cloudflare project, with no error naming the mistake. **If
+`config.yaml` changes after a `git pull` you didn't expect, check it
+against this machine's row in the table above before assuming it's
+correct**, and restore this machine's own values rather than working
+against a value that just arrived from the other PC.
 
 ## Three original discoveries — do not "fix" these back
 
@@ -327,9 +364,13 @@ summary compresses).
 
 **Resumed and finished on store #1's own till PC, 2026-08-29 (same day, a
 later session)** — this machine turned out to be the actual shop till
-computer, not a second dev PC (see the till-PC identity note this session
-recorded); the branch's own "push to origin, resume on the store PC" plan
-worked exactly as intended:
+computer, not a second dev PC; the branch's own "push to origin, resume on
+the store PC" plan worked exactly as intended. (This is exactly the kind of
+identity ambiguity — inferred per-session instead of checked against a
+fixed record — that the "Machine identity" table near the top of this file,
+added 2026-08-31, now exists to prevent; if resuming work on that PC again,
+check its hostname against that table first instead of re-deriving this the
+same way.)
 
 - **Task 6 Step 4 + Task 7, combined as planned.** Real go-ahead asked and
   given (a fresh disposable Cloudflare token, `Pages:Edit` + `Access: Apps
