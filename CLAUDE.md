@@ -1006,6 +1006,79 @@ first check before assuming any earlier write-up in this file still
 describes the live state - two sessions in the same day already disagreed
 on this exact machine's state once.
 
+## Hub registration retry-on-stale-read fix (2026-08-31, same session) — a real hub-registration failure caught by a live installer run
+
+The same real 2026-08-31 dev-PC install (`v1.0.7`, see
+`%LOCALAPPDATA%\Shop Analysis\cloudflare_provision_log.txt` for the actual
+run) that exercised the hub auto-registration feature for the first time
+hit a genuine failure: the store itself provisioned and went live
+correctly, but `register_store_with_hub` raised
+`"The hub was pushed but this store does not appear in the re-fetched
+store list"` even though the push had, in fact, succeeded — confirmed by
+the very next line of the same log showing
+`push_remote(promakeupmihoubi-hub): created deployment in 1.7s`. Root
+cause, found by reading `_fetch_hub_registry_with_retry`'s own old
+behavior against this timeline: the post-push verification read got back
+a valid `200` less than a second after the deployment finished, but
+Cloudflare's production-domain routing hadn't caught up to serving that
+new deployment yet — so the `200` was real but stale, still showing the
+store list from *before* the push. The old retry logic only retried on
+exceptions/non-200s, so a stale-but-valid `200` was accepted as final on
+the very first attempt, and the retry budget (built for exactly this kind
+of propagation lag — see `verify_reachable`'s own comment on 1-2 minute
+propagation) never actually got used.
+
+**Fixed in `poslib/provision.py`**, reviewed by an opus-reviewer pass
+before shipping (per the global CLAUDE.md's financial/access-config gate —
+this touches the hub's shared registry, a write that can wipe every other
+store's entry if handled wrong):
+- `_fetch_hub_registry_with_retry` gained an optional `until` predicate —
+  a fetch that succeeds but whose *content* doesn't satisfy `until` is now
+  retried the same as a transient failure, not accepted as final. If every
+  attempt's content still fails `until`, the last fetched result is
+  returned (not raised) — a successful fetch, just not what the caller
+  wanted; the caller decides what a still-missing entry means.
+- The **pre-push** read now also retries via `until=lambda r: bool(r.get
+  ("stores"))`. Without this, a transient blip on the pre-push read could
+  be misread as "the hub file doesn't exist yet" (`fetch_hub_registry`
+  maps any 404 to an empty registry, and a 404 isn't an exception this
+  function already retried on) — since a Pages deployment always fully
+  replaces the prior file set, that misread would have pushed a registry
+  containing only the store being provisioned, silently wiping every
+  previously-registered store. A genuinely empty hub (or one still empty
+  after retrying) falls through unchanged — this only guards against
+  mistaking a transient miss for a real one.
+- The post-push `until` predicate (`_entry_live`) matches the exact entry
+  just written — **name AND url**, not just the store's hostname. Matching
+  on hostname alone would be satisfied by a stale pre-push-shaped read too,
+  whenever the store already had a hub entry (any re-provision, e.g. a
+  rotated `stock_json_token` changing the filename) — since the merge
+  updates that entry in place, a hostname-only check can't tell "still
+  showing the old url" from "showing the new one," which would have
+  defeated the whole fix for the single most common real case
+  (re-running provisioning on an already-registered store).
+- The failure message (both `register_store_with_hub`'s own raise and
+  `provision_store`'s `HUB REGISTRATION FAILED` log/MsgBox note) was
+  reworded to match the actually-correct manual recovery: fetch the hub's
+  live registry, merge this store's entry into the local hub-site
+  registry file, then redeploy with
+  `tools/deploy_hub.py` — **never** hand-push a registry containing only
+  this one store, since `deploy_hub.py` pushes `hub-site/` verbatim and
+  that would drop every other store. The original message's "add it by
+  hand" phrasing didn't say this and could have led to exactly that
+  mistake if followed literally.
+
+12 new/updated tests in `tests/test_provision.py` cover the retry-on-
+content-mismatch behavior, the pre-push empty-registry guard, and the
+exact name+url matching (a hostname-only match would have falsely
+"verified" a re-provision that actually still showed the old url). Full
+suite green: `pytest tests -q --deselect tests/test_export_static.py`,
+406 passed. **Not yet re-verified against a real live hub push** — same
+standing "confirm against the real thing" discipline as everywhere else
+in this file; the next real provisioning run (or hub redeploy) is what
+actually confirms this fixes the failure mode seen in the 2026-08-31 log,
+this write-up only establishes the fix is logically sound and unit-tested.
+
 ## Hub search shows cost, not price (2026-08-27/28) — and why it's an unguessable filename, not a real login
 
 The owner asked for two changes to the hub's cross-store search after his

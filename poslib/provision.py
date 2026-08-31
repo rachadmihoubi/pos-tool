@@ -38,7 +38,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 import requests
@@ -744,24 +744,52 @@ def fetch_hub_registry(hub_domain: str) -> dict:
 
 
 def _fetch_hub_registry_with_retry(hub_domain: str, *, max_attempts: int = 4,
-                                    delay_seconds: float = 20.0) -> dict:
+                                    delay_seconds: float = 20.0,
+                                    until: Callable[[dict], bool] | None = None) -> dict:
     """
     Same as fetch_hub_registry, but tolerant of Access propagation lag - used
-    only for the post-push verification read, where the bypass app may have
-    been created moments ago on a brand-new hub (see verify_reachable's own
-    comment on propagation taking 1-2 minutes, empirically). Re-raises the
-    last error if every attempt fails.
+    for both the pre-push read (resilience against a transient blip before
+    trusting a 404 as "hub is genuinely empty") and the post-push
+    verification read, where the bypass app may have been created moments
+    ago on a brand-new hub (see verify_reachable's own comment on
+    propagation taking 1-2 minutes, empirically). Re-raises the last error
+    if every attempt raises.
+
+    `until`, if given, is also grounds for retrying: a fetch that succeeds
+    (200, valid JSON) but whose content doesn't satisfy `until` is retried
+    the same as a transient failure, not accepted as final. This matters
+    because Cloudflare's production-domain routing does not necessarily
+    serve a deployment the instant its own create call returns - a real
+    2026-08-31 run observed the post-push verification read return a valid
+    200 still showing the OLD store list within about a second of the push
+    completing, well before this function's retry budget was ever used
+    (the old code only retried on exceptions, so a valid-but-stale 200 was
+    treated as final on the very first attempt). If every attempt's content
+    fails `until`, the LAST fetched result is returned (not raised) - it's a
+    successful fetch, just not the content the caller wanted; the caller
+    decides what a still-missing entry means.
     """
     last_exc: ProvisionError | None = None
+    last_result: dict | None = None
     for attempt in range(max_attempts):
         try:
-            return fetch_hub_registry(hub_domain)
+            result = fetch_hub_registry(hub_domain)
         except ProvisionError as exc:
             last_exc = exc
             log.info("_fetch_hub_registry_with_retry(%s): attempt %d/%d failed: %s",
                       hub_domain, attempt + 1, max_attempts, exc)
             if attempt < max_attempts - 1:
                 time.sleep(delay_seconds)
+            continue
+        if until is None or until(result):
+            return result
+        last_result = result
+        log.info("_fetch_hub_registry_with_retry(%s): attempt %d/%d succeeded but "
+                  "content didn't match yet, retrying", hub_domain, attempt + 1, max_attempts)
+        if attempt < max_attempts - 1:
+            time.sleep(delay_seconds)
+    if last_result is not None:
+        return last_result
     assert last_exc is not None
     raise last_exc
 
@@ -790,7 +818,20 @@ def register_store_with_hub(
     anyway.
     """
     hub_domain = f"{HUB_PROJECT_SLUG}.pages.dev"
-    registry = fetch_hub_registry(hub_domain)
+    # Retried until it sees at least one store, not a single fetch or a bare
+    # exception-only retry: fetch_hub_registry maps ANY 404 to "empty
+    # registry" (the legitimate first-ever-store case), and a 404 is not an
+    # exception - a transient blip here (the same production-domain routing
+    # lag this function's docstring describes) would otherwise be accepted
+    # as "the hub file doesn't exist yet" on attempt 1, and this run would
+    # push a registry containing only itself, silently wiping every
+    # previously-registered store (a Pages deployment always fully replaces
+    # the prior file set). A hub that is genuinely empty (or still empty
+    # after retrying) falls through unchanged - this only guards against
+    # mistaking a transient miss for a real one.
+    registry = _fetch_hub_registry_with_retry(
+        hub_domain, until=lambda r: bool(r.get("stores"))
+    )
 
     new_url = f"https://{store_domain}/{store_stock_filename}"
     if registry["hub_version"] > HUB_VERSION:
@@ -835,12 +876,35 @@ def register_store_with_hub(
             f'this store by hand instead: {{"name": "{store_name}", "url": "{new_url}"}}'
         )
 
-    verified = _fetch_hub_registry_with_retry(hub_domain)
-    if not any(_hostname(e.get("url", "")) == store_domain for e in verified.get("stores", [])):
+    def _entry_live(r: dict) -> bool:
+        # Matches the exact entry just written (name AND url), not just the
+        # store's hostname. Matching on hostname alone is satisfied by a
+        # STALE pre-push read too whenever this store already had a hub
+        # entry (any re-provision, e.g. a rotated stock_json_token) - the
+        # merge above updates that entry in place, so a hostname-only check
+        # can't tell "still showing the old url" from "showing the new one".
+        # That would have defeated this whole retry-on-content fix for the
+        # single most common case (re-running provisioning on an
+        # already-registered store), by declaring success on the very first,
+        # possibly-stale attempt every time.
+        return any(e.get("name") == store_name and e.get("url") == new_url
+                   for e in r.get("stores", []))
+
+    verified = _fetch_hub_registry_with_retry(hub_domain, until=_entry_live)
+    if not _entry_live(verified):
         raise ProvisionError(
-            "The hub was pushed but this store does not appear in the "
-            f're-fetched store list - add it by hand instead: '
-            f'{{"name": "{store_name}", "url": "{new_url}"}}'
+            "The hub was pushed but this store still doesn't show up in the "
+            "re-fetched store list after retrying - this is very likely "
+            "Cloudflare's production-domain routing still catching up to "
+            "the deployment that was just pushed (the push itself "
+            "succeeded), but wait a minute and reload the hub before "
+            "assuming this failed. If it's still missing after that: "
+            "download the hub's live registry file, add/update this "
+            f"store's entry in the local hub-site/{HUB_REGISTRY_FILENAME} to "
+            "match it, then run tools/deploy_hub.py to redeploy - never "
+            "push a hand-crafted registry containing only this store, since "
+            "deploy_hub.py pushes hub-site/ verbatim and that would drop "
+            f'every other store: {{"name": "{store_name}", "url": "{new_url}"}}'
         )
 
 
@@ -1016,8 +1080,12 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
                 hub_note = (
                     f"{_HUB_REGISTRATION_FAILED_MARKER} - the store itself is "
                     f"live and correctly gated, but adding it to the cross-store "
-                    f"hub failed: {exc} Add it by hand instead: "
-                    f'{{"name": "{hub_store_name}", '
+                    f"hub failed: {exc} To add it by hand: download the hub's "
+                    f"live registry file, add/update this store's entry in the "
+                    f"local hub-site/{HUB_REGISTRY_FILENAME} to match it, then "
+                    f"run tools/deploy_hub.py to redeploy - never push a "
+                    f"hand-crafted registry containing only this store, that "
+                    f'drops every other store: {{"name": "{hub_store_name}", '
                     f'"url": "https://{domain}/{stock_json_filename}"}}'
                 )
 

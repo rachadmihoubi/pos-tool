@@ -1215,6 +1215,52 @@ def test_fetch_hub_registry_with_retry_succeeds_after_transient_failure(monkeypa
     assert len(calls) == 2
 
 
+def test_fetch_hub_registry_with_retry_retries_on_content_mismatch(monkeypatch):
+    # Root cause of a real 2026-08-31 failure: the deployment succeeds and
+    # Cloudflare returns 200 immediately, but the store's own production
+    # domain can take a few seconds to start routing to the deployment that
+    # was JUST created - the exact same propagation lag verify_reachable
+    # already retries around elsewhere in this file. A 200 with valid JSON
+    # that simply doesn't contain what was just pushed must be retried too,
+    # not accepted as if it were final.
+    stale = {"hub_version": 1, "stores": [{"name": "A", "url": "https://a.pages.dev/x.json"}]}
+    fresh = {"hub_version": 1, "stores": [
+        {"name": "A", "url": "https://a.pages.dev/x.json"},
+        {"name": "B", "url": "https://b.pages.dev/y.json"},
+    ]}
+    calls = []
+
+    def fake_get(url, **kw):
+        calls.append(1)
+        return FakeResponse(200, stale if len(calls) < 3 else fresh)
+
+    monkeypatch.setattr(provision.requests, "get", fake_get)
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
+
+    registry = provision._fetch_hub_registry_with_retry(
+        "hub.pages.dev", max_attempts=5, delay_seconds=0,
+        until=lambda r: any(e["url"] == "https://b.pages.dev/y.json" for e in r["stores"]),
+    )
+    assert registry == fresh
+    assert len(calls) == 3
+
+
+def test_fetch_hub_registry_with_retry_returns_last_result_when_predicate_never_satisfied(monkeypatch):
+    # Exhausting every attempt without the predicate ever matching must not
+    # raise - it's a successful fetch, just not the content the caller
+    # wanted. The caller (register_store_with_hub) decides what a
+    # still-missing entry means and raises its own, more specific error.
+    stale = {"hub_version": 1, "stores": []}
+    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: FakeResponse(200, stale))
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
+
+    registry = provision._fetch_hub_registry_with_retry(
+        "hub.pages.dev", max_attempts=3, delay_seconds=0,
+        until=lambda r: False,
+    )
+    assert registry == stale
+
+
 def test_register_store_with_hub_refuses_when_live_version_is_newer(tmp_path, monkeypatch):
     # register_store_with_hub must raise before ever touching `session` or
     # hub_site_dir - see this section's header comment for why (never push
@@ -1222,6 +1268,11 @@ def test_register_store_with_hub_refuses_when_live_version_is_newer(tmp_path, mo
     monkeypatch.setattr(provision.requests, "get", lambda url, **kw: FakeResponse(200, {
         "hub_version": provision.HUB_VERSION + 1, "stores": [],
     }))
+    # stores stays [] forever, so the pre-push read's until=bool(stores)
+    # predicate never matches and retries the full max_attempts before
+    # falling through to the version-gate check - mock sleep so that
+    # doesn't cost real wall-clock time in the test.
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
     cfg = FakeCfg(tmp_path / "config.yaml", tmp_path / ".env", tmp_path / "remote-site")
 
     with pytest.raises(provision.ProvisionError, match="newer"):
@@ -1297,7 +1348,15 @@ def test_register_store_with_hub_replaces_existing_entry_for_same_domain(tmp_pat
         "hub_version": provision.HUB_VERSION,
         "stores": [{"name": "Store B (old)", "url": "https://storeb.pages.dev/stock-oldtoken.json"}],
     }
-    get_responses = iter([FakeResponse(200, existing), FakeResponse(200, existing)])
+    # Post-push verification re-fetch must show the store's NEW url to
+    # satisfy _entry_live - a stale (pre-push) response here would trigger
+    # real retries (unmocked time.sleep) and eventually StopIteration once
+    # this iterator's items run out.
+    updated = {
+        "hub_version": provision.HUB_VERSION,
+        "stores": [{"name": "Store B", "url": "https://storeb.pages.dev/stock-newtoken.json"}],
+    }
+    get_responses = iter([FakeResponse(200, existing), FakeResponse(200, updated)])
     monkeypatch.setattr(provision.requests, "get", lambda url, **kw: next(get_responses))
 
     hub_domain = f"{provision.HUB_PROJECT_SLUG}.pages.dev"
@@ -1348,6 +1407,11 @@ def test_register_store_with_hub_raises_when_push_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(provision.requests, "get", lambda url, **kw: FakeResponse(200, {
         "hub_version": provision.HUB_VERSION, "stores": [],
     }))
+    # This registry is genuinely, permanently empty (stores: []), so the
+    # pre-push read's until=bool(stores) predicate never matches and retries
+    # the full max_attempts before falling through - mock sleep so that
+    # doesn't cost real wall-clock time in the test.
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
     hub_domain = f"{provision.HUB_PROJECT_SLUG}.pages.dev"
     session = _QueuedSession(
         get_responses={
@@ -1381,9 +1445,12 @@ def test_register_store_with_hub_raises_when_verification_missing_entry(tmp_path
     hub_site_dir = _write_hub_site_dir(tmp_path)
     cfg = FakeCfg(tmp_path / "config.yaml", tmp_path / ".env", tmp_path / "remote-site")
     empty = {"hub_version": provision.HUB_VERSION, "stores": []}
-    # One pre-push read + up to 4 post-push retry reads, all still empty -
-    # the pushed store never shows up.
-    get_responses = iter([FakeResponse(200, empty)] * 5)
+    # Up to 4 pre-push retry reads (until=bool(stores) never matches a
+    # genuinely-empty registry either) + up to 4 post-push retry reads, all
+    # still empty - the pushed store never shows up. Queue generously past
+    # the 8-call worst case so a retry-count tweak doesn't reintroduce a
+    # StopIteration here.
+    get_responses = iter([FakeResponse(200, empty)] * 10)
     monkeypatch.setattr(provision.requests, "get", lambda url, **kw: next(get_responses))
     monkeypatch.setattr(provision.time, "sleep", lambda s: None)
 
@@ -1407,7 +1474,7 @@ def test_register_store_with_hub_raises_when_verification_missing_entry(tmp_path
     )
     monkeypatch.setattr(provision._remote, "push_remote", lambda *a, **kw: True)
 
-    with pytest.raises(provision.ProvisionError, match="does not appear"):
+    with pytest.raises(provision.ProvisionError, match="still doesn't show up"):
         provision.register_store_with_hub(
             session=session, account_id="acct1", owner_email="owner@example.com",
             store_name="Store B", store_domain="storeb.pages.dev",
@@ -1457,6 +1524,11 @@ def test_provision_store_hub_registration_failure_does_not_fail_overall_result(t
     monkeypatch.setattr(provision.requests, "get", lambda url, **kw: FakeResponse(200, {
         "hub_version": provision.HUB_VERSION + 1, "stores": [],
     }))
+    # stores stays [] forever, so the pre-push read's until=bool(stores)
+    # predicate never matches and retries the full max_attempts before
+    # falling through to the version-gate check - mock sleep so that
+    # doesn't cost real wall-clock time in the test.
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
 
     result = provision.provision_store(
         cfg,
@@ -1512,20 +1584,33 @@ def test_provision_store_registers_with_hub_on_success(tmp_path, monkeypatch):
     monkeypatch.setattr(provision.requests, "Session", lambda: session)
     monkeypatch.setattr(provision, "verify_reachable", lambda url, *, expect_status, **kw: True)
 
-    hub_registry = {"hub_version": provision.HUB_VERSION, "stores": []}
-    get_responses = iter([
-        FakeResponse(200, hub_registry),  # pre-push read
-        FakeResponse(200, {  # post-push verification read
-            "hub_version": provision.HUB_VERSION,
-            "stores": [{"name": "Store B", "url": "https://storeb.pages.dev/stock-bbb.json"}],
-        }),
-    ])
-    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: next(get_responses))
+    hub_registry_empty = {"hub_version": provision.HUB_VERSION, "stores": []}
+    # provision_store generates the store's stock-filename token itself, so
+    # the exact URL register_store_with_hub writes can't be predicted here -
+    # echo back whatever was actually pushed instead of guessing it. Before
+    # the push, this is empty (a legitimate first-ever-store registry),
+    # which never satisfies the pre-push read's until=bool(stores)
+    # predicate, so it retries the full max_attempts before falling through
+    # to use it anyway - that's fine, sleep is mocked below.
+    pushed_registry: dict = {}
+
+    def fake_get(url, **kw):
+        if pushed_registry.get("stores"):
+            return FakeResponse(200, pushed_registry)
+        return FakeResponse(200, hub_registry_empty)
+
+    monkeypatch.setattr(provision.requests, "get", fake_get)
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
 
     push_calls = []
 
     def fake_push_remote(cfg_arg, *, project=None, export_dir=None, api_token=None):
         push_calls.append(project)
+        if project == provision.HUB_PROJECT_SLUG:
+            data = json.loads(
+                (export_dir / provision.HUB_REGISTRY_FILENAME).read_text(encoding="utf-8")
+            )
+            pushed_registry.update(data)
         return True
 
     monkeypatch.setattr(provision._remote, "push_remote", fake_push_remote)
