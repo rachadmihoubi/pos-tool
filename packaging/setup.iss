@@ -8,7 +8,7 @@
 
 [Setup]
 AppName={#MyAppName}
-AppVersion=1.0.6
+AppVersion=1.0.7
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -32,15 +32,14 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Filename: "{app}\{#MyAppExeName}"; Description: "Open Shop Analysis now"; Flags: nowait postinstall skipifsilent
 Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Watcher"" /tr ""\""{app}\{#MyAppExeName}\"" --watcher"" /sc onlogon /rl limited /delay 0000:30"; Flags: runhidden
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--watcher"; Flags: nowait runhidden
-; Second, narrow, always-elevated helper task - the watcher above stays
-; deliberately de-elevated (least privilege), but the silent auto-update it
-; may find needs admin rights to install into Program Files. Running this
-; one as SYSTEM means it never hits an interactive UAC prompt (same
-; mechanism Windows' own built-in SilentCleanup task relies on) and needs no
-; stored password. --data-dir is this (elevated, installing) user's own
-; %LOCALAPPDATA%, captured now because SYSTEM's own %LOCALAPPDATA% is not
-; the shop's - see docs/superpowers/specs/2026-08-27-update-elevation-fix.md.
-Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Updater"" /tr ""\""{app}\{#MyAppExeName}\"" --apply-update --data-dir \""{localappdata}\Shop Analysis\"""" /sc onlogon /rl highest /ru SYSTEM /delay 0000:45"; Flags: runhidden
+; The second, always-elevated "Updater" task used to be created here too,
+; as a passive [Run] entry - moved into CurStepChanged's CreateUpdaterTask
+; procedure below (2026-08-31) after a real install left it silently
+; missing with no error anywhere: a passive [Run] entry's exit code is
+; never checked, so a real failure (the exact command was independently
+; verified correct from an elevated Command Prompt - this isn't a syntax
+; problem) was being swallowed with zero visibility. See CreateUpdaterTask's
+; own comment for the full story.
 
 [UninstallRun]
 ; Runs before file removal (Inno's default [UninstallRun] ordering). Without
@@ -391,6 +390,72 @@ begin
     Result := ' --hub-store-name "' + CloudflareHubNameEdit.Text + '"';
 end;
 
+procedure CreateUpdaterTask;
+var
+  ResultCode: Integer;
+  Output: TExecOutput;
+  Message: String;
+  I: Integer;
+  Params: String;
+begin
+  // Second, narrow, always-elevated helper task - the watcher (created
+  // above, in [Run]) stays deliberately de-elevated (least privilege), but
+  // the silent auto-update it may find needs admin rights to install into
+  // Program Files. Running this one as SYSTEM means it never hits an
+  // interactive UAC prompt (same mechanism Windows' own built-in
+  // SilentCleanup task relies on) and needs no stored password.
+  // --data-dir is this (elevated, installing) user's own %LOCALAPPDATA%,
+  // captured now because SYSTEM's own %LOCALAPPDATA% is not the shop's -
+  // see docs/superpowers/specs/2026-08-27-update-elevation-fix.md.
+  //
+  // Uses ExecAndCaptureOutput (like the Cloudflare provisioning call
+  // below) instead of a passive [Run] entry, specifically so a failure is
+  // visible - see this section's [Run]-comment for why that mattered: a
+  // real install left this task silently missing, with the exact same
+  // command line independently verified to work when typed by hand into
+  // an elevated Command Prompt. That rules out a syntax problem; the
+  // remaining candidates are something about the installer's own
+  // execution context - this instrumentation is what will actually show
+  // the real error on the next occurrence, instead of guessing again.
+  Params := '/create /f /tn "Shop Analysis - Updater" /tr "\"' +
+    ExpandConstant('{app}\{#MyAppExeName}') + '\" --apply-update --data-dir \"' +
+    ExpandConstant('{localappdata}\Shop Analysis') + '\"" ' +
+    '/sc onlogon /rl highest /ru SYSTEM /delay 0000:45';
+
+  if ExecAndCaptureOutput('schtasks.exe', Params, '', SW_HIDE, ewWaitUntilTerminated,
+     ResultCode, Output) then
+  begin
+    Message := '';
+    for I := 0 to GetArrayLength(Output.StdOut) - 1 do
+      Message := Message + Output.StdOut[I] + #13#10;
+    for I := 0 to GetArrayLength(Output.StdErr) - 1 do
+      Message := Message + Output.StdErr[I] + #13#10;
+    ForceDirectories(ExpandConstant('{localappdata}\Shop Analysis'));
+    if ResultCode = 0 then
+      SaveStringToFile(ExpandConstant('{localappdata}\Shop Analysis\updater_task_log.txt'),
+        'Updater task created successfully:' + #13#10#13#10 + Message, False)
+    else
+    begin
+      SaveStringToFile(ExpandConstant('{localappdata}\Shop Analysis\updater_task_log.txt'),
+        'Could not create the Updater task (exit code ' + IntToStr(ResultCode) + '):' + #13#10#13#10 +
+        Message, False);
+      MsgBox('Could not set up the background auto-update task:' + #13#10#13#10 + Message + #13#10#13#10 +
+             'The app itself is fully installed and works normally - only ' +
+             'silent auto-updates will not run until this is fixed. Details were saved to ' +
+             'updater_task_log.txt in the app data folder.', mbError, MB_OK);
+    end;
+  end
+  else
+  begin
+    ForceDirectories(ExpandConstant('{localappdata}\Shop Analysis'));
+    SaveStringToFile(ExpandConstant('{localappdata}\Shop Analysis\updater_task_log.txt'),
+      'Could not launch schtasks.exe at all.', False);
+    MsgBox('Could not launch schtasks.exe to set up the background auto-update task. ' +
+           'The app itself is fully installed and works normally - only silent ' +
+           'auto-updates will not run until this is fixed.', mbError, MB_OK);
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
@@ -400,6 +465,8 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
+    CreateUpdaterTask;
+
     if Assigned(DatabaseEdit) and (DatabaseEdit.Text <> '') and FileExists(DatabaseEdit.Text) then
       WriteDatabaseConfig(DatabaseEdit.Text);
 
