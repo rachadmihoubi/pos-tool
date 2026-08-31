@@ -425,12 +425,22 @@ Key decisions worth knowing without re-reading the whole spec:
 
 ## Store #1 migration to the packaged installer — PAUSED, STUCK, 2026-08-29 (dev-PC fixes applied same day, live re-verification still outstanding)
 
-**Status: a full round of fixes for this incident is written, tested, and
-committed on the dev PC — but per this file's own repeated "don't call it
-fixed until it's confirmed on the real thing" rule (see the `_redirects`
-section further down, which says "don't repeat that a third time"), this
-is NOT yet confirmed to fix the actual hang. Read the "Dev-PC fix round"
-subsection below before attempting another real install.**
+**Status: RESOLVED 2026-08-31 — see "Cross-store hub auto-registration +
+installer reliability fixes" below.** The IPv4/timeout/watchdog fix round
+described here turned out to be necessary but not sufficient; the actual
+remaining stuck-install cause (found 2026-08-31, on this same real till
+PC) was unrelated to networking at all — see that section for the full
+story, including two more real installer bugs found and fixed the same
+session. Left the rest of this section intact as the historical record of
+what was tried and ruled out.
+
+**Status (as originally written, 2026-08-29): a full round of fixes for
+this incident is written, tested, and committed on the dev PC — but per
+this file's own repeated "don't call it fixed until it's confirmed on the
+real thing" rule (see the `_redirects` section further down, which says
+"don't repeat that a third time"), this is NOT yet confirmed to fix the
+actual hang. Read the "Dev-PC fix round" subsection below before
+attempting another real install.**
 
 ### What this was
 
@@ -670,6 +680,194 @@ handler, idempotent token reuse, watchdog — this whole subsection).
 Related commits this session: `98e32d7`, `2ba2acb`, `f840460` (earlier,
 unrelated Component 5 fixes, all already verified working), then
 `ff86064` (push retry), `2409f85` (IPv4 fix) for this specific incident.
+
+## Cross-store hub auto-registration + installer reliability fixes (2026-08-31) — built, live-verified, two real installer bugs found and fixed
+
+### What was built
+
+Per the owner's request ("finish the store to hub automatically"), adding
+a newly provisioned store to the shared multi-store hub — previously a
+fully manual step (old `INSTALL_GUIDE.md` Step 6: hand-edit
+`hub-site/stores.json` on the dev PC, `tools/deploy_hub.py`, commit) — is
+now automatic, as the final step of `provision_store()`
+(`poslib/provision.py`'s new `register_store_with_hub()`).
+
+**Design was reviewed by an Opus subagent before any code was written**
+(per this file's standing installer/Access-config gate). The reviewer
+rejected the first draft — reading the hub's current store list through a
+temporary create-then-delete Cloudflare Access bypass app — because this
+exact provisioning code path has a real history of being killed mid-run
+(the three stuck-install attempts in the section above), and a delete
+that never runs would leave the hub's entire store list (every store's
+`stock-<token>.json` URL, in one place) permanently public. The shipped
+design instead reuses the same accepted tradeoff already live for each
+store's own `stock-<token>.json`: the hub's store list now lives at a
+**permanent** unguessable filename,
+`hub-site/stores-41582b721adbd68e4fb50f5245f0e56b.json` (renamed from the
+old plain `stores.json`; `hub-site/app.js`'s `STORES_JSON` constant must
+match this exactly), behind a permanent bypass Access app created once
+and left in place — no create/delete churn, no ungated window.
+`HUB_VERSION` (currently `1`, in both `poslib/provision.py` and inside the
+registry file itself) guards against a stale installer build's bundled
+`hub-site/` silently rolling back the live hub's design — a provisioning
+run refuses to touch the hub at all if the live `hub_version` is newer
+than what it knows. A hub-registration failure never fails or rolls back
+the store's own already-successful provisioning (loud `MsgBox` +
+`HUB REGISTRATION FAILED` marker in the log instead — see
+`register_store_with_hub`'s own docstring in `poslib/provision.py` for
+the full design rationale). New wizard field: "Store's display name on
+the hub" (blank = skip). `hub-site/{index.html,app.js,style.css}` are now
+bundled into the installer (`packaging/pos-tool.spec`); the tokenized
+registry file itself is deliberately never bundled (see the spec's own
+comment) — `register_store_with_hub` always writes a freshly-fetched-and-
+merged copy of that one file. Commit `a6869cd`.
+
+**One-time live cutover already done this session**: the real hub
+(`promakeupmihoubi-hub.pages.dev`) now serves the new `app.js` reading the
+new registry filename, seeded with Boumati's pre-existing entry — done
+using a disposable owner-supplied token (`Pages:Edit` +
+`Access: Apps and Policies:Edit`), revoked immediately after, same pattern
+as every other live-account change in this project's history. Verified
+directly: `GET /` → 302 (still gated), `GET /stores-<token>.json` → 200
+with correct JSON (one propagation-lag blip on the very first check,
+resolved after ~15s — same class of transient already documented
+elsewhere in this file, not a bug).
+
+### Two real, pre-existing installer bugs found by live testing tonight (unrelated to the hub feature itself)
+
+1. **The "Shop Analysis - Updater" scheduled task was silently failing to
+   be created on every fresh install** — found because this session did
+   several genuine from-scratch reinstalls of store #1 to test the hub
+   feature, and `schtasks /query`/`Get-ScheduledTask` kept showing no
+   Updater task at all (only Watcher). The task's `schtasks /create`
+   command lived in a passive `[Run]` entry (`packaging/setup.iss`),
+   whose exit code Inno Setup never checks by default — so a real failure
+   there was invisible. The exact command line was extracted
+   programmatically from the compiled `.iss` source (not hand-traced —
+   hand-tracing the nested `\"`-escaping was error-prone) and verified
+   correct by typing it into an elevated Command Prompt, which succeeded
+   immediately — ruling out a syntax bug. Fixed by moving it into a new
+   `CreateUpdaterTask` procedure, called from `CurStepChanged(ssPostInstall)`
+   using `ExecAndCaptureOutput` (same pattern as the Cloudflare
+   provisioning call), so a failure now writes
+   `updater_task_log.txt` and shows a clear `MsgBox` instead of vanishing.
+   **Confirmed fixed on a real install**: the next real reinstall's
+   `updater_task_log.txt` read `Updater task created successfully`, with
+   `schtasks`'s own "Opération réussie" in the captured output. The exact
+   underlying reason the passive `[Run]` version failed while this
+   `Exec`-based version (using the byte-identical command) succeeds is
+   still not fully understood — plausibly something about `[Run]`
+   entries' own execution context vs. an explicit `Exec()` call — but the
+   fix works, is now instrumented for next time either way, and this is a
+   defensible place to stop chasing it further. Published as `v1.0.7`,
+   commit `73b416d`.
+2. **A packaging self-inflicted bug, caught and corrected the same
+   session**: `v1.0.5` was built by running PyInstaller *before* bumping
+   `VERSION` to 1.0.5, so that release's installer-level `AppVersion`
+   correctly said 1.0.5 but the internal `VERSION` file bundled inside it
+   (read by `poslib/updater.py`'s `current_version()`, logged at the top
+   of every `provision_store()` run) still said 1.0.4 — caught directly
+   from a real install's own log line (`build version (1, 0, 4)`).
+   Corrected in `v1.0.6` (commit `b21ed23`) by rebuilding cleanly with
+   `VERSION` bumped first and confirming the bundled copy before
+   compiling — worth remembering as a build-order gotcha for any future
+   release: **always bump `VERSION` before running PyInstaller, and
+   verify `dist/ShopAnalysis/VERSION` before compiling the installer**,
+   not after.
+
+### A red herring investigated at length, correctly ruled out
+
+Repeated `push_remote()` failures during tonight's testing (`Connection
+aborted... write operation timed out`, and once `SSLError(SSLWantWriteError)`)
+led to an extended live investigation: connection speed test (fine, 21.6
+Mbps up), Path MTU Discovery blackhole test via `ping -f -l <size>` at
+increasing sizes up to 1500 (clean, no blackhole), then found Kaspersky +
+**Kaspersky VPN** installed and running (`KSDE5.7` service) — a strong,
+well-documented candidate for exactly this symptom (SSL inspection/VPN
+tunnel interfering with uploads while small requests and speed tests look
+fine). Quit Kaspersky, then had to separately stop the VPN service itself
+(quitting the tray app doesn't stop the underlying Windows service — Defender-
+style self-protection also blocked `net stop`, had to go through the
+Kaspersky VPN app's own Disconnect/Exit). **None of this was actually the
+cause** — pushes kept failing identically afterward. A `curl` test to the
+exact same endpoint succeeded instantly, as did several hand-written
+Python `requests` reproductions using the real account credentials in the
+real sequence (`_get_upload_token` then `_upload_assets`, including with
+`poslib.remote`'s own IPv4-only monkeypatch active) — all of which
+succeeded fast, while calling the real `push_remote(cfg)` kept failing
+seconds apart on the same machine. **The actual cause, found by finally
+checking what was actually in the export directory**: `remote-site/` had
+**263 MB across 12,626 files** — a full leftover export from an earlier
+test cycle that a manual "wipe `%LOCALAPPDATA%\Shop Analysis`" step
+hadn't actually cleared. My own hand-written reproductions all used a
+single tiny fake file, which is why they never reproduced the failure.
+Clearing the stale directory and retrying with the real ~2-file
+placeholder succeeded in ~5 seconds. **Lesson for next time this comes
+up**: check the actual size/file-count of what's being pushed *before*
+investigating the network stack — Kaspersky/VPN/Defender were a genuine,
+reasonable-looking lead that cost real time chasing, for a cause that
+turned out to be mundane. (Windows Defender was also checked along the
+way — found a real detection-log entry for a `Setup.exe` download from
+`release-assets.githubusercontent.com` on 2026-08-29, which is a
+plausible reason to eventually look at code-signing the installer, but a
+Defender exclusion added during this investigation did not fix the actual
+symptom either, consistent with the stale-directory explanation being the
+real one.)
+
+### Still open — a real, currently unresolved reliability gap, found by this same testing (not caused by tonight's changes)
+
+On the cleanest full reinstall of the night (v1.0.7, genuinely empty
+`%LOCALAPPDATA%\Shop Analysis`), provisioning itself succeeded end-to-end
+in 40.3s including hub registration — confirming the hub feature works
+correctly on a true first-time install. But the watcher's own **first
+real** export (the full remote-parity product/customer drill-down export
+— see the "Remote product/customer drill-downs now exported in full"
+section above — 4,205 pages × 3 languages, 12,625 files, ~263 MB for this
+store) **also failed to push**, with the identical
+`Connection aborted... write operation timed out` symptom. This is a
+different situation from the red herring above: this is a genuinely
+large, real, current export, not stale leftover data. `_run_remote_push()`
+already retries automatically on the next real database change (see
+`watcher.py`), but if pushing an export this size is unreliable on this
+connection via the current mechanism (many sequential small HTTP calls,
+each carrying base64-encoded file content — see `poslib/remote.py`'s
+`_upload_assets`), it may keep failing the same way indefinitely with
+**no visible indication to the shop owner** that anything is wrong (a
+separately-noted gap — see below). Not fixed this session; options worth
+evaluating next time this is picked up: smaller upload batches, more
+retry attempts with backoff specifically for the bulk-asset-upload step,
+or reconsidering whether the full product/customer catalog needs to be
+re-pushed on every regular watcher cycle (vs. only when it actually
+changes, or on a slower cadence) given its size relative to
+tickets/purchases. As of session end, `promakeupboumati.pages.dev` is
+still showing the placeholder page ("This store is being set up") for
+this reason — `remote.enabled` was manually flipped true and the hub
+registration is correct, but real content has not yet landed; the watcher
+will keep retrying on its own on the next database change.
+
+### Other real findings from this session, not yet acted on
+
+- **Silently-failing remote pushes have no visible indication to the shop
+  owner at all** — confirmed directly tonight (multiple failed pushes,
+  nothing surfaced anywhere a non-technical owner would see). Worth
+  adding some visible signal (a dashboard banner, a digest note) if this
+  becomes a recurring real-world problem — flagged, not built.
+- At session start, **this machine had zero "Shop Analysis" scheduled
+  tasks running at all** (neither the old git-clone Dashboard/Digest
+  tasks nor any packaged-install Watcher/Updater task), despite a fully
+  configured, previously-working packaged install being present in
+  `Program Files`. Root cause not investigated (likely just: the process
+  that had been running manually was closed and nothing was scheduled to
+  restart it) — resolved as a side effect of this session's several real
+  reinstalls, each of which now correctly creates both tasks (Watcher
+  confirmed every time; Updater confirmed on the `v1.0.7` run specifically).
+
+Related commits this session: `a6869cd` (hub auto-registration),
+`719ac12` (bump to 1.0.5 — superseded, wrong internal VERSION),
+`b21ed23` (bump to 1.0.6 — corrects that), `73b416d` (Updater task fix,
+bump to 1.0.7). Published to GitHub Releases: `v1.0.5` (superseded, do
+not use), `v1.0.6`, `v1.0.7` (current recommended build — includes both
+the hub feature and the Updater task fix).
 
 ## Hub search shows cost, not price (2026-08-27/28) — and why it's an unguessable filename, not a real login
 
@@ -1266,21 +1464,25 @@ built — see "Weighted-average cost (AVCO) + last purchase cost" below.
 
 ## What's left (optional, not blocking)
 
-- **Adding a newly provisioned store to the cross-store hub is still a
-  manual step** (`INSTALL_GUIDE.md`'s Step 6: edit `hub-site/stores.json`,
-  run `tools/deploy_hub.py`, commit) - real friction surfaced 2026-08-29
-  when the owner pointed out he won't have this repo/Cloudflare
-  credentials set up on whatever machine he's using at a *different*
-  store's PC, with no Claude Code session to lean on either. The owner's
-  own call: worth automating eventually (folding this into
-  `poslib/provision.py`'s own flow, or having the installer write the new
-  store's name/URL somewhere obviously easy to find/paste from later), but
-  explicitly **not now** - deferred, not started. Today's actual guidance
-  for this gap: the hub-update step never has to happen on-site at the new
-  store at all - it's fully decoupled from the install itself (the store
-  works completely on its own the moment `Setup.exe` finishes), so it can
-  wait until whoever's doing it is next at a machine that already has this
-  repo + working Cloudflare credentials (or a Claude Code session).
+- **DONE 2026-08-31 — adding a newly provisioned store to the cross-store
+  hub is now automatic**, no longer a manual step. See "Cross-store hub
+  auto-registration + installer reliability fixes" above for the full
+  design, the live cutover, and two real installer bugs (Updater
+  scheduled task, a v1.0.5 version-mismatch) found and fixed the same
+  session. Current recommended build: `v1.0.7`.
+- **NOT done, real and currently open (found 2026-08-31)**: pushing the
+  full remote-parity export (product/customer drill-down, ~263 MB /
+  12,625 files for store #1) is unreliable on a genuine from-scratch
+  install of this real store - it failed with a write-timeout the one
+  time it's actually been tried against a truly empty `remote-site/` (see
+  the "Still open" subsection above for full detail). Not a regression
+  from anything built this session - it's the pre-existing "full remote
+  parity" export (see "Remote product/customer drill-downs now exported
+  in full" above) meeting this store's real connection for the first
+  time. `promakeupboumati.pages.dev` was still showing the placeholder
+  page at session end for this reason. Needs investigation next session:
+  smaller upload batches, more retries specifically for the bulk-upload
+  step, or reconsidering the push cadence for the full catalog export.
 - **`.env` is empty on every machine** (gitignored, by design). Email and
   Telegram digest channels are wired up but need real credentials. WhatsApp
   additionally needs Meta template approval — see
