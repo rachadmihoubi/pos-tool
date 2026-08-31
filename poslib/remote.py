@@ -74,7 +74,25 @@ _UPLOAD_TIMEOUT_SECONDS = (10, 120)
 # Cloudflare's own limits (wrangler's ceiling is 1000/bucket; batching
 # tighter than that leaves headroom without needing to tune it further).
 _MAX_FILES_PER_UPLOAD_BATCH = 500
+# wrangler batches by bytes as well as file count (MAX_BUCKET_SIZE in
+# packages/wrangler/src/pages/constants.ts) - this codebase's own batching
+# used to be file-count-only, which let a handful of ~1MB pages in a large
+# export produce an unpredictably large single POST body. 40MB matches
+# wrangler's own constant.
+_MAX_BATCH_BYTES = 40 * 1024 * 1024
 _MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
+# Root-caused 2026-08-31: store #1's first real full-catalog export (263MB
+# / 12,625 files) failed to push with "write operation timed out" and no
+# retry - a single flaky batch aborted the entire multi-minute push, and a
+# retried push re-uploaded every file from scratch even though most had
+# already landed. Both gaps are fixed by mirroring wrangler's own upload.ts:
+# retry each batch with backoff instead of failing the whole push on one
+# transient error, and call check-missing first so a retry (or a routine
+# push where most of a large catalog export is unchanged) only uploads what
+# Cloudflare doesn't already have.
+_MAX_UPLOAD_ATTEMPTS = 5
+_MAX_CHECK_MISSING_ATTEMPTS = 5
+_RETRY_BACKOFF_BASE_SECONDS = 1.0
 
 # Wrangler's own ignore list (packages/wrangler/src/pages/validate.ts).
 # "_headers" stays a normal uploaded asset - Cloudflare Pages reads it at
@@ -150,17 +168,118 @@ def _get_upload_token(session: requests.Session, account_id: str, project: str) 
     return data["result"]["jwt"]
 
 
-def _upload_assets(session: requests.Session, jwt: str,
-                    files: list[tuple[str, bytes, str]]) -> bool:
+def _batches(files: list[tuple[str, bytes, str]], max_count: int, max_bytes: int):
+    """Groups files into upload batches capped by both count and total bytes."""
+    batch: list[tuple[str, bytes, str]] = []
+    batch_bytes = 0
+    for item in files:
+        _key, data, _ctype = item
+        size = len(data)
+        if batch and (len(batch) >= max_count or batch_bytes + size > max_bytes):
+            yield batch
+            batch, batch_bytes = [], 0
+        batch.append(item)
+        batch_bytes += size
+    if batch:
+        yield batch
+
+
+def _post_with_retry(session: requests.Session, url: str, *, account_id: str, project: str,
+                      jwt: str, json_payload, timeout: tuple[int, int],
+                      max_attempts: int, what: str) -> tuple[bool, str]:
     """
-    Step 2 of 4. Uses the short-lived JWT from step 1, not the API token -
+    Shared retry/backoff/JWT-refresh wrapper for the two JWT-authed
+    Cloudflare endpoints (asset upload, upsert-hashes). Root-caused
+    2026-08-31 (see _MAX_UPLOAD_ATTEMPTS's comment): neither endpoint had
+    any retry before this, so one transient network error aborted the
+    entire push. A 401/403 mid-push (a genuinely large export can outlast
+    the JWT's own lifetime) is refreshed and retried rather than treated as
+    a hard failure.
+
+    Returns (success, current_jwt) - the caller must keep using the
+    returned JWT for any further JWT-authed call, since a refresh may have
+    replaced it.
+    """
+    headers = {"Authorization": f"Bearer {jwt}"}
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = session.post(url, headers=headers, json=json_payload, timeout=timeout)
+            if resp.status_code in (401, 403):
+                log.info("%s: JWT rejected (status %d) - refreshing.", what, resp.status_code)
+                new_jwt = _get_upload_token(session, account_id, project)
+                if not new_jwt:
+                    return False, jwt
+                jwt = new_jwt
+                headers = {"Authorization": f"Bearer {jwt}"}
+                continue
+            resp.raise_for_status()
+            result = resp.json()
+            if not result.get("success"):
+                log.warning("%s: Cloudflare rejected the request: %s", what, result.get("errors"))
+                return False, jwt
+            return True, jwt
+        except requests.RequestException as exc:
+            if attempt < max_attempts:
+                delay = _RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                log.warning("%s: attempt %d/%d failed (%s) - retrying in %.0fs.",
+                            what, attempt, max_attempts, exc, delay)
+                time.sleep(delay)
+            else:
+                log.warning("%s: giving up after %d attempts (%s).", what, max_attempts, exc)
+    return False, jwt
+
+
+def _check_missing_hashes(session: requests.Session, jwt: str,
+                           hashes: list[str]) -> list[str] | None:
+    """
+    Which of these asset hashes Cloudflare does NOT already have - so a
+    retried push, or a routine push of a mostly-unchanged large export,
+    only has to upload what's actually new. Undocumented by Cloudflare;
+    confirmed against wrangler's own source
+    (packages/wrangler/src/pages/upload.ts's doUpload/checkMissingFiles).
+
+    Returns None (not an empty list) if this couldn't be determined after
+    retries - the caller must treat that as "unknown, assume everything is
+    missing" and upload the full set, never as "confirmed nothing is
+    missing." A wrong empty-list reading here would silently skip real
+    uploads.
+    """
+    headers = {"Authorization": f"Bearer {jwt}"}
+    last_exc: Exception | None = None
+    for attempt in range(1, _MAX_CHECK_MISSING_ATTEMPTS + 1):
+        try:
+            resp = session.post(f"{_API_BASE}/pages/assets/check-missing", headers=headers,
+                                json={"hashes": hashes}, timeout=_REQUEST_TIMEOUT_SECONDS)
+            resp.raise_for_status()
+            result = resp.json()
+            if not result.get("success"):
+                log.warning("Cloudflare rejected check-missing: %s - uploading everything.",
+                            result.get("errors"))
+                return None
+            return result["result"]
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < _MAX_CHECK_MISSING_ATTEMPTS:
+                time.sleep(_RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+    log.warning("check-missing failed after %d attempts (%s) - uploading everything.",
+                _MAX_CHECK_MISSING_ATTEMPTS, last_exc)
+    return None
+
+
+def _upload_assets(session: requests.Session, account_id: str, project: str, jwt: str,
+                    files: list[tuple[str, bytes, str]]) -> tuple[bool, str]:
+    """
+    Uses the short-lived JWT from the upload-token step, not the API token -
     and, confirmed from Cloudflare's own docs, no /accounts/{id}/ prefix
     here: the JWT already carries account scope, and pasting one in
     produces a 404 that reads like the endpoint doesn't exist.
+
+    Batches by both file count and total bytes (see _MAX_BATCH_BYTES), and
+    each batch is retried with backoff and JWT refresh via
+    _post_with_retry - a single flaky batch no longer aborts the whole
+    push (see _MAX_UPLOAD_ATTEMPTS's comment).
     """
-    headers = {"Authorization": f"Bearer {jwt}"}
-    for start in range(0, len(files), _MAX_FILES_PER_UPLOAD_BATCH):
-        batch = files[start:start + _MAX_FILES_PER_UPLOAD_BATCH]
+    for batch in _batches(files, _MAX_FILES_PER_UPLOAD_BATCH, _MAX_BATCH_BYTES):
         payload = [
             {
                 "key": key,
@@ -170,27 +289,24 @@ def _upload_assets(session: requests.Session, jwt: str,
             }
             for key, data, ctype in batch
         ]
-        resp = session.post(f"{_API_BASE}/pages/assets/upload", headers=headers,
-                            json=payload, timeout=_UPLOAD_TIMEOUT_SECONDS)
-        resp.raise_for_status()
-        result = resp.json()
-        if not result.get("success"):
-            log.warning("Cloudflare rejected an asset upload batch: %s", result.get("errors"))
-            return False
-    return True
+        ok, jwt = _post_with_retry(
+            session, f"{_API_BASE}/pages/assets/upload",
+            account_id=account_id, project=project, jwt=jwt,
+            json_payload=payload, timeout=_UPLOAD_TIMEOUT_SECONDS,
+            max_attempts=_MAX_UPLOAD_ATTEMPTS, what="asset upload batch")
+        if not ok:
+            return False, jwt
+    return True, jwt
 
 
-def _upsert_hashes(session: requests.Session, jwt: str, hashes: list[str]) -> bool:
-    """Step 3 of 4. Same JWT auth and no-account-prefix URL shape as step 2."""
-    headers = {"Authorization": f"Bearer {jwt}"}
-    resp = session.post(f"{_API_BASE}/pages/assets/upsert-hashes", headers=headers,
-                        json={"hashes": hashes}, timeout=_REQUEST_TIMEOUT_SECONDS)
-    resp.raise_for_status()
-    result = resp.json()
-    if not result.get("success"):
-        log.warning("Cloudflare rejected upsert-hashes: %s", result.get("errors"))
-        return False
-    return True
+def _upsert_hashes(session: requests.Session, account_id: str, project: str, jwt: str,
+                    hashes: list[str]) -> tuple[bool, str]:
+    """Same JWT auth and no-account-prefix URL shape as the upload step."""
+    return _post_with_retry(
+        session, f"{_API_BASE}/pages/assets/upsert-hashes",
+        account_id=account_id, project=project, jwt=jwt,
+        json_payload={"hashes": hashes}, timeout=_REQUEST_TIMEOUT_SECONDS,
+        max_attempts=_MAX_UPLOAD_ATTEMPTS, what="upsert-hashes")
 
 
 def _create_deployment(session: requests.Session, account_id: str, project: str,
@@ -306,15 +422,31 @@ def push_remote(cfg: Config, *, project: str | None = None,
         if not jwt:
             return False
 
+        all_hashes = [key for key, _data, _ctype in files]
         step_start = time.monotonic()
-        uploaded = _upload_assets(session, jwt, files)
+        missing = _check_missing_hashes(session, jwt, all_hashes)
+        log.info("push_remote(%s): checked %d hash(es) in %.1fs",
+                  project, len(all_hashes), time.monotonic() - step_start)
+        if missing is None:
+            files_to_upload = files
+        else:
+            missing_set = set(missing)
+            files_to_upload = [f for f in files if f[0] in missing_set]
+        log.info("push_remote(%s): %d of %d asset(s) need uploading",
+                  project, len(files_to_upload), len(files))
+
+        step_start = time.monotonic()
+        if files_to_upload:
+            uploaded, jwt = _upload_assets(session, account_id, project, jwt, files_to_upload)
+        else:
+            uploaded = True
         log.info("push_remote(%s): uploaded %d asset(s) in %.1fs",
-                  project, len(files), time.monotonic() - step_start)
+                  project, len(files_to_upload), time.monotonic() - step_start)
         if not uploaded:
             return False
 
         step_start = time.monotonic()
-        upserted = _upsert_hashes(session, jwt, [key for key, _data, _ctype in files])
+        upserted, jwt = _upsert_hashes(session, account_id, project, jwt, all_hashes)
         log.info("push_remote(%s): upserted hashes in %.1fs", project, time.monotonic() - step_start)
         if not upserted:
             return False

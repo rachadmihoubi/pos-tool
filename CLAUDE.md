@@ -869,6 +869,102 @@ bump to 1.0.7). Published to GitHub Releases: `v1.0.5` (superseded, do
 not use), `v1.0.6`, `v1.0.7` (current recommended build — includes both
 the hub feature and the Updater task fix).
 
+## Full-export push reliability fix (2026-08-31, later autonomous session) — implemented + unit-tested, NOT live-verified; plus a bigger separate finding
+
+Continuing from the "Still open" gap logged the same day (store #1's
+first real full-catalog export, ~263 MB / 12,625 files, failed to push
+with a write-timeout): root-caused via `superpowers:systematic-debugging`
+and the research-before-implementing gate (verified against wrangler's
+own real source, `cloudflare/workers-sdk` on GitHub, via `gh`, not
+training-data recall) rather than guessed at.
+
+**Two real gaps found by reading `poslib/remote.py` and wrangler's
+source side by side:**
+1. `_upload_assets()` had zero per-batch retry and batched only by file
+   count (500), never by bytes — a batch's total payload size was
+   unbounded, and any single transient failure aborted the *entire*
+   multi-minute push with no resume, forcing a full restart next time.
+2. The codebase never called Cloudflare's `POST /pages/assets/
+   check-missing` endpoint at all (undocumented by Cloudflare; confirmed
+   from `packages/wrangler/src/pages/upload.ts`) — every push, including
+   a retry of one that mostly-succeeded, re-uploaded literally every file
+   from scratch.
+
+**Fixed in `poslib/remote.py`**, TDD (failing tests written first,
+`tests/test_remote.py`'s new `TestCheckMissingHashes`/`TestUploadBatching`
+classes, 12 new tests):
+- `_check_missing_hashes()` — calls check-missing before uploading;
+  `push_remote()` now only uploads the subset Cloudflare reports missing,
+  but always upserts the *full* hash set regardless. Fails safe: any
+  rejection or exhausted-retry failure here falls back to uploading
+  everything, never silently skips a real upload.
+- `_batches()` — caps upload batches by both file count (500, unchanged)
+  and total bytes (`_MAX_BATCH_BYTES = 40MB`, matching wrangler's own
+  `MAX_BUCKET_SIZE`), so a handful of large aggregate pages in a big
+  export can no longer produce one unpredictably large POST body.
+- `_post_with_retry()` — shared retry/backoff (`_MAX_UPLOAD_ATTEMPTS = 5`,
+  exponential 1s/2s/4s/8s) + JWT-refresh-on-401/403 wrapper, now used by
+  both the upload and upsert-hashes steps. A batch failure is retried in
+  place instead of aborting the whole push; a JWT that expires mid-push
+  (plausible on a genuinely large, slow export) is refreshed and the
+  batch retried with the new token, which the caller keeps using for
+  every subsequent JWT-authed call.
+
+Full suite re-run clean: `tests/test_remote.py` 41/41,
+`pytest tests -q --deselect tests/test_export_static.py` 404 passed, no
+regressions. `test_export_static.py` itself doesn't touch `remote.py`'s
+internals (confirmed by grep) so its ~4-minute real-database cost wasn't
+worth re-paying for this change.
+
+**What this does NOT yet establish**: whether it actually fixes store
+#1's real hang — same "don't declare a live Cloudflare deploy fixed until
+confirmed against the real thing" discipline as the `_redirects` bug
+history above. That real-world confirmation needs an actual retry against
+the real store, which runs into the bigger finding below.
+
+### A bigger, unrelated finding from the same session: this machine currently has no packaged install at all
+
+Before touching `remote.py`, this session checked the machine state this
+file's own 2026-08-31 (earlier) session had left it in, since that
+session's own write-up says its exact next step was uncertain
+("`promakeupboumati.pages.dev` was still showing the placeholder page at
+session end"). What was actually found, checked twice (once at
+investigation start, re-confirmed just before this write-up):
+
+- `C:\Program Files\Shop Analysis` does **not** exist.
+- No `Shop Analysis - Watcher` or `Shop Analysis - Updater` scheduled
+  task exists — only the **old** `Shop Analysis - Dashboard` /
+  `Shop Analysis - Digest` tasks (the git-clone mechanism), both
+  `Ready`/enabled.
+- The repo-root `config.yaml` (what those old tasks run against) has
+  `remote.enabled: true` pointing at `promakeupmihoubipos` — the old
+  placeholder/dev project, not `promakeupboumati`. This matches the
+  documented intentional decision to keep this dev-PC copy pointed at
+  the old project, but it also means **nothing on this machine is
+  currently pushing to `promakeupboumati` at all**, packaged install or
+  otherwise.
+- `%LOCALAPPDATA%\Shop Analysis\config.yaml` is stale (Aug 26-27
+  timestamps) with `remote.enabled: false` and no project name set - not
+  the live `remote.enabled: true` / `promakeupboumati` state the earlier
+  same-day session documented as the result of its own work.
+
+**Read together, this means**: whatever packaged, `promakeupboumati`-
+targeting install the earlier 2026-08-31 session finished (hub
+registration succeeded, `remote.enabled` flipped true, per its own
+write-up above) no longer exists on this machine now. Either it was
+uninstalled since, or something about that session's final state didn't
+persist the way its own notes describe. **Not investigated further or
+acted on this session** - reinstalling on the real till PC is a
+hard-to-reverse, live-production, elevation-requiring action (the
+installer/elevation gate) that also needs a live Cloudflare token only
+the owner can provide, so it needs the owner's/user's direction before
+anyone touches it again, not an autonomous next step. Whoever picks this
+up next should treat "is a packaged install even present, and does its
+config match what the last session that touched it says it should" as a
+first check before assuming any earlier write-up in this file still
+describes the live state - two sessions in the same day already disagreed
+on this exact machine's state once.
+
 ## Hub search shows cost, not price (2026-08-27/28) — and why it's an unguessable filename, not a real login
 
 The owner asked for two changes to the hub's cross-store search after his
@@ -1470,19 +1566,12 @@ built — see "Weighted-average cost (AVCO) + last purchase cost" below.
   design, the live cutover, and two real installer bugs (Updater
   scheduled task, a v1.0.5 version-mismatch) found and fixed the same
   session. Current recommended build: `v1.0.7`.
-- **NOT done, real and currently open (found 2026-08-31)**: pushing the
-  full remote-parity export (product/customer drill-down, ~263 MB /
-  12,625 files for store #1) is unreliable on a genuine from-scratch
-  install of this real store - it failed with a write-timeout the one
-  time it's actually been tried against a truly empty `remote-site/` (see
-  the "Still open" subsection above for full detail). Not a regression
-  from anything built this session - it's the pre-existing "full remote
-  parity" export (see "Remote product/customer drill-downs now exported
-  in full" above) meeting this store's real connection for the first
-  time. `promakeupboumati.pages.dev` was still showing the placeholder
-  page at session end for this reason. Needs investigation next session:
-  smaller upload batches, more retries specifically for the bulk-upload
-  step, or reconsidering the push cadence for the full catalog export.
+- **Fix implemented and unit-tested 2026-08-31 (a later, separate
+  autonomous session), NOT yet live-verified** — see "Full-export push
+  reliability fix" below for the full detail and, critically, a bigger
+  unrelated finding from the same session: this machine currently has
+  **no packaged install at all**, so `promakeupboumati.pages.dev` has no
+  live content source right now regardless of this fix.
 - **`.env` is empty on every machine** (gitignored, by design). Email and
   Telegram digest channels are wired up but need real credentials. WhatsApp
   additionally needs Meta template approval — see

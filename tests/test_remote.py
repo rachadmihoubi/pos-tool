@@ -67,7 +67,12 @@ class FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise requests.HTTPError(f"status {self.status_code}")
+            # Real requests.Response.raise_for_status() attaches itself to
+            # the exception as .response - the JWT-refresh-on-401 logic
+            # reads that, so a faithful fake must do the same.
+            err = requests.HTTPError(f"status {self.status_code}")
+            err.response = self
+            raise err
 
     def json(self):
         return self._json_data
@@ -88,11 +93,25 @@ class FakeSession:
     (POST, one per batch), upsert-hashes (POST), deployments (POST).
     """
 
-    def __init__(self, jwt_response=None, upload_responses=None,
+    def __init__(self, jwt_response=None, jwt_responses=None,
+                 check_missing_response=None, check_missing_responses=None,
+                 upload_responses=None,
                  upsert_response=None, deploy_response=None):
         self.headers = {}
         self.calls = []
+        # jwt_responses (plural), if given, is popped once per GET call -
+        # lets a test simulate a mid-push JWT refresh returning a second,
+        # different token. jwt_response (singular) is the common case: the
+        # same response every time.
+        self._jwt_responses = list(jwt_responses) if jwt_responses is not None else None
         self._jwt_response = jwt_response or _ok({"jwt": "fake-jwt"})
+        # check_missing_response(s): None means "echo every requested hash
+        # back as missing" (i.e. today's behaviour - nothing is treated as
+        # already uploaded), which keeps every pre-existing test in this
+        # file correct without having to know about check-missing at all.
+        self._check_missing_responses = (
+            list(check_missing_responses) if check_missing_responses is not None else None)
+        self._check_missing_response = check_missing_response
         self._upload_responses = list(upload_responses or [_ok()])
         self._upsert_response = upsert_response or _ok()
         self._deploy_response = deploy_response or _ok(
@@ -100,10 +119,18 @@ class FakeSession:
 
     def get(self, url, **kwargs):
         self.calls.append(("GET", url, kwargs))
+        if self._jwt_responses is not None:
+            return self._jwt_responses.pop(0)
         return self._jwt_response
 
     def post(self, url, **kwargs):
         self.calls.append(("POST", url, kwargs))
+        if url.endswith("/pages/assets/check-missing"):
+            if self._check_missing_responses is not None:
+                return self._check_missing_responses.pop(0)
+            if self._check_missing_response is not None:
+                return self._check_missing_response
+            return _ok(result=list(kwargs["json"]["hashes"]))
         if url.endswith("/pages/assets/upload"):
             return self._upload_responses.pop(0)
         if url.endswith("/pages/assets/upsert-hashes"):
@@ -430,6 +457,188 @@ class TestPushRemoteFailureModes:
         session = FakeSession(jwt_response=FakeResponse({"success": True, "result": {}}))
         _patch_session(monkeypatch, session)
         assert remote.push_remote(cfg) is False
+
+
+class TestCheckMissingHashes:
+    """
+    Regression coverage for the 2026-08-31 store #1 full-export push
+    reliability fix: skip re-uploading assets Cloudflare already has,
+    following wrangler's own POST /pages/assets/check-missing step
+    (confirmed against packages/wrangler/src/pages/upload.ts) instead of
+    unconditionally re-uploading all ~13,000 files every watcher cycle.
+    """
+
+    def test_already_uploaded_files_are_not_re_uploaded(self, tmp_path, monkeypatch):
+        files = {"unchanged.html": "same as last deploy", "new.html": "brand new"}
+        export_dir = _make_export_dir(tmp_path, files)
+        cfg = FakeConfig(export_dir=export_dir)
+        # Report only the "new" file's hash as missing.
+        new_hash = remote._cf_hash(b"brand new", "new.html")
+        session = FakeSession(check_missing_response=_ok(result=[new_hash]))
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is True
+
+        upload_call = next(c for c in session.calls if c[1].endswith("/pages/assets/upload"))
+        payload = upload_call[2]["json"]
+        assert {item["key"] for item in payload} == {new_hash}
+
+    def test_upsert_hashes_still_covers_every_file_not_just_uploaded_ones(self, tmp_path, monkeypatch):
+        files = {"unchanged.html": "same as last deploy", "new.html": "brand new"}
+        export_dir = _make_export_dir(tmp_path, files)
+        cfg = FakeConfig(export_dir=export_dir)
+        new_hash = remote._cf_hash(b"brand new", "new.html")
+        unchanged_hash = remote._cf_hash(b"same as last deploy", "unchanged.html")
+        session = FakeSession(check_missing_response=_ok(result=[new_hash]))
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is True
+
+        upsert_call = next(c for c in session.calls if c[1].endswith("/pages/assets/upsert-hashes"))
+        assert set(upsert_call[2]["json"]["hashes"]) == {new_hash, unchanged_hash}
+
+    def test_nothing_missing_skips_upload_call_entirely_but_still_deploys(self, tmp_path, monkeypatch):
+        files = {"unchanged.html": "same as last deploy"}
+        export_dir = _make_export_dir(tmp_path, files)
+        cfg = FakeConfig(export_dir=export_dir)
+        session = FakeSession(check_missing_response=_ok(result=[]))
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is True
+
+        upload_calls = [c for c in session.calls if c[1].endswith("/pages/assets/upload")]
+        assert upload_calls == []
+        deploy_calls = [c for c in session.calls if c[1].endswith("/deployments")]
+        assert len(deploy_calls) == 1
+
+    def test_check_missing_rejected_falls_back_to_uploading_everything(self, tmp_path, monkeypatch):
+        # Cloudflare answering success:false here must not sink the whole
+        # push - fail safe by uploading everything, exactly like before
+        # this feature existed, rather than silently skipping assets we
+        # never actually confirmed are already there.
+        files = {"a.html": "aaa", "b.html": "bbb"}
+        export_dir = _make_export_dir(tmp_path, files)
+        cfg = FakeConfig(export_dir=export_dir)
+        session = FakeSession(check_missing_response=_fail(),
+                               upload_responses=[_ok()])
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is True
+
+        upload_call = next(c for c in session.calls if c[1].endswith("/pages/assets/upload"))
+        assert len(upload_call[2]["json"]) == 2
+
+    def test_check_missing_network_error_retries_then_falls_back(self, tmp_path, monkeypatch):
+        files = {"a.html": "aaa"}
+        export_dir = _make_export_dir(tmp_path, files)
+        cfg = FakeConfig(export_dir=export_dir)
+        monkeypatch.setattr(remote.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(remote, "_MAX_CHECK_MISSING_ATTEMPTS", 2)
+
+        attempts = {"n": 0}
+
+        class FlakyCheckMissingSession(FakeSession):
+            def post(self, url, **kwargs):
+                if url.endswith("/pages/assets/check-missing"):
+                    attempts["n"] += 1
+                    raise requests.ConnectionError("no internet")
+                return super().post(url, **kwargs)
+
+        session = FlakyCheckMissingSession(upload_responses=[_ok()])
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is True
+        assert attempts["n"] == 2  # exhausted the (monkeypatched) attempt cap
+
+
+class TestUploadBatching:
+
+    def test_batches_are_capped_by_bytes_not_just_file_count(self, tmp_path, monkeypatch):
+        # Five files, well under any file-count cap, but each large enough
+        # that a byte cap of 25 bytes forces one file per batch. Regression
+        # guard for CLAUDE.md's "263 MB / 12,625 files" store #1 push,
+        # where a handful of ~1MB aggregate pages made file-count-only
+        # batching produce unpredictably large individual POST bodies.
+        files = {f"file{i}.html": "x" * 20 for i in range(5)}
+        export_dir = _make_export_dir(tmp_path, files)
+        cfg = FakeConfig(export_dir=export_dir)
+        monkeypatch.setattr(remote, "_MAX_BATCH_BYTES", 25)
+        session = FakeSession(upload_responses=[_ok()] * 5)
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is True
+        upload_calls = [c for c in session.calls if c[1].endswith("/pages/assets/upload")]
+        assert len(upload_calls) == 5
+
+    def test_upload_batch_retries_on_transient_error_then_succeeds(self, tmp_path, monkeypatch):
+        export_dir = _make_export_dir(tmp_path, {"index.html": "hi"})
+        cfg = FakeConfig(export_dir=export_dir)
+        monkeypatch.setattr(remote.time, "sleep", lambda _s: None)
+
+        attempts = {"n": 0}
+
+        class FlakyUploadSession(FakeSession):
+            def post(self, url, **kwargs):
+                if url.endswith("/pages/assets/upload"):
+                    attempts["n"] += 1
+                    if attempts["n"] == 1:
+                        raise requests.ConnectionError("write operation timed out")
+                    return _ok()
+                return super().post(url, **kwargs)
+
+        session = FlakyUploadSession()
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is True
+        assert attempts["n"] == 2
+
+    def test_upload_gives_up_after_max_attempts(self, tmp_path, monkeypatch):
+        export_dir = _make_export_dir(tmp_path, {"index.html": "hi"})
+        cfg = FakeConfig(export_dir=export_dir)
+        monkeypatch.setattr(remote.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(remote, "_MAX_UPLOAD_ATTEMPTS", 3)
+
+        attempts = {"n": 0}
+
+        class AlwaysFlakyUploadSession(FakeSession):
+            def post(self, url, **kwargs):
+                if url.endswith("/pages/assets/upload"):
+                    attempts["n"] += 1
+                    raise requests.ConnectionError("write operation timed out")
+                return super().post(url, **kwargs)
+
+        session = AlwaysFlakyUploadSession()
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is False
+        assert attempts["n"] == 3
+
+    def test_upload_refreshes_jwt_on_401_then_retries_with_new_jwt(self, tmp_path, monkeypatch):
+        export_dir = _make_export_dir(tmp_path, {"index.html": "hi"})
+        cfg = FakeConfig(export_dir=export_dir)
+        monkeypatch.setattr(remote.time, "sleep", lambda _s: None)
+
+        attempts = {"n": 0}
+
+        class ExpiringJwtSession(FakeSession):
+            def post(self, url, **kwargs):
+                if url.endswith("/pages/assets/upload"):
+                    attempts["n"] += 1
+                    if attempts["n"] == 1:
+                        return FakeResponse({}, status_code=401)
+                    # Second attempt must carry the refreshed JWT.
+                    assert kwargs["headers"]["Authorization"] == "Bearer fresh-jwt"
+                    return _ok()
+                return super().post(url, **kwargs)
+
+        session = ExpiringJwtSession(
+            jwt_responses=[_ok({"jwt": "stale-jwt"}), _ok({"jwt": "fresh-jwt"})])
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is True
+        assert attempts["n"] == 2
+        jwt_gets = [c for c in session.calls if c[0] == "GET"]
+        assert len(jwt_gets) == 2  # initial token + one mid-push refresh
 
 
 class TestCfHash:
