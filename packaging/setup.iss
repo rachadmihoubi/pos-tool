@@ -8,7 +8,7 @@
 
 [Setup]
 AppName={#MyAppName}
-AppVersion=1.0.4
+AppVersion=1.0.5
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -467,9 +467,9 @@ begin
           // a manual step that was easy to forget, so a silently-skipped
           // hub registration would reproduce exactly that problem.
           MsgBox('The store is set up and live, but adding it to the ' +
-                 'cross-store hub failed:' + #13#10#13#10 + ProvisionMessage +
-                 #13#10#13#10 + 'Full details were also saved to ' +
-                 'cloudflare_provision_log.txt in the app data folder.',
+                 'cross-store hub failed:' + #13#10#13#10 + ProvisionMessage + #13#10#13#10 +
+                 'Full details were also saved to cloudflare_provision_log.txt ' +
+                 'in the app data folder.',
                  mbError, MB_OK);
       end
       else
