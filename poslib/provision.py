@@ -12,7 +12,9 @@ for why) to create this store's Pages project, both Access applications, and
 a new narrow Pages:Edit-only token for the watcher's permanent use - the
 same two-application pattern documented in
 docs/superpowers/specs/2026-08-27-component5-hub-design.md, done
-programmatically instead of by hand.
+programmatically instead of by hand. When a hub display name is supplied
+(--hub-store-name), also registers the store on the shared multi-store hub
+- see the "Cross-store hub registration" section below for that design.
 
 Every step before the final reachability verification is idempotent (checks
 before creating), so a failed run can simply be re-run. Token minting is the
@@ -25,20 +27,25 @@ real, if narrow, security liability.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import secrets as _secrets
+import shutil
 import socket
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 
 from . import remote as _remote
 from .config import Config
+from .paths import app_root
 
 log = logging.getLogger(__name__)
 
@@ -364,7 +371,6 @@ def write_provision_record(path: Path, record: dict[str, Any]) -> None:
     can be torn down by id instead of by hunting through the Zero Trust
     dashboard.
     """
-    import json
     _atomic_write_text(path, json.dumps(record, indent=2))
 
 
@@ -645,6 +651,199 @@ def _flip_remote_enabled(config_path: Path, value: bool) -> None:
     _atomic_write_text(config_path, "\n".join(lines) + "\n")
 
 
+# ---------------------------------------------------------------------------
+# Cross-store hub registration.
+#
+# Adding a newly provisioned store to the shared multi-store hub used to be
+# a fully manual step (INSTALL_GUIDE.md's old Step 6): edit
+# hub-site/stores.json by hand, push it from the dev PC, commit. Real
+# friction this was fixing: whoever provisions a *different* store's till
+# PC won't have this repo or Cloudflare credentials on that machine, and
+# the step is easy to forget. register_store_with_hub does the same thing
+# automatically, using the powerful one-time provisioning token already in
+# hand for everything else in provision_store.
+#
+# Design settled after an Opus review (2026-08-31) of an earlier draft that
+# read the hub's current store list through a temporary create-then-delete
+# Access bypass app - rejected because this exact provisioning code path
+# has a real history of being killed mid-run (three recorded stuck
+# installs, each recovered with an elevated taskkill - see CLAUDE.md's
+# "Store #1 migration" section), and a delete that never runs would leave
+# the hub's entire store list (every store's stock-<token>.json URL, in
+# one place) permanently public. Instead the hub's store list lives at a
+# permanent, unguessable filename (HUB_REGISTRY_FILENAME) behind a
+# *permanent* bypass Access app - the same accepted-tradeoff pattern
+# already shipped for each store's own stock-<token>.json, just applied to
+# the list of stores instead of one store's stock. hub-site/app.js's
+# STORES_JSON constant must match HUB_REGISTRY_FILENAME exactly.
+#
+# A second real risk the same review caught: every registration push
+# replaces the hub's entire file set (Cloudflare Pages deployments are
+# always a full replace, never partial - see poslib/remote.py), so pushing
+# whatever hub-site/ happens to be bundled into *this* installer build
+# could silently roll back index.html/app.js/style.css to an older design
+# if the hub's own files were updated on the dev PC after this installer
+# was built. HUB_VERSION guards against that: bump it by hand every time
+# hub-site/{index.html,app.js,style.css} changes (see tools/deploy_hub.py's
+# own docstring), and register_store_with_hub refuses to push anything -
+# not even the updated store list - if the live registry's hub_version is
+# newer than this build's HUB_VERSION. In that case, and on any other
+# failure, the store itself is still fully provisioned and live; only the
+# hub listing is skipped, with a loud, hand-actionable fallback message -
+# see _HUB_REGISTRATION_FAILED_MARKER and provision_store's use of it.
+# ---------------------------------------------------------------------------
+
+HUB_PROJECT_SLUG = "promakeupmihoubi-hub"
+# Must match hub-site/app.js's STORES_JSON constant exactly.
+HUB_REGISTRY_FILENAME = "stores-41582b721adbd68e4fb50f5245f0e56b.json"
+# Bump alongside any change to hub-site/{index.html,app.js,style.css}, and
+# update the "hub_version" value already live in HUB_REGISTRY_FILENAME on
+# the same push (tools/deploy_hub.py) - see this section's header comment.
+HUB_VERSION = 1
+
+# setup.iss checks provision_store's returned message for this exact string
+# to show a MsgBox even on an otherwise-successful run (ResultCode 0) - a
+# hub-registration failure must never be silent, per the same review that
+# settled this section's design (see header comment above).
+_HUB_REGISTRATION_FAILED_MARKER = "HUB REGISTRATION FAILED"
+
+
+def _hostname(url: str) -> str:
+    return urlsplit(url).hostname or ""
+
+
+def fetch_hub_registry(hub_domain: str) -> dict:
+    """
+    Reads the hub's current store list over plain HTTPS - no Cloudflare API
+    token needed, since HUB_REGISTRY_FILENAME sits behind a permanent public
+    bypass Access app (see this section's header comment). Returns
+    {"hub_version": 0, "stores": []} if the file doesn't exist yet (the very
+    first store ever registered this way) - hub_version 0 always compares as
+    older than this build's HUB_VERSION, so the caller's version gate lets
+    that first push through.
+    """
+    url = f"https://{hub_domain}/{HUB_REGISTRY_FILENAME}"
+    try:
+        resp = requests.get(url, timeout=_REQUEST_TIMEOUT_SECONDS)
+    except requests.RequestException as exc:
+        raise ProvisionError(f"Could not reach the hub's store list at {url}: {exc}") from exc
+    if resp.status_code == 404:
+        return {"hub_version": 0, "stores": []}
+    if resp.status_code != 200:
+        raise ProvisionError(
+            f"Unexpected response ({resp.status_code}) reading the hub's store "
+            f"list at {url}."
+        )
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise ProvisionError(f"The hub's store list at {url} was not valid JSON: {exc}") from exc
+    data.setdefault("hub_version", 0)
+    data.setdefault("stores", [])
+    return data
+
+
+def _fetch_hub_registry_with_retry(hub_domain: str, *, max_attempts: int = 4,
+                                    delay_seconds: float = 20.0) -> dict:
+    """
+    Same as fetch_hub_registry, but tolerant of Access propagation lag - used
+    only for the post-push verification read, where the bypass app may have
+    been created moments ago on a brand-new hub (see verify_reachable's own
+    comment on propagation taking 1-2 minutes, empirically). Re-raises the
+    last error if every attempt fails.
+    """
+    last_exc: ProvisionError | None = None
+    for attempt in range(max_attempts):
+        try:
+            return fetch_hub_registry(hub_domain)
+        except ProvisionError as exc:
+            last_exc = exc
+            log.info("_fetch_hub_registry_with_retry(%s): attempt %d/%d failed: %s",
+                      hub_domain, attempt + 1, max_attempts, exc)
+            if attempt < max_attempts - 1:
+                time.sleep(delay_seconds)
+    assert last_exc is not None
+    raise last_exc
+
+
+def register_store_with_hub(
+    session: requests.Session, account_id: str, owner_email: str,
+    store_name: str, store_domain: str, store_stock_filename: str,
+    hub_site_dir: Path, cfg: Config, powerful_token: str,
+) -> None:
+    """
+    Adds (or updates) this store's entry on the shared multi-store hub and
+    pushes the result - see this section's header comment for the design.
+    Raises ProvisionError on any failure; provision_store catches this
+    separately from every step before it, since a hub-registration failure
+    must never fail or roll back the store's own already-successful
+    provisioning.
+
+    Uses the powerful one-time provisioning token (already open in
+    `session`, and already used for everything else in provision_store) for
+    the push too, rather than this store's own newly-minted permanent
+    watcher token - deliberate: the powerful token is ephemeral and dies
+    with the installer, while the minted watcher token sits in plaintext
+    .env on this till PC for years. Giving that one long-lived, one-store
+    token a side capability to overwrite the shared hub is a bigger,
+    longer-lived risk than reusing a token that's about to be discarded
+    anyway.
+    """
+    hub_domain = f"{HUB_PROJECT_SLUG}.pages.dev"
+    registry = fetch_hub_registry(hub_domain)
+
+    new_url = f"https://{store_domain}/{store_stock_filename}"
+    if registry["hub_version"] > HUB_VERSION:
+        raise ProvisionError(
+            f"The live hub is running a newer version ({registry['hub_version']}) "
+            f"than this installer build knows about ({HUB_VERSION}) - refusing to "
+            "push, since that could roll back the hub's own design to an older "
+            "build. Add this store by hand instead, from a dev PC with the "
+            f'current hub-site/: {{"name": "{store_name}", "url": "{new_url}"}}'
+        )
+
+    stores = [dict(entry) for entry in registry["stores"]]
+    replaced = False
+    for entry in stores:
+        if _hostname(entry.get("url", "")) == store_domain:
+            entry["name"] = store_name
+            entry["url"] = new_url
+            replaced = True
+            break
+    if not replaced:
+        stores.append({"name": store_name, "url": new_url})
+
+    create_pages_project(session, account_id, HUB_PROJECT_SLUG)
+    create_broad_access_app(session, account_id, hub_domain, owner_email)
+    create_bypass_access_app(session, account_id, f"{hub_domain}/{HUB_REGISTRY_FILENAME}")
+
+    with tempfile.TemporaryDirectory(prefix="hub-push-") as tmp:
+        tmp_dir = Path(tmp)
+        for item in hub_site_dir.iterdir():
+            if item.is_file():
+                shutil.copy2(item, tmp_dir / item.name)
+        (tmp_dir / HUB_REGISTRY_FILENAME).write_text(
+            json.dumps({"hub_version": HUB_VERSION, "stores": stores}, indent=2),
+            encoding="utf-8",
+        )
+        pushed = _remote.push_remote(
+            cfg, project=HUB_PROJECT_SLUG, export_dir=tmp_dir, api_token=powerful_token
+        )
+    if not pushed:
+        raise ProvisionError(
+            "Pushing the updated hub failed - check the logs for details. Add "
+            f'this store by hand instead: {{"name": "{store_name}", "url": "{new_url}"}}'
+        )
+
+    verified = _fetch_hub_registry_with_retry(hub_domain)
+    if not any(_hostname(e.get("url", "")) == store_domain for e in verified.get("stores", [])):
+        raise ProvisionError(
+            "The hub was pushed but this store does not appear in the "
+            f're-fetched store list - add it by hand instead: '
+            f'{{"name": "{store_name}", "url": "{new_url}"}}'
+        )
+
+
 @dataclass
 class ProvisionResult:
     ok: bool
@@ -652,7 +851,8 @@ class ProvisionResult:
 
 
 def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
-                     project_slug: str, owner_email: str) -> ProvisionResult:
+                     project_slug: str, owner_email: str,
+                     hub_store_name: str | None = None) -> ProvisionResult:
     """
     One-time, idempotent setup of a new store: Cloudflare Pages project,
     watcher token (Pages:Edit only), a placeholder first push, both Access
@@ -666,6 +866,11 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
     patched). A fresh Config is constructed from the same paths after
     patching, so the values pushed to Cloudflare are read back from disk,
     not assumed from the pre-patch instance.
+
+    `hub_store_name`, if given, registers this store on the shared
+    multi-store hub too (see register_store_with_hub) once the store itself
+    is fully live - a failure there is logged and reported but never fails
+    or rolls back the store's own already-successful provisioning.
     """
     if not _valid_project_slug(project_slug):
         return ProvisionResult(
@@ -789,6 +994,33 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
         log.info("provision_store(%s): flipping remote.enabled on", project_slug)
         _flip_remote_enabled(cfg.config_path, True)
 
+        hub_note = (
+            "Remember to add it to the cross-store hub page by hand - this "
+            "installer only provisions the individual store."
+        )
+        if hub_store_name:
+            log.info("provision_store(%s): registering with the hub", project_slug)
+            hub_step_start = time.monotonic()
+            try:
+                register_store_with_hub(
+                    session, account_id, owner_email, hub_store_name, domain,
+                    stock_json_filename, app_root() / "hub-site", fresh_cfg,
+                    powerful_token,
+                )
+                log.info("provision_store(%s): hub registration succeeded in %.1fs",
+                          project_slug, time.monotonic() - hub_step_start)
+                hub_note = f"Added to the cross-store hub as '{hub_store_name}'."
+            except Exception as exc:
+                log.exception("provision_store(%s): hub registration failed after %.1fs",
+                               project_slug, time.monotonic() - hub_step_start)
+                hub_note = (
+                    f"{_HUB_REGISTRATION_FAILED_MARKER} - the store itself is "
+                    f"live and correctly gated, but adding it to the cross-store "
+                    f"hub failed: {exc} Add it by hand instead: "
+                    f'{{"name": "{hub_store_name}", '
+                    f'"url": "https://{domain}/{stock_json_filename}"}}'
+                )
+
         record_path = cfg.config_path.parent / f"provision-record-{project_slug}.json"
         record = {
             "project": project_slug,
@@ -814,7 +1046,7 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
                 "The store is live and gated; note the following ids by hand "
                 f"for future reference: broad_access_app_id={broad_app_id}, "
                 f"bypass_access_app_id={bypass_app_id}, "
-                f"watcher_token_id={watcher_token_id}.",
+                f"watcher_token_id={watcher_token_id}. {hub_note}",
             )
 
         log.info("provision_store(%s): succeeded in %.1fs",
@@ -822,8 +1054,7 @@ def provision_store(cfg: Config, *, powerful_token: str, account_id: str,
         return ProvisionResult(
             True,
             f"Store '{project_slug}' is set up and live at https://{domain}/. "
-            "Remember to add it to the cross-store hub page by hand - this "
-            "installer only provisions the individual store.",
+            f"{hub_note}",
         )
     except ProvisionError as exc:
         log.info("provision_store(%s): failed after %.1fs: %s",

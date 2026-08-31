@@ -223,7 +223,8 @@ def _create_deployment(session: requests.Session, account_id: str, project: str,
 
 
 def push_remote(cfg: Config, *, project: str | None = None,
-                 export_dir: Path | None = None) -> bool:
+                 export_dir: Path | None = None,
+                 api_token: str | None = None) -> bool:
     """
     Deploy a directory to Cloudflare Pages. Returns True on success, False
     on any problem at all - never raises.
@@ -236,6 +237,12 @@ def push_remote(cfg: Config, *, project: str | None = None,
     rather than reimplementing it. Every store's own watcher call
     (push_remote(cfg), no extra arguments) is unaffected - both default to
     None, which falls back to today's config-read behavior exactly.
+
+    api_token overrides cfg's own CLOUDFLARE_API_TOKEN secret - used by
+    poslib/provision.py's register_store_with_hub to push using the
+    powerful one-time provisioning token already in hand, rather than
+    requiring a store's own persisted watcher token to be minted first.
+    account_id still always comes from cfg (same account either way).
     """
     if project is None:
         project = str(cfg.get("remote.cloudflare_project_name", "")).strip()
@@ -253,7 +260,8 @@ def push_remote(cfg: Config, *, project: str | None = None,
                     export_dir)
         return False
 
-    api_token = cfg.secret("CLOUDFLARE_API_TOKEN")
+    if api_token is None:
+        api_token = cfg.secret("CLOUDFLARE_API_TOKEN")
     if not api_token:
         log.warning("CLOUDFLARE_API_TOKEN is not set - cannot push. See SETUP.md.")
         return False

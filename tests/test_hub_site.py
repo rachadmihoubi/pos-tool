@@ -12,18 +12,23 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 HUB_DIR = Path(__file__).resolve().parent.parent / "hub-site"
 
+sys.path.insert(0, str(HUB_DIR.parent))
+from poslib.provision import HUB_REGISTRY_FILENAME  # noqa: E402
+
 
 def test_all_expected_files_exist():
-    for name in ("index.html", "style.css", "app.js", "stores.json"):
+    for name in ("index.html", "style.css", "app.js", HUB_REGISTRY_FILENAME):
         assert (HUB_DIR / name).is_file(), f"missing hub-site/{name}"
 
 
 def test_stores_json_is_valid_and_shaped_correctly():
-    data = json.loads((HUB_DIR / "stores.json").read_text(encoding="utf-8"))
+    data = json.loads((HUB_DIR / HUB_REGISTRY_FILENAME).read_text(encoding="utf-8"))
+    assert isinstance(data.get("hub_version"), int) and data["hub_version"] >= 1
     assert "stores" in data
     assert isinstance(data["stores"], list)
     assert len(data["stores"]) >= 1
@@ -50,7 +55,10 @@ def test_app_js_uses_the_real_stock_json_field_names():
     for field in ("reference", "name", "stock", "price", "cost", "boxes", "boxes_remainder",
                   "avg_cost", "last_purchase_cost"):
         assert field in js, f"app.js never references stock file's {field!r} field"
-    assert "stores.json" in js
+    # Must fetch the exact permanent, tokenized filename - not the plain
+    # "stores.json" this page used before 2026-08-31 (see
+    # poslib/provision.py's "Cross-store hub registration" section for why).
+    assert f'"{HUB_REGISTRY_FILENAME}"' in js
     assert "Promise.allSettled" in js, \
         "must use allSettled, not Promise.all, so one unreachable store doesn't hide the rest"
 

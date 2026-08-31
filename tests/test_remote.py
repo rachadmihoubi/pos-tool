@@ -199,6 +199,20 @@ class TestPushRemoteHappyPath:
         assert url == "https://api.cloudflare.com/client/v4/accounts/fake-account-id/pages/projects/my-shop/upload-token"
         assert session.headers["Authorization"] == "Bearer fake-api-token"
 
+    def test_explicit_api_token_overrides_config_token(self, tmp_path, monkeypatch):
+        # poslib/provision.py's register_store_with_hub pushes the shared
+        # hub using the powerful one-time provisioning token, not any
+        # store's own persisted CLOUDFLARE_API_TOKEN.
+        export_dir = _make_export_dir(tmp_path, {"index.html": "hi"})
+        cfg = FakeConfig(export_dir=export_dir, api_token="stored-token")
+        session = FakeSession()
+        _patch_session(monkeypatch, session)
+
+        result = remote.push_remote(cfg, api_token="powerful-one-time-token")
+
+        assert result is True
+        assert session.headers["Authorization"] == "Bearer powerful-one-time-token"
+
     def test_upload_and_upsert_hashes_use_jwt_and_no_account_prefix(self, tmp_path, monkeypatch):
         export_dir = _make_export_dir(tmp_path, {"index.html": "hi"})
         cfg = FakeConfig(export_dir=export_dir)

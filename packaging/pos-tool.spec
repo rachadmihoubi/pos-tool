@@ -28,6 +28,18 @@ datas = [
     (str(PROJECT_ROOT / "config.template.yaml"), "."),
     (str(PROJECT_ROOT / ".env.example"), "."),
     (str(PROJECT_ROOT / "VERSION"), "."),
+    # Bundled so poslib/provision.py's register_store_with_hub can push the
+    # hub's static assets during --provision-cloudflare without needing this
+    # git repo on the till PC. Excludes the live stores-<token>.json entirely
+    # (register_store_with_hub always writes a freshly-fetched-and-merged
+    # copy of that one file itself - see its own docstring for why) so a
+    # stale bundled copy of *that* file specifically can never be pushed by
+    # mistake. poslib/provision.py's HUB_VERSION must be bumped by hand
+    # whenever index.html/app.js/style.css change here - see that module's
+    # "Cross-store hub registration" section.
+    (str(PROJECT_ROOT / "hub-site" / "index.html"), "hub-site"),
+    (str(PROJECT_ROOT / "hub-site" / "app.js"), "hub-site"),
+    (str(PROJECT_ROOT / "hub-site" / "style.css"), "hub-site"),
 ]
 
 # numpy/pandas C-extension gotcha (named in advance in this task's own

@@ -65,10 +65,12 @@ var
   CloudflareAccountIdEdit: TNewEdit;
   CloudflareSlugEdit: TNewEdit;
   CloudflareOwnerEmailEdit: TNewEdit;
+  CloudflareHubNameEdit: TNewEdit;
   CloudflareHintLabel: TNewStaticText;
   CloudflareAccountIdLabel: TNewStaticText;
   CloudflareSlugLabel: TNewStaticText;
   CloudflareOwnerEmailLabel: TNewStaticText;
+  CloudflareHubNameLabel: TNewStaticText;
 
 function SetEnvironmentVariableW(lpName, lpValue: String): Boolean;
   external 'SetEnvironmentVariableW@kernel32.dll stdcall';
@@ -230,6 +232,20 @@ begin
   CloudflareOwnerEmailEdit.Left := 0;
   CloudflareOwnerEmailEdit.Top := CloudflareOwnerEmailLabel.Top + CloudflareOwnerEmailLabel.Height + ScaleY(2);
   CloudflareOwnerEmailEdit.Width := CloudflarePage.SurfaceWidth;
+
+  CloudflareHubNameLabel := TNewStaticText.Create(CloudflarePage);
+  CloudflareHubNameLabel.Parent := CloudflarePage.Surface;
+  CloudflareHubNameLabel.Left := 0;
+  CloudflareHubNameLabel.Top := CloudflareOwnerEmailEdit.Top + CloudflareOwnerEmailEdit.Height + ScaleY(8);
+  CloudflareHubNameLabel.Width := CloudflarePage.SurfaceWidth;
+  CloudflareHubNameLabel.Caption :=
+    'Store''s display name on the cross-store hub (leave blank to skip adding it there):';
+
+  CloudflareHubNameEdit := TNewEdit.Create(CloudflarePage);
+  CloudflareHubNameEdit.Parent := CloudflarePage.Surface;
+  CloudflareHubNameEdit.Left := 0;
+  CloudflareHubNameEdit.Top := CloudflareHubNameLabel.Top + CloudflareHubNameLabel.Height + ScaleY(2);
+  CloudflareHubNameEdit.Width := CloudflarePage.SurfaceWidth;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -266,15 +282,38 @@ begin
                'name, and owner email are all required too.', mbError, MB_OK);
         Result := False;
       end
+      else if (CloudflareHubNameEdit.Text <> '') and
+              (Trim(CloudflareHubNameEdit.Text) = '') then
+      begin
+        // Blank means "skip adding it to the hub" - that's valid. Whitespace-
+        // only isn't a real skip and isn't a real name either, so treat it
+        // as a mistake rather than silently doing one or the other.
+        MsgBox('The hub display name can''t be just spaces - clear it ' +
+               'entirely to skip adding this store to the hub.', mbError, MB_OK);
+        Result := False;
+      end
       else if (Pos('"', CloudflareAccountIdEdit.Text) > 0) or
               (Pos('"', CloudflareSlugEdit.Text) > 0) or
-              (Pos('"', CloudflareOwnerEmailEdit.Text) > 0) then
+              (Pos('"', CloudflareOwnerEmailEdit.Text) > 0) or
+              (Pos('"', CloudflareHubNameEdit.Text) > 0) then
       begin
-        // These three values are interpolated unescaped into a command
-        // line in Step 3 below - a literal " would let its contents break
-        // out of the quoted argument it's meant to stay inside.
-        MsgBox('The account ID, project name, and owner email cannot ' +
-               'contain a " character.', mbError, MB_OK);
+        // These values are interpolated unescaped into a command line in
+        // Step 3 below - a literal " would let its contents break out of
+        // the quoted argument it's meant to stay inside.
+        MsgBox('The account ID, project name, owner email, and hub display ' +
+               'name cannot contain a " character.', mbError, MB_OK);
+        Result := False;
+      end
+      else if (Copy(CloudflareAccountIdEdit.Text, Length(CloudflareAccountIdEdit.Text), 1) = '\') or
+              (Copy(CloudflareSlugEdit.Text, Length(CloudflareSlugEdit.Text), 1) = '\') or
+              (Copy(CloudflareOwnerEmailEdit.Text, Length(CloudflareOwnerEmailEdit.Text), 1) = '\') or
+              ((CloudflareHubNameEdit.Text <> '') and
+               (Copy(CloudflareHubNameEdit.Text, Length(CloudflareHubNameEdit.Text), 1) = '\')) then
+      begin
+        // A trailing backslash immediately before the closing " in Step 3's
+        // command line escapes that quote instead of ending the argument -
+        // CommandLineToArgvW's own documented quoting rule.
+        MsgBox('None of these fields can end with a backslash.', mbError, MB_OK);
         Result := False;
       end;
     end;
@@ -344,6 +383,14 @@ begin
   end;
 end;
 
+function GetHubStoreNameArg(): String;
+begin
+  if CloudflareHubNameEdit.Text = '' then
+    Result := ''
+  else
+    Result := ' --hub-store-name "' + CloudflareHubNameEdit.Text + '"';
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
@@ -388,6 +435,7 @@ begin
          ' --account-id "' + CloudflareAccountIdEdit.Text + '"' +
          ' --project-slug "' + CloudflareSlugEdit.Text + '"' +
          ' --owner-email "' + CloudflareOwnerEmailEdit.Text + '"' +
+         GetHubStoreNameArg() +
          ' --data-dir "' + ExpandConstant('{localappdata}\Shop Analysis') + '"',
          '', SW_HIDE, ewWaitUntilTerminated, ResultCode, ProvisionOutput) then
       begin
@@ -410,7 +458,19 @@ begin
           MsgBox('Cloudflare setup did not finish successfully:' + #13#10#13#10 +
                  ProvisionMessage + #13#10#13#10 +
                  'Full details were also saved to cloudflare_provision_log.txt ' +
-                 'in the app data folder.', mbError, MB_OK);
+                 'in the app data folder.', mbError, MB_OK)
+        else if Pos('HUB REGISTRATION FAILED', ProvisionMessage) > 0 then
+          // The store itself is live and fully set up (ResultCode = 0) -
+          // only adding it to the cross-store hub failed. This must stay a
+          // visible MsgBox even on an otherwise-successful run, not just a
+          // line in the log - the whole point of this feature is removing
+          // a manual step that was easy to forget, so a silently-skipped
+          // hub registration would reproduce exactly that problem.
+          MsgBox('The store is set up and live, but adding it to the ' +
+                 'cross-store hub failed:' + #13#10#13#10 + ProvisionMessage +
+                 #13#10#13#10 + 'Full details were also saved to ' +
+                 'cloudflare_provision_log.txt in the app data folder.',
+                 mbError, MB_OK);
       end
       else
       begin

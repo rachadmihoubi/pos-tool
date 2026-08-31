@@ -156,13 +156,15 @@ def _patch_provision_cloudflare_deps(monkeypatch, *, config_error=None):
             raise config_error
         return FakeConfig()
 
-    def fake_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email):
+    def fake_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email,
+                              hub_store_name=None):
         calls["provision_store"].append({
             "cfg": cfg,
             "powerful_token": powerful_token,
             "account_id": account_id,
             "project_slug": project_slug,
             "owner_email": owner_email,
+            "hub_store_name": hub_store_name,
         })
         return provision_module.ProvisionResult(True, "done")
 
@@ -191,7 +193,24 @@ def test_provision_cloudflare_reads_token_from_env_not_argv(monkeypatch, capsys)
     assert calls["provision_store"][0]["account_id"] == "acct1"
     assert calls["provision_store"][0]["project_slug"] == "storeb"
     assert calls["provision_store"][0]["owner_email"] == "owner@x.com"
+    assert calls["provision_store"][0]["hub_store_name"] is None
     assert "POS_TOOL_PROVISION_TOKEN" not in os.environ  # discarded after use
+
+
+def test_provision_cloudflare_passes_hub_store_name_through(monkeypatch, capsys):
+    monkeypatch.setenv("POS_TOOL_PROVISION_TOKEN", "secret-token")
+    calls = _patch_provision_cloudflare_deps(monkeypatch)
+
+    rc = main_module.main([
+        "--provision-cloudflare",
+        "--account-id", "acct1",
+        "--project-slug", "storeb",
+        "--owner-email", "owner@x.com",
+        "--hub-store-name", "Store B",
+    ])
+
+    assert rc == 0
+    assert calls["provision_store"][0]["hub_store_name"] == "Store B"
 
 
 def test_provision_cloudflare_fails_cleanly_with_no_token_set(monkeypatch, capsys):
@@ -219,7 +238,8 @@ class TestRunProvisioningWithWatchdog:
     def test_returns_result_when_provision_store_finishes_in_time(self, monkeypatch):
         import poslib.provision as provision_module
 
-        def fake_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email):
+        def fake_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email,
+                                  hub_store_name=None):
             return provision_module.ProvisionResult(True, "done")
 
         monkeypatch.setattr(main_module, "provision_store", fake_provision_store)
@@ -237,7 +257,8 @@ class TestRunProvisioningWithWatchdog:
     def test_returns_none_when_provision_store_exceeds_timeout(self, monkeypatch):
         import threading
 
-        def hanging_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email):
+        def hanging_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email,
+                                     hub_store_name=None):
             # Blocks well past the short timeout below, standing in for a
             # genuinely stuck DNS resolution or network call - a real
             # provision_store never actually needs killing at the OS level
@@ -264,7 +285,8 @@ class TestRunProvisioningWithWatchdog:
         # would die having appended nothing to result_holder, and the read
         # in _run_provisioning_with_watchdog (result_holder[0]) would raise
         # IndexError instead of surfacing the real cause.
-        def exploding_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email):
+        def exploding_provision_store(cfg, *, powerful_token, account_id, project_slug, owner_email,
+                                       hub_store_name=None):
             raise RuntimeError("log rotation permission error")
 
         monkeypatch.setattr(main_module, "provision_store", exploding_provision_store)

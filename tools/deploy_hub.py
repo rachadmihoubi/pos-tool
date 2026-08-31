@@ -5,9 +5,24 @@ hub's static site to its own Cloudflare Pages project.
 Not run by any watcher or scheduled task - the hub has no per-store data of
 its own (see docs/superpowers/specs/2026-08-27-component5-hub-design.md),
 so it is redeployed by hand, on rachad's own dev PC, only when hub-site/'s
-files change (a new store added to stores.json, a design tweak). Reuses
-poslib/remote.py's already-proven Cloudflare Pages upload flow - never
-reimplements it.
+design files (index.html/app.js/style.css) change. Reuses poslib/remote.py's
+already-proven Cloudflare Pages upload flow - never reimplements it.
+
+Adding a new store to the hub's store list no longer needs this script -
+poslib/provision.py's register_store_with_hub does that automatically
+during --provision-cloudflare, reading and rewriting the live
+stores-<token>.json itself (see that module's "Cross-store hub
+registration" section for why, and INSTALL_GUIDE.md's Step 6 for the
+manual fallback if it fails or is skipped).
+
+IMPORTANT: any push from this script overwrites index.html/app.js/style.css
+on the live hub. If you change any of those three files, bump HUB_VERSION
+in poslib/provision.py AND the matching "hub_version" value already sitting
+in hub-site/stores-<token>.json BEFORE running this script - otherwise a
+provisioning run using an older, not-yet-rebuilt installer will see the
+live hub_version as newer than its own and correctly refuse to touch the
+hub at all (see register_store_with_hub's docstring), silently blocking
+automatic hub registration until a new installer is built.
 
 Usage:
     python tools/deploy_hub.py --project promakeupmihoubi-hub

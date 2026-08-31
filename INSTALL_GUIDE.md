@@ -103,10 +103,11 @@ source file — it's always copied read-only before anything touches it.
 | Cloudflare account ID | `9ced76fef875048f0517d0bf2fe7d43f` |
 | New store project name | a permanent, unique, lowercase-hyphenated slug — see naming below |
 | Owner's email | the real store owner's email, exactly as they'd log in with |
+| Store's display name on the hub | e.g. `Pro Makeup Setif` — leave blank to skip adding it to the hub (Step 6 becomes manual in that case) |
 
 **Naming the project:** this becomes the store's permanent public URL
-(`<name>.pages.dev`) and its permanent identity in `hub-site/stores.json`
-— pick something you won't want to change later, e.g. the store's own
+(`<name>.pages.dev`) and its permanent identity on the cross-store hub —
+pick something you won't want to change later, e.g. the store's own
 name in slug form (`storeb-pos`, `boutique-x`). Lowercase letters, digits,
 and hyphens only, must start and end with a letter or digit.
 
@@ -164,11 +165,25 @@ every day.
 
 ## Step 6 — Add the store to the cross-store hub
 
-Provisioning sets up the store's *own* dashboard but doesn't touch the
-shared hub page — that's a deliberate manual step so one store's install
-can never accidentally overwrite the hub's own site. On your dev PC:
+**Automatic as of the "Store's display name on the hub" field above** — if
+you filled it in, the installer already added this store to the live hub
+as its very last step, right after confirming the store itself is live.
+Nothing further to do; skip to Step 7. Check
+`cloudflare_provision_log.txt` (Step 4) for `Added to the cross-store hub
+as '<name>'.` to confirm it actually happened — a hub-registration
+failure doesn't fail the overall install (the store itself is still fully
+live either way), but it does pop up its own separate message box on the
+spot, and the log line will instead start with `HUB REGISTRATION FAILED`
+and give you the exact JSON to add by hand (see the manual fallback
+below).
 
-1. Open `hub-site/stores.json` and add an entry:
+**Manual fallback** — do this if you left the hub name field blank, or if
+automatic registration failed:
+
+1. On a dev PC with this repo cloned and Cloudflare credentials in `.env`,
+   open `hub-site/stores-<hub-token>.json` (the exact filename is in that
+   file's own git history / this repo's current contents) and add an
+   entry to its `"stores"` list:
    ```json
    {"name": "<Store's display name>", "url": "https://<project-name>.pages.dev/stock-<token>.json"}
    ```
@@ -179,7 +194,7 @@ can never accidentally overwrite the hub's own site. On your dev PC:
    ```powershell
    python tools/deploy_hub.py --project promakeupmihoubi-hub
    ```
-3. Commit `hub-site/stores.json` in this repo so the change isn't lost.
+3. Commit the change in this repo so it isn't lost.
 
 ---
 

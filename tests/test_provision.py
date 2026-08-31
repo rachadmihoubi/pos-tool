@@ -1107,3 +1107,439 @@ def test_provision_store_rejects_invalid_slug(tmp_path):
 
     assert result.ok is False
     assert "not a valid" in result.message
+
+
+# ---------------------------------------------------------------------------
+# Cross-store hub registration (register_store_with_hub, fetch_hub_registry).
+# ---------------------------------------------------------------------------
+
+
+def _write_hub_site_dir(parent: Path) -> Path:
+    d = parent / "hub-site"
+    d.mkdir(parents=True)
+    (d / "index.html").write_text("<html></html>", encoding="utf-8")
+    (d / "app.js").write_text("// app", encoding="utf-8")
+    (d / "style.css").write_text("body {}", encoding="utf-8")
+    return d
+
+
+class _QueuedSession:
+    """
+    Like FakeSession, but POST responses are consumed in call order instead
+    of matched by URL - needed because register_store_with_hub's own two
+    Access-app creates POST to the exact same /access/apps endpoint as
+    provision_store's store-level ones, with different response bodies each
+    time (a different domain's wildcard in self_hosted_domains/destinations).
+    GET is matched by suffix like FakeSession, but never consumed - the same
+    empty access-apps list correctly serves every existence check regardless
+    of how many times it's called.
+    """
+
+    def __init__(self, get_responses: dict, post_responses: list):
+        self._get_responses = get_responses
+        self._post_responses = list(post_responses)
+        self.headers: dict = {}
+        self.calls: list = []
+
+    def get(self, url, **kw):
+        self.calls.append(("GET", url))
+        for suffix, resp in self._get_responses.items():
+            if url.endswith(suffix):
+                return resp
+        raise AssertionError(f"Unexpected GET: {url}")
+
+    def post(self, url, **kw):
+        self.calls.append(("POST", url, kw))
+        return self._post_responses.pop(0)
+
+
+def _wildcard_access_app_response(app_id: str, domain: str) -> FakeResponse:
+    return FakeResponse(200, {
+        "success": True,
+        "result": {
+            "id": app_id,
+            "self_hosted_domains": [domain, f"*.{domain}"],
+            "destinations": [
+                {"type": "public", "uri": domain},
+                {"type": "public", "uri": f"*.{domain}"},
+            ],
+        },
+    })
+
+
+def test_fetch_hub_registry_returns_empty_sentinel_on_404(monkeypatch):
+    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: FakeResponse(404))
+    registry = provision.fetch_hub_registry("hub.pages.dev")
+    assert registry == {"hub_version": 0, "stores": []}
+
+
+def test_fetch_hub_registry_parses_existing_json(monkeypatch):
+    body = {"hub_version": 3, "stores": [{"name": "A", "url": "https://a.pages.dev/x.json"}]}
+    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: FakeResponse(200, body))
+    assert provision.fetch_hub_registry("hub.pages.dev") == body
+
+
+def test_fetch_hub_registry_raises_on_unexpected_status(monkeypatch):
+    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: FakeResponse(302))
+    with pytest.raises(provision.ProvisionError, match="Unexpected response"):
+        provision.fetch_hub_registry("hub.pages.dev")
+
+
+def test_fetch_hub_registry_raises_on_network_error(monkeypatch):
+    import requests as real_requests
+
+    def boom(url, **kw):
+        raise real_requests.ConnectionError("no route")
+
+    monkeypatch.setattr(provision.requests, "get", boom)
+    with pytest.raises(provision.ProvisionError, match="Could not reach"):
+        provision.fetch_hub_registry("hub.pages.dev")
+
+
+def test_fetch_hub_registry_with_retry_succeeds_after_transient_failure(monkeypatch):
+    calls = []
+
+    def fake_get(url, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            return FakeResponse(302)  # Access not propagated to the new bypass app yet
+        return FakeResponse(200, {"hub_version": 1, "stores": []})
+
+    monkeypatch.setattr(provision.requests, "get", fake_get)
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
+
+    registry = provision._fetch_hub_registry_with_retry(
+        "hub.pages.dev", max_attempts=3, delay_seconds=0
+    )
+    assert registry["hub_version"] == 1
+    assert len(calls) == 2
+
+
+def test_register_store_with_hub_refuses_when_live_version_is_newer(tmp_path, monkeypatch):
+    # register_store_with_hub must raise before ever touching `session` or
+    # hub_site_dir - see this section's header comment for why (never push
+    # a bundled hub-site older than what's already live).
+    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: FakeResponse(200, {
+        "hub_version": provision.HUB_VERSION + 1, "stores": [],
+    }))
+    cfg = FakeCfg(tmp_path / "config.yaml", tmp_path / ".env", tmp_path / "remote-site")
+
+    with pytest.raises(provision.ProvisionError, match="newer"):
+        provision.register_store_with_hub(
+            session=object(), account_id="acct1", owner_email="owner@example.com",
+            store_name="Store B", store_domain="storeb.pages.dev",
+            store_stock_filename="stock-bbb.json",
+            hub_site_dir=Path("does-not-exist"), cfg=cfg, powerful_token="powerful123",
+        )
+
+
+def test_register_store_with_hub_appends_new_store_and_pushes(tmp_path, monkeypatch):
+    hub_site_dir = _write_hub_site_dir(tmp_path)
+    cfg = FakeCfg(tmp_path / "config.yaml", tmp_path / ".env", tmp_path / "remote-site")
+
+    pre_push = FakeResponse(200, {
+        "hub_version": provision.HUB_VERSION,
+        "stores": [{"name": "Store A", "url": "https://storea.pages.dev/stock-aaa.json"}],
+    })
+    post_push = FakeResponse(200, {
+        "hub_version": provision.HUB_VERSION,
+        "stores": [
+            {"name": "Store A", "url": "https://storea.pages.dev/stock-aaa.json"},
+            {"name": "Store B", "url": "https://storeb.pages.dev/stock-bbb.json"},
+        ],
+    })
+    get_responses = iter([pre_push, post_push])
+    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: next(get_responses))
+
+    hub_domain = f"{provision.HUB_PROJECT_SLUG}.pages.dev"
+    session = _QueuedSession(
+        get_responses={
+            f"/pages/projects/{provision.HUB_PROJECT_SLUG}": FakeResponse(200, {"success": True}),
+            "/access/apps": FakeResponse(200, {"success": True, "result": []}),
+        },
+        post_responses=[
+            _wildcard_access_app_response("appHubBroad", hub_domain),
+            _wildcard_access_app_response("appHubBypass", hub_domain),
+        ],
+    )
+
+    push_calls = []
+
+    def fake_push_remote(cfg_arg, *, project=None, export_dir=None, api_token=None):
+        push_calls.append((project, api_token))
+        data = json.loads((export_dir / provision.HUB_REGISTRY_FILENAME).read_text(encoding="utf-8"))
+        assert data["stores"][-1] == {
+            "name": "Store B", "url": "https://storeb.pages.dev/stock-bbb.json"
+        }
+        assert (export_dir / "index.html").is_file()
+        return True
+
+    monkeypatch.setattr(provision._remote, "push_remote", fake_push_remote)
+
+    provision.register_store_with_hub(
+        session=session, account_id="acct1", owner_email="owner@example.com",
+        store_name="Store B", store_domain="storeb.pages.dev",
+        store_stock_filename="stock-bbb.json",
+        hub_site_dir=hub_site_dir, cfg=cfg, powerful_token="powerful123",
+    )
+
+    assert push_calls == [(provision.HUB_PROJECT_SLUG, "powerful123")]
+
+
+def test_register_store_with_hub_replaces_existing_entry_for_same_domain(tmp_path, monkeypatch):
+    # Idempotency is keyed on the store's domain, not the full URL - a
+    # re-provisioned store's stock token can change, and that must update
+    # the existing entry in place rather than append a duplicate.
+    hub_site_dir = _write_hub_site_dir(tmp_path)
+    cfg = FakeCfg(tmp_path / "config.yaml", tmp_path / ".env", tmp_path / "remote-site")
+
+    existing = {
+        "hub_version": provision.HUB_VERSION,
+        "stores": [{"name": "Store B (old)", "url": "https://storeb.pages.dev/stock-oldtoken.json"}],
+    }
+    get_responses = iter([FakeResponse(200, existing), FakeResponse(200, existing)])
+    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: next(get_responses))
+
+    hub_domain = f"{provision.HUB_PROJECT_SLUG}.pages.dev"
+    session = _QueuedSession(
+        get_responses={
+            f"/pages/projects/{provision.HUB_PROJECT_SLUG}": FakeResponse(200, {"success": True}),
+            "/access/apps": FakeResponse(200, {"success": True, "result": [
+                {
+                    "id": "appHubBroad", "domain": hub_domain,
+                    "self_hosted_domains": [hub_domain, f"*.{hub_domain}"],
+                    "destinations": [
+                        {"type": "public", "uri": hub_domain},
+                        {"type": "public", "uri": f"*.{hub_domain}"},
+                    ],
+                },
+                {"id": "appHubBypass", "domain": f"{hub_domain}/{provision.HUB_REGISTRY_FILENAME}"},
+            ]}),
+        },
+        post_responses=[],  # both apps already exist - no POST expected
+    )
+
+    captured = {}
+
+    def fake_push_remote(cfg_arg, *, project=None, export_dir=None, api_token=None):
+        captured["stores"] = json.loads(
+            (export_dir / provision.HUB_REGISTRY_FILENAME).read_text(encoding="utf-8")
+        )["stores"]
+        return True
+
+    monkeypatch.setattr(provision._remote, "push_remote", fake_push_remote)
+
+    provision.register_store_with_hub(
+        session=session, account_id="acct1", owner_email="owner@example.com",
+        store_name="Store B", store_domain="storeb.pages.dev",
+        store_stock_filename="stock-newtoken.json",
+        hub_site_dir=hub_site_dir, cfg=cfg, powerful_token="powerful123",
+    )
+
+    assert captured["stores"] == [
+        {"name": "Store B", "url": "https://storeb.pages.dev/stock-newtoken.json"}
+    ]
+    assert session.calls == [c for c in session.calls if c[0] != "POST"]  # no creates needed
+
+
+def test_register_store_with_hub_raises_when_push_fails(tmp_path, monkeypatch):
+    hub_site_dir = _write_hub_site_dir(tmp_path)
+    cfg = FakeCfg(tmp_path / "config.yaml", tmp_path / ".env", tmp_path / "remote-site")
+    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: FakeResponse(200, {
+        "hub_version": provision.HUB_VERSION, "stores": [],
+    }))
+    hub_domain = f"{provision.HUB_PROJECT_SLUG}.pages.dev"
+    session = _QueuedSession(
+        get_responses={
+            f"/pages/projects/{provision.HUB_PROJECT_SLUG}": FakeResponse(200, {"success": True}),
+            "/access/apps": FakeResponse(200, {"success": True, "result": [
+                {
+                    "id": "appHubBroad", "domain": hub_domain,
+                    "self_hosted_domains": [hub_domain, f"*.{hub_domain}"],
+                    "destinations": [
+                        {"type": "public", "uri": hub_domain},
+                        {"type": "public", "uri": f"*.{hub_domain}"},
+                    ],
+                },
+                {"id": "appHubBypass", "domain": f"{hub_domain}/{provision.HUB_REGISTRY_FILENAME}"},
+            ]}),
+        },
+        post_responses=[],
+    )
+    monkeypatch.setattr(provision._remote, "push_remote", lambda *a, **kw: False)
+
+    with pytest.raises(provision.ProvisionError, match="Pushing the updated hub failed"):
+        provision.register_store_with_hub(
+            session=session, account_id="acct1", owner_email="owner@example.com",
+            store_name="Store B", store_domain="storeb.pages.dev",
+            store_stock_filename="stock-bbb.json",
+            hub_site_dir=hub_site_dir, cfg=cfg, powerful_token="powerful123",
+        )
+
+
+def test_register_store_with_hub_raises_when_verification_missing_entry(tmp_path, monkeypatch):
+    hub_site_dir = _write_hub_site_dir(tmp_path)
+    cfg = FakeCfg(tmp_path / "config.yaml", tmp_path / ".env", tmp_path / "remote-site")
+    empty = {"hub_version": provision.HUB_VERSION, "stores": []}
+    # One pre-push read + up to 4 post-push retry reads, all still empty -
+    # the pushed store never shows up.
+    get_responses = iter([FakeResponse(200, empty)] * 5)
+    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: next(get_responses))
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
+
+    hub_domain = f"{provision.HUB_PROJECT_SLUG}.pages.dev"
+    session = _QueuedSession(
+        get_responses={
+            f"/pages/projects/{provision.HUB_PROJECT_SLUG}": FakeResponse(200, {"success": True}),
+            "/access/apps": FakeResponse(200, {"success": True, "result": [
+                {
+                    "id": "appHubBroad", "domain": hub_domain,
+                    "self_hosted_domains": [hub_domain, f"*.{hub_domain}"],
+                    "destinations": [
+                        {"type": "public", "uri": hub_domain},
+                        {"type": "public", "uri": f"*.{hub_domain}"},
+                    ],
+                },
+                {"id": "appHubBypass", "domain": f"{hub_domain}/{provision.HUB_REGISTRY_FILENAME}"},
+            ]}),
+        },
+        post_responses=[],
+    )
+    monkeypatch.setattr(provision._remote, "push_remote", lambda *a, **kw: True)
+
+    with pytest.raises(provision.ProvisionError, match="does not appear"):
+        provision.register_store_with_hub(
+            session=session, account_id="acct1", owner_email="owner@example.com",
+            store_name="Store B", store_domain="storeb.pages.dev",
+            store_stock_filename="stock-bbb.json",
+            hub_site_dir=hub_site_dir, cfg=cfg, powerful_token="powerful123",
+        )
+
+
+def test_provision_store_hub_registration_failure_does_not_fail_overall_result(tmp_path, monkeypatch):
+    # A hub-registration failure must never fail or roll back the store's
+    # own already-successful provisioning - just a loud, hand-actionable
+    # note in the returned message (setup.iss greps for the marker to show
+    # its own MsgBox even though ResultCode stays 0).
+    config_path = tmp_path / "config.yaml"
+    _write_minimal_config(config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "SMTP_PASSWORD=\nCLOUDFLARE_API_TOKEN=\nCLOUDFLARE_ACCOUNT_ID=\n", encoding="utf-8"
+    )
+    export_dir = tmp_path / "remote-site"
+    cfg = FakeCfg(config_path, env_path, export_dir)
+
+    fake_session = FakeSession({
+        ("GET", "/user/tokens/verify"): FakeResponse(200, {
+            "success": True, "result": {"id": "tok0", "status": "active"},
+        }),
+        ("GET", "/pages/projects/storeb"): FakeResponse(404, {"success": False}),
+        ("POST", "/pages/projects"): FakeResponse(200, {"success": True, "result": {"name": "storeb"}}),
+        ("GET", "/user/tokens"): FakeResponse(200, {"success": True, "result": []}),
+        ("GET", "/user/tokens/permission_groups"): FakeResponse(200, {
+            "success": True, "result": [{"id": "g2", "name": "Pages Write"}],
+        }),
+        ("POST", "/user/tokens"): FakeResponse(200, {
+            "success": True, "result": {"id": "tok_abc", "value": "secretval"},
+        }),
+        ("GET", "/accounts/acct1/access/apps"): FakeResponse(200, {"success": True, "result": []}),
+        ("POST", "/accounts/acct1/access/apps"): _wildcard_access_app_response(
+            "appX", "storeb.pages.dev"
+        ),
+    })
+    monkeypatch.setattr(provision.requests, "Session", lambda: fake_session)
+    monkeypatch.setattr(provision._remote, "push_remote", lambda cfg_arg, **kw: True)
+    monkeypatch.setattr(provision, "verify_reachable", lambda url, *, expect_status, **kw: True)
+    # Triggers register_store_with_hub's version-gate refusal - raises
+    # before ever touching `session`, so no hub-specific session mocking
+    # is needed for this failure path.
+    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: FakeResponse(200, {
+        "hub_version": provision.HUB_VERSION + 1, "stores": [],
+    }))
+
+    result = provision.provision_store(
+        cfg,
+        powerful_token="powerful123",
+        account_id="acct1",
+        project_slug="storeb",
+        owner_email="owner@example.com",
+        hub_store_name="Store B",
+    )
+
+    assert result.ok is True
+    assert provision._HUB_REGISTRATION_FAILED_MARKER in result.message
+    assert '"name": "Store B"' in result.message
+
+
+def test_provision_store_registers_with_hub_on_success(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    _write_minimal_config(config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "SMTP_PASSWORD=\nCLOUDFLARE_API_TOKEN=\nCLOUDFLARE_ACCOUNT_ID=\n", encoding="utf-8"
+    )
+    export_dir = tmp_path / "remote-site"
+    cfg = FakeCfg(config_path, env_path, export_dir)
+
+    hub_app_root = tmp_path / "app-root"
+    _write_hub_site_dir(hub_app_root)
+    monkeypatch.setattr(provision, "app_root", lambda: hub_app_root)
+
+    hub_domain = f"{provision.HUB_PROJECT_SLUG}.pages.dev"
+    session = _QueuedSession(
+        get_responses={
+            "/user/tokens/verify": FakeResponse(200, {
+                "success": True, "result": {"id": "tok0", "status": "active"},
+            }),
+            "/pages/projects/storeb": FakeResponse(404, {"success": False}),
+            f"/pages/projects/{provision.HUB_PROJECT_SLUG}": FakeResponse(200, {"success": True}),
+            "/user/tokens": FakeResponse(200, {"success": True, "result": []}),
+            "/user/tokens/permission_groups": FakeResponse(200, {
+                "success": True, "result": [{"id": "g2", "name": "Pages Write"}],
+            }),
+            "/access/apps": FakeResponse(200, {"success": True, "result": []}),
+        },
+        post_responses=[
+            FakeResponse(200, {"success": True, "result": {"name": "storeb"}}),  # create store project
+            FakeResponse(200, {"success": True, "result": {"id": "tok_abc", "value": "secretval"}}),  # mint watcher token
+            _wildcard_access_app_response("appStoreBroad", "storeb.pages.dev"),
+            _wildcard_access_app_response("appStoreBypass", "storeb.pages.dev"),
+            _wildcard_access_app_response("appHubBroad", hub_domain),
+            _wildcard_access_app_response("appHubBypass", hub_domain),
+        ],
+    )
+    monkeypatch.setattr(provision.requests, "Session", lambda: session)
+    monkeypatch.setattr(provision, "verify_reachable", lambda url, *, expect_status, **kw: True)
+
+    hub_registry = {"hub_version": provision.HUB_VERSION, "stores": []}
+    get_responses = iter([
+        FakeResponse(200, hub_registry),  # pre-push read
+        FakeResponse(200, {  # post-push verification read
+            "hub_version": provision.HUB_VERSION,
+            "stores": [{"name": "Store B", "url": "https://storeb.pages.dev/stock-bbb.json"}],
+        }),
+    ])
+    monkeypatch.setattr(provision.requests, "get", lambda url, **kw: next(get_responses))
+
+    push_calls = []
+
+    def fake_push_remote(cfg_arg, *, project=None, export_dir=None, api_token=None):
+        push_calls.append(project)
+        return True
+
+    monkeypatch.setattr(provision._remote, "push_remote", fake_push_remote)
+
+    result = provision.provision_store(
+        cfg,
+        powerful_token="powerful123",
+        account_id="acct1",
+        project_slug="storeb",
+        owner_email="owner@example.com",
+        hub_store_name="Store B",
+    )
+
+    assert result.ok is True
+    assert "Added to the cross-store hub as 'Store B'." in result.message
+    assert provision._HUB_REGISTRATION_FAILED_MARKER not in result.message
+    assert push_calls == ["storeb", provision.HUB_PROJECT_SLUG]

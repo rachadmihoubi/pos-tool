@@ -83,6 +83,7 @@ def _apply_update(argv: list[str]) -> int:
 
 def _run_provisioning_with_watchdog(
     cfg, *, token: str, account_id: str, project_slug: str, owner_email: str,
+    hub_store_name: str | None = None,
     timeout_seconds: float = _PROVISIONING_TIMEOUT_SECONDS,
 ):
     """
@@ -114,6 +115,7 @@ def _run_provisioning_with_watchdog(
             result_holder.append(provision_store(
                 cfg, powerful_token=token, account_id=account_id,
                 project_slug=project_slug, owner_email=owner_email,
+                hub_store_name=hub_store_name,
             ))
         except BaseException as exc:
             # provision_store's own catch-all only covers Exception - a
@@ -154,6 +156,7 @@ def _provision_cloudflare(argv: list[str]) -> int:
     parser.add_argument("--account-id", required=True)
     parser.add_argument("--project-slug", required=True)
     parser.add_argument("--owner-email", required=True)
+    parser.add_argument("--hub-store-name", default=None)
     parser.add_argument("--data-dir", default=None)
     args = parser.parse_args(argv)
 
@@ -178,6 +181,7 @@ def _provision_cloudflare(argv: list[str]) -> int:
     result = _run_provisioning_with_watchdog(
         cfg, token=token, account_id=args.account_id,
         project_slug=args.project_slug, owner_email=args.owner_email,
+        hub_store_name=args.hub_store_name,
     )
 
     if result is None:
