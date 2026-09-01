@@ -487,6 +487,27 @@ class TestChannels:
         assert "graph.facebook.com" in source
 
 
+class TestJsFormatExtended:
+
+    def test_includes_percent_date_datetime_and_dash(self):
+        t = get_translator("en")
+        fmt = t.js_format()
+        assert fmt["percent_format"] == t.get("common.percent_format", value="{value}")
+        assert fmt["date_format"] == t.get("common.date_format", day="{day}", month="{month}", year="{year}")
+        assert fmt["datetime_format"] == t.get(
+            "common.datetime_format", day="{day}", month="{month}", year="{year}",
+            hour="{hour}", minute="{minute}")
+        assert fmt["dash"] == "—"
+
+    def test_still_includes_existing_fields(self):
+        t = get_translator("fr")
+        fmt = t.js_format()
+        assert fmt["thousands"] == " "  # narrow no-break space
+        assert fmt["decimal"] == ","
+        assert fmt["currency"] == t.get("common.currency")
+        assert "money_format" in fmt
+
+
 def test_locales_dir_resolves_from_app_root():
     from poslib import i18n, paths
     assert i18n.LOCALES_DIR == paths.app_root() / "locales"

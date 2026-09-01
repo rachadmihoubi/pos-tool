@@ -136,10 +136,12 @@ class Translator:
 
     def js_format(self) -> dict[str, str]:
         """
-        The pieces of this language's number/money formatting a client-side
-        script needs to replicate `number()`/`money()` in the browser -
-        used only by the remote static export's custom-range picker, which
-        has no server left to ask once it's deployed.
+        The pieces of this language's number/money/percent/date formatting
+        a client-side script needs to replicate number()/money()/percent()/
+        date()/datetime() in the browser - used by the remote static
+        export's custom-range picker (money/number only, historically) and
+        by the product/customer JSON-replatformed detail shells (all six
+        fields - see static/remote-detail.js).
         """
         fmt = NUMBER_FORMATS.get(self.lang, NUMBER_FORMATS[FALLBACK])
         return {
@@ -148,6 +150,13 @@ class Translator:
             "currency": self.get("common.currency"),
             "money_format": self.get("common.money_format",
                                      amount="{amount}", currency="{currency}"),
+            "percent_format": self.get("common.percent_format", value="{value}"),
+            "date_format": self.get("common.date_format",
+                                    day="{day}", month="{month}", year="{year}"),
+            "datetime_format": self.get("common.datetime_format",
+                                        day="{day}", month="{month}", year="{year}",
+                                        hour="{hour}", minute="{minute}"),
+            "dash": "—",
         }
 
     def number(self, value: Any, decimals: int = 0) -> str:
