@@ -19,6 +19,11 @@
   </div>
 
   <div class="topbar-actions">
+    {% if is_static_export and cache and cache.parsed_at %}
+      <span class="badge badge-synced" title="{{ t('remote.generated_note', when=t.datetime(cache.parsed_at)) }}">
+        {{ t('remote.synced_badge', when=t.datetime(cache.parsed_at)) }}
+      </span>
+    {% endif %}
     {% if not is_static_export %}
       <button type="button" class="btn" id="refresh-btn" title="{{ t('app.refresh') }}">
         <span id="refresh-label">{{ t('app.refresh') }}</span>

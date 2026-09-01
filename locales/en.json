@@ -242,7 +242,8 @@
   },
 
   "remote": {
-    "generated_note": "This snapshot was generated {when}. If the store PC is off, this page keeps showing this snapshot until it comes back."
+    "generated_note": "This snapshot was generated {when}. If the store PC is off, this page keeps showing this snapshot until it comes back.",
+    "synced_badge": "Synced {when}"
   },
 
   "customers": {

@@ -41,7 +41,7 @@ At the start of a session, run (PowerShell): `$env:COMPUTERNAME`
 | Hostname | Role | This machine's correct `database.path` |
 |---|---|---|
 | `DESKTOP-ERN4KAR` | **Dev PC** — rachad's own machine, not a real store (confirmed directly by the user, 2026-08-31) | `C:/Users/RACHAD/Desktop/pos tools/Base de données4.dblx` |
-| *(not yet recorded)* | Store PC — used both for the real till (packaged install) and for dev work on this git checkout while at work | Fill in on first session there: run `$env:COMPUTERNAME`, add a row to this table with that hostname and that store's real `.dblx` path, and commit it so every future session (on either machine) can look it up instead of re-guessing. |
+| `DESKTOP-94UHGGD` | **Store #1 (Pro Makeup Boumati) PC** — used both for the real till (via `E:` drive backups) and for dev work on this git checkout while at work; this machine's `config.yaml` `database.path` is intentionally left uncommitted/local-only (see the "till PC identity" memory) since it genuinely differs from every other machine | `E:/Base de données4.dblx` (kept uncommitted in `config.yaml` on this machine — do not push it) |
 
 If a third machine (a second or third store) starts being used for dev
 work on this repo too, add its hostname here the same way — this table is
