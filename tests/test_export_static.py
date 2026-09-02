@@ -302,6 +302,77 @@ class TestExport:
         assert "Access-Control-Allow-Origin" in content
 
 
+class TestProductsCustomersJson:
+
+    def test_products_json_has_every_item_keyed_by_id(self, cfg, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+        data = json.loads((out_dir / "products.json").read_text(encoding="utf-8"))
+        assert isinstance(data, dict)
+        assert len(data) > 0
+        some_id = next(iter(data))
+        entry = data[some_id]
+        assert set(entry.keys()) == {"summary", "family", "sales_history",
+                                      "purchase_history", "competitor_prices"}
+        assert "item_name" in entry["summary"]
+        # JSON round-trips cleanly with no NaN/Infinity tokens (json.loads
+        # would already have raised on those with default settings, but
+        # assert explicitly so a future change to allow_nan doesn't silently
+        # let one back in).
+        raw = (out_dir / "products.json").read_text(encoding="utf-8")
+        assert "NaN" not in raw
+        assert "Infinity" not in raw
+        # Cloudflare Pages rejects any single asset over 25MB
+        # (poslib/remote.py's _MAX_FILE_SIZE_BYTES - a rejection that fails
+        # SILENTLY, only a log.warning, see remote.py:395-398). Reviewed
+        # 2026-09-01: today's real data lands around 9-10MB, but
+        # sales_history/purchase_history are capped at 200 rows/product
+        # (not today's actual row count), so the bounded worst case is
+        # materially higher - this assertion is a canary for growth, not a
+        # today-only sanity check. If this ever fails, split products.json
+        # into per-entity files rather than raising the cap blindly.
+        assert len(raw.encode("utf-8")) < 20 * 1024 * 1024
+
+    def test_customers_json_has_every_customer_keyed_by_id_excluding_walkin(
+            self, cfg, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+        data = json.loads((out_dir / "customers.json").read_text(encoding="utf-8"))
+        assert isinstance(data, dict)
+        assert len(data) > 0
+        some_id = next(iter(data))
+        entry = data[some_id]
+        assert set(entry.keys()) == {"summary", "receivable", "purchases", "payments"}
+        assert "customer_name" in entry["summary"]
+        raw = (out_dir / "customers.json").read_text(encoding="utf-8")
+        assert len(raw.encode("utf-8")) < 20 * 1024 * 1024
+        from poslib.metrics import Metrics
+        from poslib.etl import ETL
+        etl = ETL(cfg)
+        conn = etl.connect()
+        try:
+            m = Metrics(conn, cfg)
+            assert str(int(m.walkin_id)) not in data
+        finally:
+            conn.close()
+
+    def test_products_json_datetimes_are_iso_strings(self, cfg, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+        data = json.loads((out_dir / "products.json").read_text(encoding="utf-8"))
+        # Find any entry with at least one sales_history row and check its
+        # ticket_time is a plain ISO-ish string, not a dict/list (which is
+        # what an un-cleaned Timestamp would serialize to via a bad default).
+        for entry in data.values():
+            if entry["sales_history"]:
+                ts = entry["sales_history"][0]["ticket_time"]
+                assert isinstance(ts, str)
+                assert ts[4] == "-" and ts[7] == "-"
+                break
+        else:
+            pytest.fail("no product with sales_history found to check date serialization")
+
+
 class TestStatusPayload:
 
     def test_handles_missing_cache_info_gracefully(self):

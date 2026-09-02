@@ -119,6 +119,36 @@ store PC to see it.</p>
 """
 
 
+def _json_safe(value):
+    """
+    Recursively convert a row_dict()/rows()-cleaned structure (which may
+    still contain Python datetime objects, per app.py's rows()) into
+    something json.dumps can serialize with allow_nan=False, matching the
+    same "None for missing" convention every other JSON export in this
+    file (daily_records, stock_records) already uses.
+
+    row_dict()/rows() (app.py:199-236) already turn NaN into None, but NOT
+    +/-inf - isnan(inf) is False, so it passes their cleaning untouched.
+    metrics.py's item_movement() sets cover_months = np.inf for any item
+    with no recent sale (metrics.py:1527-1531), which is a large share of
+    a real catalog's dead stock - json.dumps would otherwise emit the bare
+    token "Infinity", which is not valid JSON and makes every consumer's
+    JSON.parse() throw. Caught in review before this was ever run for
+    real - see this plan's Task 3 Step 4 test, which asserts against it.
+    """
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        return None
+    if isinstance(value, datetime.datetime):
+        return value.isoformat(sep="T", timespec="seconds")
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    return value
+
+
 def _today_preset_ranges(today: datetime.date) -> dict[str, tuple[datetime.date, datetime.date]]:
     """Date ranges for TODAY_PRESET_FILES, keyed by filename stem."""
     return {
@@ -246,6 +276,47 @@ def export(cfg: Config | None = None) -> Path:
         # for Cloudflare to read this.
         (out_dir / "_headers").write_text(
             f"/{stock_filename}\n  Access-Control-Allow-Origin: *\n", encoding="utf-8")
+
+        # Products/customers detail, replatformed from per-entity-per-
+        # language pre-rendered HTML (see the old products_dir/customers_dir
+        # loops further down, still present in parallel - see
+        # docs/superpowers/plans/2026-09-01-product-customer-json-replatform.md)
+        # to two JSON payloads consumed by templates/product_shell.html and
+        # templates/customer_shell.html client-side, the same "one JSON
+        # file, all entities, no per-language variant" shape as stock.json
+        # above. Every value here is exactly what row_dict()/rows() already
+        # produce for the live local dashboard - only the datetime -> ISO
+        # string conversion (_json_safe) differs, since JSON has no native
+        # datetime type.
+        products_json: dict[str, dict] = {}
+        for item_id in item_ids:
+            profile = m.product_profile(item_id)
+            if profile is None:
+                raise RuntimeError(f"item {item_id} vanished mid-export")
+            competitor_prices = ownerdata.competitor_prices_for_item(cfg, item_id)
+            products_json[str(item_id)] = _json_safe({
+                "summary": row_dict(profile["summary"]),
+                "family": row_dict(profile["family"]),
+                "sales_history": rows(profile["sales_history"], limit=200),
+                "purchase_history": rows(profile["purchase_history"], limit=200),
+                "competitor_prices": rows(competitor_prices),
+            })
+        (out_dir / "products.json").write_text(
+            json.dumps(products_json, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+
+        customers_json: dict[str, dict] = {}
+        for customer_id in customer_ids:
+            profile = m.customer_profile(customer_id)
+            if profile is None:
+                raise RuntimeError(f"customer {customer_id} vanished mid-export")
+            customers_json[str(customer_id)] = _json_safe({
+                "summary": row_dict(profile["summary"]),
+                "receivable": row_dict(profile["receivable"]),
+                "purchases": rows(profile["purchases"], limit=200),
+                "payments": rows(profile["payments"], limit=100),
+            })
+        (out_dir / "customers.json").write_text(
+            json.dumps(customers_json, ensure_ascii=False, allow_nan=False), encoding="utf-8")
 
         presets = _today_preset_ranges(today)
 
