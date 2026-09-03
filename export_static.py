@@ -333,6 +333,7 @@ def export(cfg: Config | None = None) -> Path:
             static_dir = lang_dir / "static"
             static_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(PROJECT_ROOT / "static" / "style.css", static_dir / "style.css")
+            shutil.copy2(PROJECT_ROOT / "static" / "remote-detail.js", static_dir / "remote-detail.js")
 
             def render(path: str, out_file: Path) -> None:
                 sep = "&" if "?" in path else "?"
@@ -358,6 +359,18 @@ def export(cfg: Config | None = None) -> Path:
 
             for slug in NESTED_PAGES:
                 render(f"/{slug}", lang_dir / f"{slug}.html")
+
+            with app.test_request_context(
+                    f"/product.html?lang={lang}&__static__=1",
+                    environ_overrides={"SCRIPT_NAME": f"/{lang}"}):
+                html = render_template("product_shell.html", cache=cache_info)
+            (lang_dir / "product.html").write_text(html, encoding="utf-8")
+
+            with app.test_request_context(
+                    f"/customer.html?lang={lang}&__static__=1",
+                    environ_overrides={"SCRIPT_NAME": f"/{lang}"}):
+                html = render_template("customer_shell.html", cache=cache_info)
+            (lang_dir / "customer.html").write_text(html, encoding="utf-8")
 
             for filename, (start, end) in presets.items():
                 render(f"/today?start={start.isoformat()}&end={end.isoformat()}",

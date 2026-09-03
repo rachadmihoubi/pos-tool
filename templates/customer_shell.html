@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.customers') }}{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb" style="padding: 10px 24px 0;">
+  <a href="customers.html">{{ t('customers.detail_back') }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1 id="rd-customer-name">{{ t('app.loading') }}</h1>
+  <p>
+    <span id="rd-customer-no"></span><span id="rd-phone"></span><span id="rd-city"></span>
+    <span class="pill" id="rd-segment-pill" hidden></span>
+  </p>
+</div>
+
+<section class="tiles tiles-big">
+  <div class="tile">
+    <div class="label">{{ t('customers.col_revenue') }}</div>
+    <div class="value" id="rd-revenue">—</div>
+    <div class="sub">{{ t('customers.col_revenue_12m') }}: <span id="rd-revenue12m"></span></div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('customers.col_profit') }}</div>
+    <div class="value" id="rd-profit">—</div>
+    <div class="sub">{{ t('common.margin_pct') }}: <strong id="rd-margin-pct"></strong></div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('customers.col_visits') }}</div>
+    <div class="value" id="rd-visits">—</div>
+    <div class="sub">{{ t('customers.col_basket') }}: <span id="rd-avg-basket"></span></div>
+  </div>
+  <div class="tile">
+    <div class="label">{{ t('common.balance') }}</div>
+    <div class="value" id="rd-balance-value">
+      <span id="rd-balance-amount">—</span>
+      <span class="pill" id="rd-credit-risk-pill" style="font-size:12px; vertical-align:middle;" hidden></span>
+    </div>
+    <div class="sub" id="rd-balance-sub"></div>
+  </div>
+</section>
+
+<div class="banner banner-bad" id="rd-at-risk-banner" hidden>{{ t('receivables.risk_flag') }} — {{ t('receivables.col_days') }}: <span id="rd-at-risk-days"></span></div>
+<div class="banner banner-info" id="rd-never-bought-banner" hidden>{{ t('customers.detail_never_bought') }}</div>
+
+<section class="panel">
+  <h2>{{ t('customers.detail_purchases_title') }}</h2>
+  <div class="table-wrap scroll-y" id="rd-purchases-wrap">
+    <table class="sortable">
+      <thead>
+        <tr>
+          <th class="num">{{ t('common.date') }}</th>
+          <th class="num">{{ t('customers.detail_col_ticket') }}</th>
+          <th>{{ t('common.product') }}</th>
+          <th class="num">{{ t('common.quantity') }}</th>
+          <th class="num">{{ t('common.revenue') }}</th>
+          <th class="num">{{ t('common.gross_profit') }}</th>
+        </tr>
+      </thead>
+      <tbody id="rd-purchases-body"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="rd-purchases-empty" hidden>{{ t('customers.detail_no_purchases') }}</div>
+</section>
+
+<section class="panel">
+  <h2>{{ t('customers.detail_payments_title') }}</h2>
+  <div class="table-wrap" id="rd-payments-wrap">
+    <table class="sortable">
+      <thead>
+        <tr>
+          <th class="num">{{ t('common.date') }}</th>
+          <th class="num">{{ t('customers.detail_col_ticket') }}</th>
+          <th class="num">{{ t('common.revenue') }}</th>
+        </tr>
+      </thead>
+      <tbody id="rd-payments-body"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="rd-payments-empty" hidden>{{ t('customers.detail_no_payments') }}</div>
+</section>
+
+<script src="{{ url_for('static', filename='remote-detail.js') }}"></script>
+<script>
+(function () {
+  "use strict";
+  var fmt = {{ t.js_format() | tojson }};
+  var strings = {
+    notFound: {{ t('app.no_findings') | tojson }},
+    notMeasurable: {{ t('common.not_measurable') | tojson }},
+    owesNoteTemplate: {{ t('customers.detail_owes_note', amount='__AMOUNT__', days='__DAYS__') | tojson }},
+    noBalanceText: {{ t('customers.detail_no_balance') | tojson }},
+    segmentLabels: {
+      {% for code in ['champion', 'loyal', 'active', 'new', 'at_risk', 'lapsed', 'one_time'] %}
+      "{{ code }}": {{ t('segments.' ~ code) | tojson }}{{ "," if not loop.last }}
+      {% endfor %}
+    },
+    creditRiskLabels: {
+      {% for code in ['low', 'medium', 'high'] %}
+      "{{ code }}": {{ t('customers.credit_risk_' ~ code) | tojson }}{{ "," if not loop.last }}
+      {% endfor %}
+    },
+  };
+  var params = new URLSearchParams(window.location.search);
+  var id = params.get("id");
+
+  document.querySelectorAll(".lang-switch a.lang").forEach(function (a) {
+    a.href = a.getAttribute("href") + window.location.search;
+  });
+
+  var dom = {
+    customerName: document.getElementById("rd-customer-name"),
+    customerNo: document.getElementById("rd-customer-no"),
+    phone: document.getElementById("rd-phone"),
+    city: document.getElementById("rd-city"),
+    segmentPill: document.getElementById("rd-segment-pill"),
+    revenue: document.getElementById("rd-revenue"),
+    revenue12m: document.getElementById("rd-revenue12m"),
+    profit: document.getElementById("rd-profit"),
+    marginPct: document.getElementById("rd-margin-pct"),
+    visits: document.getElementById("rd-visits"),
+    avgBasket: document.getElementById("rd-avg-basket"),
+    balanceValue: document.getElementById("rd-balance-value"),
+    balanceAmount: document.getElementById("rd-balance-amount"),
+    creditRiskPill: document.getElementById("rd-credit-risk-pill"),
+    balanceSub: document.getElementById("rd-balance-sub"),
+    atRiskBanner: document.getElementById("rd-at-risk-banner"),
+    atRiskDays: document.getElementById("rd-at-risk-days"),
+    neverBoughtBanner: document.getElementById("rd-never-bought-banner"),
+    purchasesBody: document.getElementById("rd-purchases-body"),
+    purchasesEmpty: document.getElementById("rd-purchases-empty"),
+    paymentsBody: document.getElementById("rd-payments-body"),
+    paymentsEmpty: document.getElementById("rd-payments-empty"),
+  };
+
+  if (!id) {
+    dom.customerName.textContent = strings.notFound;
+  } else {
+    // Relative to out_dir/<lang>/customer.html - customers.json lives one
+    // directory up, at out_dir/customers.json (see Task 3).
+    fetch("../customers.json").then(function (r) { return r.json(); }).then(function (data) {
+      var entry = data[id];
+      if (!entry) { dom.customerName.textContent = strings.notFound; return; }
+      RemoteDetail.renderCustomer(entry, fmt, strings, dom);
+    }).catch(function () { dom.customerName.textContent = strings.notFound; });
+  }
+})();
+</script>
+{% endblock %}

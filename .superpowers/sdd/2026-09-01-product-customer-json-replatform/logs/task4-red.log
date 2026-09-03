@@ -1,0 +1,69 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\Quick Tech\Desktop\pos-tool\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Quick Tech\Desktop\pos-tool\.claude\worktrees\product-customer-json-replatform
+collecting ... collected 25 items / 22 deselected / 3 selected
+
+tests/test_export_static.py::TestProductCustomerShells::test_writes_one_shell_per_language_not_per_entity FAILED [ 33%]
+tests/test_export_static.py::TestProductCustomerShells::test_shell_contains_static_labels_and_fetch_call FAILED [ 66%]
+tests/test_export_static.py::TestProductCustomerShells::test_catalog_links_point_at_shell_when_static_export PASSED [100%]
+
+================================== FAILURES ===================================
+_ TestProductCustomerShells.test_writes_one_shell_per_language_not_per_entity _
+
+self = <test_export_static.TestProductCustomerShells object at 0x000001A44B38CFE0>
+cfg = <poslib.config.Config object at 0x000001A44B370950>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001A44B31F5F0>
+tmp_path = WindowsPath('C:/Users/Quick Tech/AppData/Local/Temp/pytest-of-Quick Tech/pytest-58/test_writes_one_shell_per_lang0')
+
+    def test_writes_one_shell_per_language_not_per_entity(self, cfg, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+        for lang in LANGUAGES:
+>           assert (out_dir / lang / "product.html").is_file()
+E           AssertionError: assert False
+E            +  where False = is_file()
+E            +    where is_file = ((WindowsPath('C:/Users/Quick Tech/AppData/Local/Temp/pytest-of-Quick Tech/pytest-58/test_writes_one_shell_per_lang0/remote-site') / 'en') / 'product.html').is_file
+
+tests\test_export_static.py:382: AssertionError
+_ TestProductCustomerShells.test_shell_contains_static_labels_and_fetch_call __
+
+self = <test_export_static.TestProductCustomerShells object at 0x000001A44B38D3A0>
+cfg = <poslib.config.Config object at 0x000001A44B370950>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001A44C88F080>
+tmp_path = WindowsPath('C:/Users/Quick Tech/AppData/Local/Temp/pytest-of-Quick Tech/pytest-58/test_shell_contains_static_lab0')
+
+    def test_shell_contains_static_labels_and_fetch_call(self, cfg, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+>       html = (out_dir / "en" / "product.html").read_text(encoding="utf-8")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_export_static.py:392: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\..\..\..\..\AppData\Local\Programs\Python\Python312\Lib\pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/Quick Tech/AppData/Local/Temp/pytest-of-Quick Tech/pytest-58/test_shell_contains_static_lab0/remote-site/en/product.html')
+mode = 'r', buffering = -1, encoding = 'utf-8', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\Quick Tech\\AppData\\Local\\Temp\\pytest-of-Quick Tech\\pytest-58\\test_shell_contains_static_lab0\\remote-site\\en\\product.html'
+
+..\..\..\..\..\AppData\Local\Programs\Python\Python312\Lib\pathlib.py:1013: FileNotFoundError
+=========================== short test summary info ===========================
+FAILED tests/test_export_static.py::TestProductCustomerShells::test_writes_one_shell_per_language_not_per_entity
+FAILED tests/test_export_static.py::TestProductCustomerShells::test_shell_contains_static_labels_and_fetch_call
+=========== 2 failed, 1 passed, 22 deselected in 2077.20s (0:34:37) ===========
+EXIT_CODE=1

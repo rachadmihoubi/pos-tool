@@ -373,6 +373,36 @@ class TestProductsCustomersJson:
             pytest.fail("no product with sales_history found to check date serialization")
 
 
+class TestProductCustomerShells:
+
+    def test_writes_one_shell_per_language_not_per_entity(self, cfg, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+        for lang in LANGUAGES:
+            assert (out_dir / lang / "product.html").is_file()
+            assert (out_dir / lang / "customer.html").is_file()
+        # The old per-entity trees still exist too (parallel path, not
+        # removed until Task 6) - both must be true right now.
+        assert (out_dir / "en" / "products").is_dir()
+        assert (out_dir / "en" / "customers").is_dir()
+
+    def test_shell_contains_static_labels_and_fetch_call(self, cfg, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+        html = (out_dir / "en" / "product.html").read_text(encoding="utf-8")
+        assert "fetch(\"../products.json\")" in html
+        assert "id=\"rd-item-name\"" in html
+        html = (out_dir / "en" / "customer.html").read_text(encoding="utf-8")
+        assert "fetch(\"../customers.json\")" in html
+
+    def test_catalog_links_point_at_shell_when_static_export(self, cfg, monkeypatch, tmp_path):
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+        html = (out_dir / "en" / "catalog.html").read_text(encoding="utf-8")
+        assert "product.html?id=" in html
+        assert "/products/" not in html
+
+
 class TestStatusPayload:
 
     def test_handles_missing_cache_info_gracefully(self):

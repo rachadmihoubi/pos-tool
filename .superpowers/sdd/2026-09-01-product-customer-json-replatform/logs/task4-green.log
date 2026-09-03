@@ -1,0 +1,12 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\Quick Tech\Desktop\pos-tool\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Quick Tech\Desktop\pos-tool\.claude\worktrees\product-customer-json-replatform
+collecting ... collected 25 items / 22 deselected / 3 selected
+
+tests/test_export_static.py::TestProductCustomerShells::test_writes_one_shell_per_language_not_per_entity PASSED [ 33%]
+tests/test_export_static.py::TestProductCustomerShells::test_shell_contains_static_labels_and_fetch_call PASSED [ 66%]
+tests/test_export_static.py::TestProductCustomerShells::test_catalog_links_point_at_shell_when_static_export PASSED [100%]
+
+================ 3 passed, 22 deselected in 2079.91s (0:34:39) ================
+EXIT_CODE=0

@@ -30,7 +30,7 @@
         {% for r in products %}
         <tr>
           <td class="muted">{{ r.reference or r.item_no or '—' }}</td>
-          <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
+          <td class="name"><a href="{% if is_static_export %}product.html?id={{ r.item_id }}{% else %}{{ url_for('page_product', item_id=r.item_id) }}{% endif %}">{{ r.item_name }}</a></td>
           <td class="name muted">{{ r.family_name }}</td>
           <td class="num" data-value="{{ r.stock or 0 }}">
             {% if r.stock is not none and r.stock < 0 %}<span class="pill pill-bad">{{ t.number(r.stock) }}</span>

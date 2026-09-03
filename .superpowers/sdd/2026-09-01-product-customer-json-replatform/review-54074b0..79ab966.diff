@@ -1,0 +1,298 @@
+# Review package: 54074b0..79ab966
+
+## Commits
+79ab966 feat(remote): add shared JS formatter/renderer for product+customer detail shells
+
+## Files changed
+ static/remote-detail.js | 282 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 282 insertions(+)
+
+## Diff
+diff --git a/static/remote-detail.js b/static/remote-detail.js
+new file mode 100644
+index 0000000..624ee97
+--- /dev/null
++++ b/static/remote-detail.js
+@@ -0,0 +1,282 @@
++// remote-detail.js - shared formatting + DOM-fill logic for the JSON-backed
++// remote product/customer detail shells (templates/product_shell.html,
++// templates/customer_shell.html). Mirrors poslib/i18n.py's Translator
++// methods exactly - see that file for the Python source of truth. Follows
++// the same "JS replicates server-side number/money formatting" pattern
++// already live in templates/_daterange_remote.html (Translator.js_format()),
++// and the same "fetch JSON, fill in the DOM" pattern already live in
++// hub-site/app.js.
++(function (global) {
++  "use strict";
++
++  function isMissing(v) {
++    return v === null || v === undefined || (typeof v === "number" && isNaN(v));
++  }
++
++  function formatNumber(fmt, value, decimals) {
++    decimals = decimals || 0;
++    if (isMissing(value)) { return fmt.dash; }
++    var v = Number(value);
++    if (isNaN(v)) { return fmt.dash; }
++    if (v === Infinity || v === -Infinity) { return "∞"; }
++    var s = Math.abs(v).toFixed(decimals);
++    var parts = s.split(".");
++    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, "\x00");
++    var joined = parts.join(fmt.decimal).split("\x00").join(fmt.thousands);
++    return (v < 0 ? "-" : "") + joined;
++  }
++
++  function formatMoney(fmt, value) {
++    if (isMissing(value)) { return fmt.dash; }
++    var v = Number(value);
++    if (isNaN(v)) { return fmt.dash; }
++    var text = formatNumber(fmt, v, 0);
++    return fmt.money_format.replace("{amount}", text).replace("{currency}", fmt.currency);
++  }
++
++  function formatPercent(fmt, value, decimals) {
++    decimals = decimals === undefined ? 1 : decimals;
++    if (isMissing(value)) { return fmt.dash; }
++    var v = Number(value);
++    if (isNaN(v)) { return fmt.dash; }
++    return fmt.percent_format.replace("{value}", formatNumber(fmt, v * 100, decimals));
++  }
++
++  function formatSignedPercent(fmt, value, decimals) {
++    if (isMissing(value)) { return fmt.dash; }
++    var v = Number(value);
++    if (isNaN(v)) { return fmt.dash; }
++    var sign = v > 0 ? "+" : "";
++    return sign + formatPercent(fmt, v, decimals);
++  }
++
++  // Hand-parses the fixed "YYYY-MM-DD[THH:MM[:SS]]" shape export_static.py
++  // writes (Task 3's _json_safe) instead of going through the JS Date
++  // constructor, deliberately - "new Date('YYYY-MM-DDTHH:MM:SS')" (no "Z"
++  // suffix) is parsed as LOCAL time by every browser, which would silently
++  // shift the displayed hour/day depending on the viewer's own timezone.
++  // This exactly mirrors poslib/i18n.py:327-371 (_as_date/_as_datetime),
++  // which is itself deliberately timezone-naive for the same reason - the
++  // source data has no timezone concept at all (the POS PC's own local
++  // clock), so neither side should invent one.
++  function parseIso(isoString) {
++    if (!isoString) { return null; }
++    var m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(isoString);
++    if (!m) { return null; }
++    return {
++      year: parseInt(m[1], 10), month: parseInt(m[2], 10), day: parseInt(m[3], 10),
++      hour: m[4] ? parseInt(m[4], 10) : 0, minute: m[5] ? parseInt(m[5], 10) : 0,
++    };
++  }
++
++  function pad2(n) { return (n < 10 ? "0" : "") + n; }
++
++  function formatDate(fmt, isoString) {
++    var d = parseIso(isoString);
++    if (!d) { return fmt.dash; }
++    return fmt.date_format
++      .replace("{day}", pad2(d.day))
++      .replace("{month}", pad2(d.month))
++      .replace("{year}", d.year);
++  }
++
++  function formatDateTime(fmt, isoString) {
++    var d = parseIso(isoString);
++    if (!d) { return fmt.dash; }
++    return fmt.datetime_format
++      .replace("{day}", pad2(d.day))
++      .replace("{month}", pad2(d.month))
++      .replace("{year}", d.year)
++      .replace("{hour}", pad2(d.hour))
++      .replace("{minute}", pad2(d.minute));
++  }
++
++  function setText(dom, key, text) {
++    var el = dom[key];
++    if (el) { el.textContent = text; }
++  }
++
++  function escapeHtml(s) {
++    var div = document.createElement("div");
++    div.textContent = String(s);
++    return div.innerHTML;
++  }
++
++  function renderProduct(data, fmt, strings, dom) {
++    var s = data.summary;
++    // No photo URL: Metrics.product_profile() never returns one (this
++    // database has 0 real item photos - see CLAUDE.md discovery #7), and
++    // the live api_item_photo route it would otherwise come from has no
++    // static-export equivalent - the OLD per-entity HTML export already
++    // pointed this <img> at a URL that 404s remotely, silently hidden by
++    // its own onerror handler (see product_detail.html:15). Leaving
++    // dom.photo hidden here reproduces that same always-invisible
++    // behavior, not a regression.
++    setText(dom, "itemName", s.item_name);
++    setText(dom, "itemNo", s.item_no || fmt.dash);
++    setText(dom, "familyName", s.family_name ? " · " + s.family_name : "");
++    setText(dom, "revenue", formatMoney(fmt, s.revenue_all));
++    setText(dom, "unitsSold", formatNumber(fmt, s.qty_all));
++    setText(dom, "profit", formatMoney(fmt, s.gross_profit_all));
++    setText(dom, "marginPct", s.margin_pct === null ? strings.notMeasurable : formatPercent(fmt, s.margin_pct));
++    setText(dom, "price", formatMoney(fmt, s.price));
++    setText(dom, "cost", formatMoney(fmt, s.cost));
++    setText(dom, "stock", formatNumber(fmt, s.stock));
++    if (dom.stock) { dom.stock.style.color = (s.stock !== null && s.stock < 0) ? "var(--bad)" : ""; }
++    setText(dom, "stockValue", formatMoney(fmt, s.stock_value));
++    if (dom.neverSoldBanner) { dom.neverSoldBanner.hidden = s.days_since_sale !== null; }
++
++    if (dom.familySection) {
++      dom.familySection.hidden = !data.family;
++      if (data.family) {
++        if (dom.familyNote) {
++          dom.familyNote.textContent = strings.familyNoteTemplate.replace("__FAMILY__", s.family_name);
++        }
++        setText(dom, "familyCompareName", s.item_name);
++        if (dom.familyCompareMargin) {
++          dom.familyCompareMargin.innerHTML = s.margin_pct === null
++            ? '<span class="muted">' + fmt.dash + "</span>"
++            : '<span class="delta ' + ((data.family.margin_pct !== null && s.margin_pct < data.family.margin_pct) ? "down" : "up")
++              + '">' + escapeHtml(formatPercent(fmt, s.margin_pct)) + "</span>";
++        }
++        setText(dom, "familyCompareRevenue", formatMoney(fmt, s.revenue_all));
++        setText(dom, "familyAvgName", s.family_name + strings.familyAverageSuffix);
++        setText(dom, "familyAvgMargin", data.family.margin_pct === null ? fmt.dash : formatPercent(fmt, data.family.margin_pct));
++        setText(dom, "familyAvgRevenue", formatMoney(fmt, data.family.revenue));
++      }
++    }
++
++    renderTable(dom.competitorBody, data.competitor_prices, function (r) {
++      var priceCell = { text: formatMoney(fmt, r.price), cls: "num", value: r.price };
++      if (s.price) {
++        var deltaCls = r.price < s.price ? "down" : "up";
++        var deltaText = formatSignedPercent(fmt, (s.price - r.price) / r.price);
++        priceCell = {
++          html: escapeHtml(formatMoney(fmt, r.price)) +
++                ' <span class="delta ' + deltaCls + '" style="font-size:12px;">' + escapeHtml(deltaText) + "</span>",
++          cls: "num", value: r.price,
++        };
++      }
++      return [
++        { text: r.competitor_name, cls: "name" },
++        priceCell,
++        { text: formatDate(fmt, r.observed_date), cls: "num", value: r.observed_date },
++        { text: r.note || fmt.dash, cls: "muted" },
++        { text: "", cls: "" },
++      ];
++    });
++    if (dom.competitorEmpty) { dom.competitorEmpty.hidden = !!(data.competitor_prices && data.competitor_prices.length); }
++
++    renderTable(dom.salesHistoryBody, data.sales_history, function (r) {
++      return [
++        { text: formatDateTime(fmt, r.ticket_time), cls: "num", value: r.ticket_time },
++        { text: String(r.receipt_id), cls: "num muted" },
++        { text: formatNumber(fmt, r.qty), cls: "num" },
++        { text: formatMoney(fmt, r.price), cls: "num" },
++        { text: formatMoney(fmt, r.amount), cls: "num strong", value: r.amount },
++        { text: formatMoney(fmt, r.gross_profit), cls: "num", value: r.gross_profit },
++      ];
++    });
++    if (dom.salesHistoryEmpty) { dom.salesHistoryEmpty.hidden = !!(data.sales_history && data.sales_history.length); }
++
++    renderTable(dom.purchaseHistoryBody, data.purchase_history, function (r) {
++      return [
++        { text: r.purchase_time ? formatDate(fmt, r.purchase_time) : fmt.dash, cls: "num", value: r.purchase_time || "" },
++        { text: r.supplier_name || fmt.dash, cls: "muted" },
++        { text: formatNumber(fmt, r.qty), cls: "num" },
++        { text: formatMoney(fmt, r.price), cls: "num strong", value: r.price || 0 },
++        { text: formatMoney(fmt, r.new_cost), cls: "num muted", value: r.new_cost || 0 },
++        { text: formatNumber(fmt, r.new_stock), cls: "num", value: r.new_stock || 0 },
++      ];
++    });
++    if (dom.purchaseHistoryEmpty) { dom.purchaseHistoryEmpty.hidden = !!(data.purchase_history && data.purchase_history.length); }
++  }
++
++  function renderCustomer(data, fmt, strings, dom) {
++    var s = data.summary;
++    setText(dom, "customerName", s.customer_name);
++    setText(dom, "customerNo", s.customer_no || fmt.dash);
++    setText(dom, "phone", s.phone ? " · " + s.phone : "");
++    setText(dom, "city", s.city ? " · " + s.city : "");
++    if (dom.segmentPill) {
++      dom.segmentPill.hidden = !s.segment;
++      if (s.segment) {
++        dom.segmentPill.textContent = strings.segmentLabels[s.segment] || s.segment;
++        dom.segmentPill.className = "pill seg-" + s.segment;
++      }
++    }
++    setText(dom, "revenue", formatMoney(fmt, s.revenue));
++    setText(dom, "revenue12m", formatMoney(fmt, s.revenue_12m));
++    setText(dom, "profit", formatMoney(fmt, s.gross_profit));
++    setText(dom, "marginPct", s.margin_pct === null ? strings.notMeasurable : formatPercent(fmt, s.margin_pct));
++    setText(dom, "visits", formatNumber(fmt, s.visits));
++    setText(dom, "avgBasket", formatMoney(fmt, s.avg_basket));
++    setText(dom, "balanceAmount", s.balance ? formatMoney(fmt, s.balance) : fmt.dash);
++    if (dom.balanceValue) { dom.balanceValue.style.color = (s.balance && s.balance > 0) ? "var(--bad)" : ""; }
++    if (dom.creditRiskPill) {
++      dom.creditRiskPill.hidden = !s.credit_risk;
++      if (s.credit_risk) {
++        dom.creditRiskPill.textContent = strings.creditRiskLabels[s.credit_risk] || s.credit_risk;
++        dom.creditRiskPill.className = "pill pill-" +
++          (s.credit_risk === "high" ? "bad" : (s.credit_risk === "medium" ? "warn" : "good"));
++      }
++    }
++    if (dom.balanceSub) {
++      dom.balanceSub.textContent = data.receivable
++        ? strings.owesNoteTemplate.replace("__AMOUNT__", formatMoney(fmt, data.receivable.balance))
++                                    .replace("__DAYS__", formatNumber(fmt, data.receivable.days_since_purchase))
++        : strings.noBalanceText;
++    }
++    if (dom.atRiskBanner) { dom.atRiskBanner.hidden = !(data.receivable && data.receivable.at_risk); }
++    if (dom.atRiskDays && data.receivable) { dom.atRiskDays.textContent = formatNumber(fmt, data.receivable.days_since_purchase); }
++    if (dom.neverBoughtBanner) { dom.neverBoughtBanner.hidden = !!s.visits; }
++
++    renderTable(dom.purchasesBody, data.purchases, function (r) {
++      return [
++        { text: formatDateTime(fmt, r.ticket_time), cls: "num", value: r.ticket_time },
++        { text: String(r.receipt_id), cls: "num muted" },
++        { text: r.item_name, cls: "name" },
++        { text: formatNumber(fmt, r.qty), cls: "num" },
++        { text: formatMoney(fmt, r.amount), cls: "num strong", value: r.amount },
++        { text: formatMoney(fmt, r.gross_profit), cls: "num", value: r.gross_profit },
++      ];
++    });
++    if (dom.purchasesEmpty) { dom.purchasesEmpty.hidden = !!(data.purchases && data.purchases.length); }
++
++    renderTable(dom.paymentsBody, data.payments, function (r) {
++      return [
++        { text: formatDateTime(fmt, r.ticket_time), cls: "num", value: r.ticket_time },
++        { text: String(r.receipt_id), cls: "num muted" },
++        { text: formatMoney(fmt, r.amount), cls: "num strong", value: r.amount },
++      ];
++    });
++    if (dom.paymentsEmpty) { dom.paymentsEmpty.hidden = !!(data.payments && data.payments.length); }
++  }
++
++  function renderTable(tbody, rows, rowToCells) {
++    if (!tbody) { return; }
++    tbody.innerHTML = "";
++    (rows || []).forEach(function (r) {
++      var tr = document.createElement("tr");
++      rowToCells(r).forEach(function (cell) {
++        var td = document.createElement("td");
++        if (cell.cls) { td.className = cell.cls; }
++        if (cell.value !== undefined) { td.dataset.value = cell.value; }
++        if (cell.html !== undefined) { td.innerHTML = cell.html; } else { td.textContent = cell.text; }
++        tr.appendChild(td);
++      });
++      tbody.appendChild(tr);
++    });
++  }
++
++  global.RemoteDetail = {
++    formatNumber: formatNumber,
++    formatMoney: formatMoney,
++    formatPercent: formatPercent,
++    formatSignedPercent: formatSignedPercent,
++    formatDate: formatDate,
++    formatDateTime: formatDateTime,
++    renderProduct: renderProduct,
++    renderCustomer: renderCustomer,
++  };
++})(window);

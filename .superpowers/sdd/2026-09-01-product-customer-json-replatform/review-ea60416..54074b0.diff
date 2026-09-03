@@ -1,0 +1,100 @@
+# Review package: ea60416..54074b0
+
+## Commits
+54074b0 feat(i18n): expose percent/date/datetime format pieces to client-side JS
+
+## Files changed
+ poslib/i18n.py             | 17 +++++++++++++----
+ tests/test_i18n_and_app.py | 21 +++++++++++++++++++++
+ 2 files changed, 34 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/poslib/i18n.py b/poslib/i18n.py
+index 6a0b601..3bdc39b 100644
+--- a/poslib/i18n.py
++++ b/poslib/i18n.py
+@@ -129,32 +129,41 @@ class Translator:
+         return "left" if self.is_rtl else "right"
+ 
+     @property
+     def language_name(self) -> str:
+         return LANGUAGE_NAMES.get(self.lang, self.lang)
+ 
+     # -- numbers -----------------------------------------------------------
+ 
+     def js_format(self) -> dict[str, str]:
+         """
+-        The pieces of this language's number/money formatting a client-side
+-        script needs to replicate `number()`/`money()` in the browser -
+-        used only by the remote static export's custom-range picker, which
+-        has no server left to ask once it's deployed.
++        The pieces of this language's number/money/percent/date formatting
++        a client-side script needs to replicate number()/money()/percent()/
++        date()/datetime() in the browser - used by the remote static
++        export's custom-range picker (money/number only, historically) and
++        by the product/customer JSON-replatformed detail shells (all six
++        fields - see static/remote-detail.js).
+         """
+         fmt = NUMBER_FORMATS.get(self.lang, NUMBER_FORMATS[FALLBACK])
+         return {
+             "thousands": fmt["thousands"],
+             "decimal": fmt["decimal"],
+             "currency": self.get("common.currency"),
+             "money_format": self.get("common.money_format",
+                                      amount="{amount}", currency="{currency}"),
++            "percent_format": self.get("common.percent_format", value="{value}"),
++            "date_format": self.get("common.date_format",
++                                    day="{day}", month="{month}", year="{year}"),
++            "datetime_format": self.get("common.datetime_format",
++                                        day="{day}", month="{month}", year="{year}",
++                                        hour="{hour}", minute="{minute}"),
++            "dash": "—",
+         }
+ 
+     def number(self, value: Any, decimals: int = 0) -> str:
+         """A plain number with the right separators for this language."""
+         if value is None:
+             return "—"
+         try:
+             v = float(value)
+         except (TypeError, ValueError):
+             return "—"
+diff --git a/tests/test_i18n_and_app.py b/tests/test_i18n_and_app.py
+index 812e487..9c6f3c0 100644
+--- a/tests/test_i18n_and_app.py
++++ b/tests/test_i18n_and_app.py
+@@ -480,13 +480,34 @@ class TestChannels:
+ 
+         source = (Path(__file__).resolve().parent.parent /
+                   "poslib" / "channels" / "whatsapp_channel.py").read_text(encoding="utf-8")
+         for banned in ("selenium", "pywhatkit", "yowsup", "whatsapp_web",
+                        "webdriver"):
+             assert f"import {banned}" not in source
+             assert f"from {banned}" not in source
+         assert "graph.facebook.com" in source
+ 
+ 
++class TestJsFormatExtended:
++
++    def test_includes_percent_date_datetime_and_dash(self):
++        t = get_translator("en")
++        fmt = t.js_format()
++        assert fmt["percent_format"] == t.get("common.percent_format", value="{value}")
++        assert fmt["date_format"] == t.get("common.date_format", day="{day}", month="{month}", year="{year}")
++        assert fmt["datetime_format"] == t.get(
++            "common.datetime_format", day="{day}", month="{month}", year="{year}",
++            hour="{hour}", minute="{minute}")
++        assert fmt["dash"] == "—"
++
++    def test_still_includes_existing_fields(self):
++        t = get_translator("fr")
++        fmt = t.js_format()
++        assert fmt["thousands"] == " "  # narrow no-break space
++        assert fmt["decimal"] == ","
++        assert fmt["currency"] == t.get("common.currency")
++        assert "money_format" in fmt
++
++
+ def test_locales_dir_resolves_from_app_root():
+     from poslib import i18n, paths
+     assert i18n.LOCALES_DIR == paths.app_root() / "locales"
