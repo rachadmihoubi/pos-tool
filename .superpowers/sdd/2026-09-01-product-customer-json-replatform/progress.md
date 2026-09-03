@@ -144,3 +144,56 @@ point for future timing budgets, not a defect of this task.
 ## Task 3: complete (commit d7d751d, review clean, 2 minor deferred)
 
 ## Task 4: dispatched (BASE d7d751d, implementer agent a5a11d8a1f7e17fde, model sonnet) - expect a long wait, real-DB export tests take 10-13+ min each on this machine today; full-file regression could take 3-4+ hours. Implementer was briefed on Task 3's infra instability (unreliable background-task tracking, config.yaml reset risk) and told to redirect test output to disk directly / use an OS-detached launch if needed.
+
+## Task 4: implementation complete, committed as WIP (commit `06288a5` on
+`product-customer-json-replatform`, pushed to origin), full regression
+STILL UNVERIFIED as of this note - READ THIS BEFORE TRUSTING TASK 4
+
+Implementer's report (`task-4-report.md`) confirmed RED (2 failed for the
+right reason, 1 unrelated pass) and GREEN (3/3 passed) for the new
+`TestProductCustomerShells` class - that part is trustworthy. But the
+report's own Step-6 full-file regression claim ("still running, will
+update this report") was never actually updated, and the log file it
+pointed at (`logs/task4-full-regression.log`) turned out to be only 17
+bytes with no real pytest summary - stale/truncated, NOT evidence of a
+real pass. Do not trust that log or the report's implied completion.
+
+**Controller (this session) is independently re-running the full suite**
+(`pytest tests/test_export_static.py -q`, all ~22 tests, each a fresh
+real-DB export) to get a trustworthy result before treating Task 4 as
+verified. Given this session's user needed to leave, this run was
+launched as a genuinely OS-detached process (PowerShell `Start-Process`
+running a detached `cmd.exe`, NOT tied to any Claude Code session or
+terminal) specifically so it survives the session ending:
+
+- Log file: `.superpowers/sdd/2026-09-01-product-customer-json-replatform/logs/task4-full-regression-final.log`
+- Launched ~2026-09-03 (see file's own birth time via `stat` if unsure)
+- To check: read that log file. A finished run ends with either a pytest
+  summary line (`N passed, M skipped in Xs`) or `EXIT_CODE=N`. Empty or
+  missing summary = still running or the process died - check
+  `tasklist` for a `python.exe` with several hundred MB RSS and rising
+  CPU time to tell "still running" from "died silently."
+- **If it shows a clean pass (all passed, same 1 pre-existing skip as
+  Task 3's run)**: amend/replace the WIP commit (or add a new commit)
+  removing the "[WIP, regression re-verifying]" marker from the message,
+  update this ledger's Task 4 entry to "complete," generate the review
+  package (`scripts/review-package ... 06288a5's-parent d7d751d..HEAD`
+  wait - actually diff BASE should be `d7d751d` since that's Task 3's
+  HEAD, to `06288a5` or whatever the final Task 4 commit becomes), and
+  dispatch Task 4's task reviewer (see Tasks 1-3's dispatches above for
+  the pattern) before moving to Task 5.
+- **If it shows any failure**: do NOT commit further on top of the WIP
+  commit as if done - investigate the failure first (it could be a real
+  regression from Task 4's changes, or could be environment/machine-load
+  noise like Task 3's ~2.8x-slower-than-baseline finding - check which).
+- **Do not re-run the whole suite a third time without first checking
+  this log** - it's expensive (real per-export DB cost, hours total) and
+  the point of this note is to avoid re-deriving what's already in
+  flight.
+
+Two earlier full-suite launches this session were killed/superseded before
+this one: a Bash `nohup`-launched run (session-tied, killed deliberately
+to avoid two concurrent runs fighting over `poslib/etl.py`'s cross-process
+advisory lock on `cache.building`, which would have serialized them
+anyway) and the implementer's own truncated-log attempt described above.
+Only the OS-detached one above is currently live.
