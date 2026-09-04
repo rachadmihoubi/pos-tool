@@ -1,0 +1,737 @@
+Commits in range:
+06288a5 feat(remote): add JSON-backed product/customer detail shells [WIP, regression re-verifying]
+
+Stat (code files only):
+ export_static.py              |  13 +++
+ templates/catalog.html        |   2 +-
+ templates/customer_shell.html | 151 ++++++++++++++++++++++++++++
+ templates/customers.html      |   2 +-
+ templates/product_shell.html  | 224 ++++++++++++++++++++++++++++++++++++++++++
+ templates/products.html       |  12 +--
+ templates/receivables.html    |   2 +-
+ tests/test_export_static.py   |  30 ++++++
+ 8 files changed, 427 insertions(+), 9 deletions(-)
+
+Full diff (code files only, 10 lines context):
+diff --git a/export_static.py b/export_static.py
+index bfb6e61..83939fb 100644
+--- a/export_static.py
++++ b/export_static.py
+@@ -326,20 +326,21 @@ def export(cfg: Config | None = None) -> Path:
+ 
+             # Every page links to /<lang>/static/style.css (via url_for() +
+             # the SCRIPT_NAME prefix below) - Flask's local dev server
+             # serves that dynamically from static/, but a static export
+             # needs the actual file to physically exist at that path, per
+             # language, since there is no server left to serve it from
+             # once deployed.
+             static_dir = lang_dir / "static"
+             static_dir.mkdir(parents=True, exist_ok=True)
+             shutil.copy2(PROJECT_ROOT / "static" / "style.css", static_dir / "style.css")
++            shutil.copy2(PROJECT_ROOT / "static" / "remote-detail.js", static_dir / "remote-detail.js")
+ 
+             def render(path: str, out_file: Path) -> None:
+                 sep = "&" if "?" in path else "?"
+                 response = client.get(
+                     f"{path}{sep}lang={lang}&__static__=1",
+                     environ_overrides={"SCRIPT_NAME": f"/{lang}"})
+                 if response.status_code != 200:
+                     raise RuntimeError(
+                         f"Exporting {path} in {lang} returned {response.status_code}")
+                 out_file.parent.mkdir(parents=True, exist_ok=True)
+@@ -352,20 +353,32 @@ def export(cfg: Config | None = None) -> Path:
+                     # the ticket drill-downs below instead, so the list and
+                     # the links on it agree with each other.
+                     render(f"/tickets?start={window_start.isoformat()}&end={today.isoformat()}",
+                            lang_dir / "tickets.html")
+                 else:
+                     render(f"/{slug}", lang_dir / f"{slug}.html")
+ 
+             for slug in NESTED_PAGES:
+                 render(f"/{slug}", lang_dir / f"{slug}.html")
+ 
++            with app.test_request_context(
++                    f"/product.html?lang={lang}&__static__=1",
++                    environ_overrides={"SCRIPT_NAME": f"/{lang}"}):
++                html = render_template("product_shell.html", cache=cache_info)
++            (lang_dir / "product.html").write_text(html, encoding="utf-8")
++
++            with app.test_request_context(
++                    f"/customer.html?lang={lang}&__static__=1",
++                    environ_overrides={"SCRIPT_NAME": f"/{lang}"}):
++                html = render_template("customer_shell.html", cache=cache_info)
++            (lang_dir / "customer.html").write_text(html, encoding="utf-8")
++
+             for filename, (start, end) in presets.items():
+                 render(f"/today?start={start.isoformat()}&end={end.isoformat()}",
+                        lang_dir / f"{filename}.html")
+ 
+             tickets_dir = lang_dir / "tickets"
+             tickets_dir.mkdir(parents=True, exist_ok=True)
+             for receipt_id in ticket_ids:
+                 detail = m.ticket_detail(receipt_id)
+                 if detail is None:
+                     raise RuntimeError(f"ticket {receipt_id} vanished mid-export")
+diff --git a/templates/catalog.html b/templates/catalog.html
+index ed1b275..3c37a1d 100644
+--- a/templates/catalog.html
++++ b/templates/catalog.html
+@@ -23,21 +23,21 @@
+           <th class="num">{{ t('catalog.col_boxes') }}</th>
+           <th class="num">{{ t('catalog.col_avg_cost') }}</th>
+           <th class="num">{{ t('catalog.col_last_cost') }}</th>
+           <th class="num">{{ t('common.price') }}</th>
+         </tr>
+       </thead>
+       <tbody>
+         {% for r in products %}
+         <tr>
+           <td class="muted">{{ r.reference or r.item_no or '—' }}</td>
+-          <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
++          <td class="name"><a href="{% if is_static_export %}product.html?id={{ r.item_id }}{% else %}{{ url_for('page_product', item_id=r.item_id) }}{% endif %}">{{ r.item_name }}</a></td>
+           <td class="name muted">{{ r.family_name }}</td>
+           <td class="num" data-value="{{ r.stock or 0 }}">
+             {% if r.stock is not none and r.stock < 0 %}<span class="pill pill-bad">{{ t.number(r.stock) }}</span>
+             {% else %}{{ t.number(r.stock) }}{% endif %}
+           </td>
+           <td class="num muted" data-value="{{ r.stock_boxes if r.stock_boxes is not none else -1 }}">
+             {% if r.stock_boxes is not none %}
+               {{ t.number(r.stock_boxes) }}{% if r.stock_remainder %} <span class="muted">(+{{ t.number(r.stock_remainder) }})</span>{% endif %}
+             {% else %}—{% endif %}
+           </td>
+diff --git a/templates/customer_shell.html b/templates/customer_shell.html
+new file mode 100644
+index 0000000..c0fd881
+--- /dev/null
++++ b/templates/customer_shell.html
+@@ -0,0 +1,151 @@
++{% extends "base.html" %}
++{% block title %}{{ t('nav.customers') }}{% endblock %}
++
++{% block breadcrumb %}
++<div class="breadcrumb" style="padding: 10px 24px 0;">
++  <a href="customers.html">{{ t('customers.detail_back') }}</a>
++</div>
++{% endblock %}
++
++{% block content %}
++<div class="page-head">
++  <h1 id="rd-customer-name">{{ t('app.loading') }}</h1>
++  <p>
++    <span id="rd-customer-no"></span><span id="rd-phone"></span><span id="rd-city"></span>
++    <span class="pill" id="rd-segment-pill" hidden></span>
++  </p>
++</div>
++
++<section class="tiles tiles-big">
++  <div class="tile">
++    <div class="label">{{ t('customers.col_revenue') }}</div>
++    <div class="value" id="rd-revenue">—</div>
++    <div class="sub">{{ t('customers.col_revenue_12m') }}: <span id="rd-revenue12m"></span></div>
++  </div>
++  <div class="tile">
++    <div class="label">{{ t('customers.col_profit') }}</div>
++    <div class="value" id="rd-profit">—</div>
++    <div class="sub">{{ t('common.margin_pct') }}: <strong id="rd-margin-pct"></strong></div>
++  </div>
++  <div class="tile">
++    <div class="label">{{ t('customers.col_visits') }}</div>
++    <div class="value" id="rd-visits">—</div>
++    <div class="sub">{{ t('customers.col_basket') }}: <span id="rd-avg-basket"></span></div>
++  </div>
++  <div class="tile">
++    <div class="label">{{ t('common.balance') }}</div>
++    <div class="value" id="rd-balance-value">
++      <span id="rd-balance-amount">—</span>
++      <span class="pill" id="rd-credit-risk-pill" style="font-size:12px; vertical-align:middle;" hidden></span>
++    </div>
++    <div class="sub" id="rd-balance-sub"></div>
++  </div>
++</section>
++
++<div class="banner banner-bad" id="rd-at-risk-banner" hidden>{{ t('receivables.risk_flag') }} — {{ t('receivables.col_days') }}: <span id="rd-at-risk-days"></span></div>
++<div class="banner banner-info" id="rd-never-bought-banner" hidden>{{ t('customers.detail_never_bought') }}</div>
++
++<section class="panel">
++  <h2>{{ t('customers.detail_purchases_title') }}</h2>
++  <div class="table-wrap scroll-y" id="rd-purchases-wrap">
++    <table class="sortable">
++      <thead>
++        <tr>
++          <th class="num">{{ t('common.date') }}</th>
++          <th class="num">{{ t('customers.detail_col_ticket') }}</th>
++          <th>{{ t('common.product') }}</th>
++          <th class="num">{{ t('common.quantity') }}</th>
++          <th class="num">{{ t('common.revenue') }}</th>
++          <th class="num">{{ t('common.gross_profit') }}</th>
++        </tr>
++      </thead>
++      <tbody id="rd-purchases-body"></tbody>
++    </table>
++  </div>
++  <div class="empty" id="rd-purchases-empty" hidden>{{ t('customers.detail_no_purchases') }}</div>
++</section>
++
++<section class="panel">
++  <h2>{{ t('customers.detail_payments_title') }}</h2>
++  <div class="table-wrap" id="rd-payments-wrap">
++    <table class="sortable">
++      <thead>
++        <tr>
++          <th class="num">{{ t('common.date') }}</th>
++          <th class="num">{{ t('customers.detail_col_ticket') }}</th>
++          <th class="num">{{ t('common.revenue') }}</th>
++        </tr>
++      </thead>
++      <tbody id="rd-payments-body"></tbody>
++    </table>
++  </div>
++  <div class="empty" id="rd-payments-empty" hidden>{{ t('customers.detail_no_payments') }}</div>
++</section>
++
++<script src="{{ url_for('static', filename='remote-detail.js') }}"></script>
++<script>
++(function () {
++  "use strict";
++  var fmt = {{ t.js_format() | tojson }};
++  var strings = {
++    notFound: {{ t('app.no_findings') | tojson }},
++    notMeasurable: {{ t('common.not_measurable') | tojson }},
++    owesNoteTemplate: {{ t('customers.detail_owes_note', amount='__AMOUNT__', days='__DAYS__') | tojson }},
++    noBalanceText: {{ t('customers.detail_no_balance') | tojson }},
++    segmentLabels: {
++      {% for code in ['champion', 'loyal', 'active', 'new', 'at_risk', 'lapsed', 'one_time'] %}
++      "{{ code }}": {{ t('segments.' ~ code) | tojson }}{{ "," if not loop.last }}
++      {% endfor %}
++    },
++    creditRiskLabels: {
++      {% for code in ['low', 'medium', 'high'] %}
++      "{{ code }}": {{ t('customers.credit_risk_' ~ code) | tojson }}{{ "," if not loop.last }}
++      {% endfor %}
++    },
++  };
++  var params = new URLSearchParams(window.location.search);
++  var id = params.get("id");
++
++  document.querySelectorAll(".lang-switch a.lang").forEach(function (a) {
++    a.href = a.getAttribute("href") + window.location.search;
++  });
++
++  var dom = {
++    customerName: document.getElementById("rd-customer-name"),
++    customerNo: document.getElementById("rd-customer-no"),
++    phone: document.getElementById("rd-phone"),
++    city: document.getElementById("rd-city"),
++    segmentPill: document.getElementById("rd-segment-pill"),
++    revenue: document.getElementById("rd-revenue"),
++    revenue12m: document.getElementById("rd-revenue12m"),
++    profit: document.getElementById("rd-profit"),
++    marginPct: document.getElementById("rd-margin-pct"),
++    visits: document.getElementById("rd-visits"),
++    avgBasket: document.getElementById("rd-avg-basket"),
++    balanceValue: document.getElementById("rd-balance-value"),
++    balanceAmount: document.getElementById("rd-balance-amount"),
++    creditRiskPill: document.getElementById("rd-credit-risk-pill"),
++    balanceSub: document.getElementById("rd-balance-sub"),
++    atRiskBanner: document.getElementById("rd-at-risk-banner"),
++    atRiskDays: document.getElementById("rd-at-risk-days"),
++    neverBoughtBanner: document.getElementById("rd-never-bought-banner"),
++    purchasesBody: document.getElementById("rd-purchases-body"),
++    purchasesEmpty: document.getElementById("rd-purchases-empty"),
++    paymentsBody: document.getElementById("rd-payments-body"),
++    paymentsEmpty: document.getElementById("rd-payments-empty"),
++  };
++
++  if (!id) {
++    dom.customerName.textContent = strings.notFound;
++  } else {
++    // Relative to out_dir/<lang>/customer.html - customers.json lives one
++    // directory up, at out_dir/customers.json (see Task 3).
++    fetch("../customers.json").then(function (r) { return r.json(); }).then(function (data) {
++      var entry = data[id];
++      if (!entry) { dom.customerName.textContent = strings.notFound; return; }
++      RemoteDetail.renderCustomer(entry, fmt, strings, dom);
++    }).catch(function () { dom.customerName.textContent = strings.notFound; });
++  }
++})();
++</script>
++{% endblock %}
+diff --git a/templates/customers.html b/templates/customers.html
+index 0956c14..d47916b 100644
+--- a/templates/customers.html
++++ b/templates/customers.html
+@@ -145,21 +145,21 @@
+           <th class="num">{{ t('customers.col_visits') }}</th>
+           <th class="num">{{ t('customers.col_basket') }}</th>
+           <th class="num">{{ t('customers.col_recency') }}</th>
+           <th class="num">{{ t('customers.col_balance') }}</th>
+           <th>{{ t('customers.col_segment') }}</th>
+         </tr>
+       </thead>
+       <tbody>
+         {% for c in customers %}
+         <tr>
+-          <td class="name"><a href="{{ url_for('page_customer', customer_id=c.customer_id) }}">{{ c.customer_name }}</a></td>
++          <td class="name"><a href="{% if is_static_export %}customer.html?id={{ c.customer_id }}{% else %}{{ url_for('page_customer', customer_id=c.customer_id) }}{% endif %}">{{ c.customer_name }}</a></td>
+           <td class="num">{{ c.phone or '—' }}</td>
+           <td class="num strong" data-value="{{ c.revenue }}">{{ t.money(c.revenue) }}</td>
+           <td class="num" data-value="{{ c.revenue_12m }}">{{ t.money(c.revenue_12m) }}</td>
+           <td class="num" data-value="{{ c.gross_profit }}">{{ t.money(c.gross_profit) }}</td>
+           <td class="num" data-value="{{ c.margin_pct or -9 }}">
+             {% if c.margin_pct is none %}<span class="muted">—</span>
+             {% else %}<span class="{{ 'delta down' if c.margin_pct < 0.02 else '' }}">{{ t.percent(c.margin_pct) }}</span>{% endif %}
+           </td>
+           <td class="num" data-value="{{ c.visits }}">{{ t.number(c.visits) }}</td>
+           <td class="num" data-value="{{ c.avg_basket }}">{{ t.money(c.avg_basket) }}</td>
+diff --git a/templates/product_shell.html b/templates/product_shell.html
+new file mode 100644
+index 0000000..8da849b
+--- /dev/null
++++ b/templates/product_shell.html
+@@ -0,0 +1,224 @@
++{% extends "base.html" %}
++{% block title %}{{ t('nav.products') }}{% endblock %}
++
++{% block breadcrumb %}
++<div class="breadcrumb" style="padding: 10px 24px 0;">
++  <a href="products.html">{{ t('products.detail_back') }}</a>
++</div>
++{% endblock %}
++
++{% block content %}
++<div class="page-head" style="display:flex; align-items:flex-start; gap:16px;">
++  <img id="rd-photo" src="" alt="" width="72" height="72"
++       style="object-fit:cover; border-radius:8px; border:1px solid var(--line);"
++       onerror="this.hidden=true" hidden>
++  <div>
++    <h1 id="rd-item-name">{{ t('app.loading') }}</h1>
++    <p><span id="rd-item-no"></span><span id="rd-family-name"></span></p>
++  </div>
++</div>
++
++<section class="tiles tiles-big">
++  <div class="tile">
++    <div class="label">{{ t('products.col_revenue') }}</div>
++    <div class="value" id="rd-revenue">—</div>
++    <div class="sub">{{ t('products.col_units') }}: <span id="rd-units-sold"></span></div>
++  </div>
++  <div class="tile">
++    <div class="label">{{ t('products.col_profit') }}</div>
++    <div class="value" id="rd-profit">—</div>
++    <div class="sub">{{ t('common.margin_pct') }}: <strong id="rd-margin-pct"></strong></div>
++  </div>
++  <div class="tile">
++    <div class="label">{{ t('common.price') }} / {{ t('common.cost') }}</div>
++    <div class="value" id="rd-price">—</div>
++    <div class="sub">{{ t('common.cost') }}: <span id="rd-cost"></span></div>
++  </div>
++  <div class="tile">
++    <div class="label">{{ t('products.col_stock') }}</div>
++    <div class="value" id="rd-stock">—</div>
++    <div class="sub">{{ t('inventory.total_value') }}: <span id="rd-stock-value"></span></div>
++  </div>
++</section>
++
++<div class="banner banner-info" id="rd-never-sold-banner" hidden>{{ t('products.detail_never_sold') }}</div>
++
++<section class="panel" id="rd-family-section" hidden>
++  <h2>{{ t('products.detail_family_compare') }}</h2>
++  <p class="note" id="rd-family-note"></p>
++  <div class="table-wrap">
++    <table>
++      <thead>
++        <tr><th></th><th class="num">{{ t('common.margin_pct') }}</th><th class="num">{{ t('customers.col_revenue') }}</th></tr>
++      </thead>
++      <tbody>
++        <tr class="strong"><td id="rd-family-compare-name"></td><td class="num" id="rd-family-compare-margin"></td><td class="num" id="rd-family-compare-revenue"></td></tr>
++        <tr><td id="rd-family-avg-name"></td><td class="num" id="rd-family-avg-margin"></td><td class="num" id="rd-family-avg-revenue"></td></tr>
++      </tbody>
++    </table>
++  </div>
++</section>
++
++<section class="panel">
++  <h2>{{ t('products.competitor_title') }}</h2>
++  <p class="note">{{ t('products.competitor_note') }}</p>
++
++  <div id="rd-competitor-error" class="banner banner-bad" hidden></div>
++
++  <form id="rd-competitor-form" method="post" action=""
++        style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:16px;">
++    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
++      {{ t('products.competitor_col_name') }}
++      <input type="text" name="competitor_name" required maxlength="120">
++    </label>
++    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
++      {{ t('products.competitor_col_price') }}
++      <input type="number" name="price" step="0.01" min="0.01" required>
++    </label>
++    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft);">
++      {{ t('common.date') }}
++      <input type="date" name="observed_date" required>
++    </label>
++    <label style="display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft); flex:1; min-width:160px;">
++      {{ t('products.competitor_col_note') }}
++      <input type="text" name="note" maxlength="200">
++    </label>
++    <button type="submit" class="btn">{{ t('products.competitor_add') }}</button>
++  </form>
++
++  <div class="table-wrap" id="rd-competitor-wrap">
++    <table class="sortable">
++      <thead>
++        <tr>
++          <th>{{ t('products.competitor_col_name') }}</th>
++          <th class="num">{{ t('products.competitor_col_price') }}</th>
++          <th class="num">{{ t('common.date') }}</th>
++          <th>{{ t('products.competitor_col_note') }}</th>
++          <th class="nosort"></th>
++        </tr>
++      </thead>
++      <tbody id="rd-competitor-body"></tbody>
++    </table>
++  </div>
++  <div class="empty" id="rd-competitor-empty" hidden>{{ t('products.competitor_empty') }}</div>
++</section>
++
++<section class="panel">
++  <h2>{{ t('products.detail_history_title') }}</h2>
++  <div class="table-wrap scroll-y" id="rd-sales-history-wrap">
++    <table class="sortable">
++      <thead>
++        <tr>
++          <th class="num">{{ t('common.date') }}</th>
++          <th class="num">{{ t('products.detail_col_ticket') }}</th>
++          <th class="num">{{ t('common.quantity') }}</th>
++          <th class="num">{{ t('common.price') }}</th>
++          <th class="num">{{ t('common.revenue') }}</th>
++          <th class="num">{{ t('common.gross_profit') }}</th>
++        </tr>
++      </thead>
++      <tbody id="rd-sales-history-body"></tbody>
++    </table>
++  </div>
++  <div class="empty" id="rd-sales-history-empty" hidden>{{ t('products.detail_no_history') }}</div>
++</section>
++
++<section class="panel">
++  <h2>{{ t('products.purchase_history_title') }}</h2>
++  <p class="note">{{ t('products.purchase_history_note') }}</p>
++  <div class="table-wrap scroll-y" id="rd-purchase-history-wrap">
++    <table class="sortable">
++      <thead>
++        <tr>
++          <th class="num">{{ t('common.date') }}</th>
++          <th>{{ t('common.supplier') }}</th>
++          <th class="num">{{ t('common.quantity') }}</th>
++          <th class="num">{{ t('products.purchase_col_price_paid') }}</th>
++          <th class="num">{{ t('products.purchase_col_running_cost') }}</th>
++          <th class="num">{{ t('products.purchase_col_new_stock') }}</th>
++        </tr>
++      </thead>
++      <tbody id="rd-purchase-history-body"></tbody>
++    </table>
++  </div>
++  <div class="empty" id="rd-purchase-history-empty" hidden>{{ t('products.purchase_history_empty') }}</div>
++</section>
++
++<script src="{{ url_for('static', filename='remote-detail.js') }}"></script>
++<script>
++(function () {
++  "use strict";
++  var fmt = {{ t.js_format() | tojson }};
++  var strings = {
++    familyNoteTemplate: {{ t('products.detail_family_note', family='__FAMILY__') | tojson }},
++    familyAverageSuffix: {{ (' (' ~ t('common.average')|lower ~ ')') | tojson }},
++    notFound: {{ t('app.no_findings') | tojson }},
++    notMeasurable: {{ t('common.not_measurable') | tojson }},
++  };
++  var params = new URLSearchParams(window.location.search);
++  var id = params.get("id");
++
++  document.querySelectorAll(".lang-switch a.lang").forEach(function (a) {
++    a.href = a.getAttribute("href") + window.location.search;
++  });
++
++  var dom = {
++    photo: document.getElementById("rd-photo"),
++    itemName: document.getElementById("rd-item-name"),
++    itemNo: document.getElementById("rd-item-no"),
++    familyName: document.getElementById("rd-family-name"),
++    revenue: document.getElementById("rd-revenue"),
++    unitsSold: document.getElementById("rd-units-sold"),
++    profit: document.getElementById("rd-profit"),
++    marginPct: document.getElementById("rd-margin-pct"),
++    price: document.getElementById("rd-price"),
++    cost: document.getElementById("rd-cost"),
++    stock: document.getElementById("rd-stock"),
++    stockValue: document.getElementById("rd-stock-value"),
++    neverSoldBanner: document.getElementById("rd-never-sold-banner"),
++    familySection: document.getElementById("rd-family-section"),
++    familyNote: document.getElementById("rd-family-note"),
++    familyCompareName: document.getElementById("rd-family-compare-name"),
++    familyCompareMargin: document.getElementById("rd-family-compare-margin"),
++    familyCompareRevenue: document.getElementById("rd-family-compare-revenue"),
++    familyAvgName: document.getElementById("rd-family-avg-name"),
++    familyAvgMargin: document.getElementById("rd-family-avg-margin"),
++    familyAvgRevenue: document.getElementById("rd-family-avg-revenue"),
++    competitorForm: document.getElementById("rd-competitor-form"),
++    competitorError: document.getElementById("rd-competitor-error"),
++    competitorBody: document.getElementById("rd-competitor-body"),
++    competitorEmpty: document.getElementById("rd-competitor-empty"),
++    salesHistoryBody: document.getElementById("rd-sales-history-body"),
++    salesHistoryEmpty: document.getElementById("rd-sales-history-empty"),
++    purchaseHistoryBody: document.getElementById("rd-purchase-history-body"),
++    purchaseHistoryEmpty: document.getElementById("rd-purchase-history-empty"),
++  };
++
++  var competitorErrors = {
++    {% for code in ['missing_name', 'invalid_price', 'invalid_date'] %}
++    "{{ code }}": {{ t('products.competitor_error_' ~ code) | tojson }}{{ "," if not loop.last }}
++    {% endfor %}
++  };
++  var formErrorParam = params.get("form_error");
++  if (formErrorParam && dom.competitorError && competitorErrors[formErrorParam]) {
++    dom.competitorError.hidden = false;
++    dom.competitorError.textContent = competitorErrors[formErrorParam];
++  }
++
++  if (!id) {
++    dom.itemName.textContent = strings.notFound;
++  } else {
++    if (dom.competitorForm) {
++      dom.competitorForm.action = "/products/" + id + "/competitor-price?lang={{ lang }}&id=" + id;
++    }
++    // Relative to out_dir/<lang>/product.html - products.json lives one
++    // directory up, at out_dir/products.json (see Task 3).
++    fetch("../products.json").then(function (r) { return r.json(); }).then(function (data) {
++      var entry = data[id];
++      if (!entry) { dom.itemName.textContent = strings.notFound; return; }
++      RemoteDetail.renderProduct(entry, fmt, strings, dom);
++    }).catch(function () { dom.itemName.textContent = strings.notFound; });
++  }
++})();
++</script>
++{% endblock %}
+diff --git a/templates/products.html b/templates/products.html
+index a950851..77a4aeb 100644
+--- a/templates/products.html
++++ b/templates/products.html
+@@ -75,21 +75,21 @@
+             <th class="num">{{ t('products.col_margin') }}</th>
+             <th class="num">{{ t('products.col_current_margin') }}</th>
+             <th class="num">{{ t('common.price') }}</th>
+             <th class="num">{{ t('common.cost') }}</th>
+             <th class="num">{{ t('products.col_uplift') }}</th>
+           </tr>
+         </thead>
+         <tbody>
+           {% for r in low %}
+           <tr>
+-            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
++            <td class="name"><a href="{% if is_static_export %}product.html?id={{ r.item_id }}{% else %}{{ url_for('page_product', item_id=r.item_id) }}{% endif %}">{{ r.item_name }}</a></td>
+             <td class="name muted">{{ r.family_name }}</td>
+             <td class="num strong" data-value="{{ r.revenue_all }}">{{ t.money(r.revenue_all) }}</td>
+             <td class="num" data-value="{{ r.margin_pct or -9 }}">
+               <span class="delta down">{{ t.percent(r.margin_pct) }}</span>
+             </td>
+             <td class="num" data-value="{{ r.current_margin_pct or -9 }}">{{ t.percent(r.current_margin_pct) }}</td>
+             <td class="num" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
+             <td class="num" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+             <td class="num" data-value="{{ r.uplift_2pts }}" style="color: var(--good)">{{ t.money(r.uplift_2pts) }}</td>
+           </tr>
+@@ -118,21 +118,21 @@
+             <th class="num">{{ t('products.col_price_then') }}</th>
+             <th class="num">{{ t('products.col_price_now') }}</th>
+             <th class="num">{{ t('products.col_margin_then') }}</th>
+             <th class="num">{{ t('products.col_margin_now') }}</th>
+             <th class="num">{{ t('products.col_annual_loss') }}</th>
+           </tr>
+         </thead>
+         <tbody>
+           {% for r in drift %}
+           <tr>
+-            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
++            <td class="name"><a href="{% if is_static_export %}product.html?id={{ r.item_id }}{% else %}{{ url_for('page_product', item_id=r.item_id) }}{% endif %}">{{ r.item_name }}</a></td>
+             <td class="num" data-value="{{ r.first_cost or 0 }}">{{ t.money(r.first_cost) }}</td>
+             <td class="num strong" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+             <td class="num" data-value="{{ r.first_price or 0 }}">{{ t.money(r.first_price) }}</td>
+             <td class="num" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
+             <td class="num" data-value="{{ r.margin_then or 0 }}">{{ t.percent(r.margin_then) }}</td>
+             <td class="num" data-value="{{ r.margin_now or 0 }}">
+               <span class="delta down">{{ t.percent(r.margin_now) }}</span>
+             </td>
+             <td class="num strong" data-value="{{ r.annual_margin_lost }}" style="color: var(--bad)">
+               {{ t.money(r.annual_margin_lost) }}
+@@ -160,21 +160,21 @@
+             <th>{{ t('common.family') }}</th>
+             <th class="num">{{ t('products.col_margin') }}</th>
+             <th class="num">{{ t('products.outliers_col_family_margin') }}</th>
+             <th class="num">{{ t('products.outliers_col_gap') }}</th>
+             <th class="num">{{ t('products.col_revenue') }}</th>
+           </tr>
+         </thead>
+         <tbody>
+           {% for r in outliers %}
+           <tr>
+-            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
++            <td class="name"><a href="{% if is_static_export %}product.html?id={{ r.item_id }}{% else %}{{ url_for('page_product', item_id=r.item_id) }}{% endif %}">{{ r.item_name }}</a></td>
+             <td class="name muted">{{ r.family_name }}</td>
+             <td class="num" data-value="{{ r.margin_pct or -9 }}">
+               <span class="delta down">{{ t.percent(r.margin_pct) }}</span>
+             </td>
+             <td class="num" data-value="{{ r.family_margin_pct or 0 }}">{{ t.percent(r.family_margin_pct) }}</td>
+             <td class="num strong" data-value="{{ r.gap_pp }}" style="color: var(--bad)">
+               {{ t.number(r.gap_pp, 1) }}
+             </td>
+             <td class="num">{{ t.money(r.revenue_all) }}</td>
+           </tr>
+@@ -202,21 +202,21 @@
+             <th class="num">{{ t('products.col_loss') }}</th>
+             <th class="num">{{ t('products.col_loss_unit') }}</th>
+             <th class="num">{{ t('common.price') }}</th>
+             <th class="num">{{ t('common.cost') }}</th>
+             <th>{{ t('products.col_still_below') }}</th>
+           </tr>
+         </thead>
+         <tbody>
+           {% for r in below %}
+           <tr>
+-            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
++            <td class="name"><a href="{% if is_static_export %}product.html?id={{ r.item_id }}{% else %}{{ url_for('page_product', item_id=r.item_id) }}{% endif %}">{{ r.item_name }}</a></td>
+             <td class="num" data-value="{{ r.units }}">{{ t.number(r.units) }}</td>
+             <td class="num strong" data-value="{{ r.loss }}" style="color: var(--bad)">{{ t.money(r.loss|abs) }}</td>
+             <td class="num" data-value="{{ r.loss_per_unit }}">{{ t.money(r.loss_per_unit|abs) }}</td>
+             <td class="num" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
+             <td class="num" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+             <td data-value="{{ 1 if r.still_below_cost else 0 }}">
+               {% if r.still_below_cost %}<span class="pill pill-bad">{{ t('common.yes') }}</span>
+               {% else %}<span class="pill pill-flat">{{ t('common.no') }}</span>{% endif %}
+             </td>
+           </tr>
+@@ -249,21 +249,21 @@
+         </thead>
+         <tbody>
+           {% for r in arrivals %}
+           <tr>
+             <td>
+               <img src="{{ url_for('api_item_photo', item_id=r.item_id) }}"
+                    alt="" width="32" height="32"
+                    style="object-fit:cover; border-radius:4px; vertical-align:middle;"
+                    onerror="this.hidden=true">
+             </td>
+-            <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
++            <td class="name"><a href="{% if is_static_export %}product.html?id={{ r.item_id }}{% else %}{{ url_for('page_product', item_id=r.item_id) }}{% endif %}">{{ r.item_name }}</a></td>
+             <td class="name muted">{{ r.family_name }}</td>
+             <td class="num">{{ t.money(r.price) }}</td>
+             <td class="num" data-value="{{ r.date_created }}">{{ t.date(r.date_created) }}</td>
+           </tr>
+           {% endfor %}
+         </tbody>
+       </table>
+     </div>
+   {% else %}
+     <div class="empty">{{ t('products.new_arrivals_empty', days=arrivals_days) }}</div>
+@@ -289,21 +289,21 @@
+           <th class="num">{{ t('products.col_units') }}</th>
+           <th class="num">{{ t('common.price') }}</th>
+           <th class="num">{{ t('common.cost') }}</th>
+           <th class="num">{{ t('products.col_stock') }}</th>
+           <th class="num">{{ t('common.days') }}</th>
+         </tr>
+       </thead>
+       <tbody>
+         {% for r in products %}
+         <tr>
+-          <td class="name"><a href="{{ url_for('page_product', item_id=r.item_id) }}">{{ r.item_name }}</a></td>
++          <td class="name"><a href="{% if is_static_export %}product.html?id={{ r.item_id }}{% else %}{{ url_for('page_product', item_id=r.item_id) }}{% endif %}">{{ r.item_name }}</a></td>
+           <td class="name muted">{{ r.family_name }}</td>
+           <td class="num strong" data-value="{{ r.revenue_all }}">{{ t.money(r.revenue_all) }}</td>
+           <td class="num" data-value="{{ r.gross_profit_all }}">{{ t.money(r.gross_profit_all) }}</td>
+           <td class="num" data-value="{{ r.margin_pct or -9 }}">
+             {% if r.margin_pct is none %}<span class="muted">{{ t('common.not_measurable') }}</span>
+             {% else %}<span class="{{ 'delta down' if r.margin_pct < healthy else '' }}">{{ t.percent(r.margin_pct) }}</span>{% endif %}
+           </td>
+           <td class="num" data-value="{{ r.qty_all }}">{{ t.number(r.qty_all) }}</td>
+           <td class="num" data-value="{{ r.price or 0 }}">{{ t.money(r.price) }}</td>
+           <td class="num" data-value="{{ r.cost or 0 }}">{{ t.money(r.cost) }}</td>
+diff --git a/templates/receivables.html b/templates/receivables.html
+index 2b8757c..cad471a 100644
+--- a/templates/receivables.html
++++ b/templates/receivables.html
+@@ -68,21 +68,21 @@
+           <th class="num">{{ t('receivables.col_revenue_12m') }}</th>
+           <th class="num">{{ t('receivables.col_months_trade') }}</th>
+           <th>{{ t('receivables.col_credit_risk') }}</th>
+         </tr>
+       </thead>
+       <tbody>
+         {% for r in receivables %}
+         <tr>
+           <td class="muted">{{ loop.index }}</td>
+           <td class="name strong">
+-            <a href="{{ url_for('page_customer', customer_id=r.customer_id) }}">{{ r.customer_name }}</a>
++            <a href="{% if is_static_export %}customer.html?id={{ r.customer_id }}{% else %}{{ url_for('page_customer', customer_id=r.customer_id) }}{% endif %}">{{ r.customer_name }}</a>
+             {% if r.at_risk %}<span class="pill pill-bad">{{ t('receivables.risk_flag') }}</span>{% endif %}
+           </td>
+           <td class="num">{{ r.phone or '—' }}</td>
+           <td class="name">{{ r.city or '—' }}</td>
+           <td class="num strong" data-value="{{ r.balance }}">{{ t.money(r.balance) }}</td>
+           <td class="num" data-value="{{ r.share_of_receivables }}">{{ t.percent(r.share_of_receivables) }}</td>
+           <td class="num" data-value="{{ r.last_purchase }}">{{ t.date(r.last_purchase) }}</td>
+           <td class="num" data-value="{{ r.days_since_purchase or 9999 }}">{{ t.number(r.days_since_purchase) }}</td>
+           <td class="num" data-value="{{ r.revenue_12m }}">{{ t.money(r.revenue_12m) }}</td>
+           <td class="num" data-value="{{ r.months_of_their_trade or 999 }}">
+diff --git a/tests/test_export_static.py b/tests/test_export_static.py
+index cb07763..09a6cbe 100644
+--- a/tests/test_export_static.py
++++ b/tests/test_export_static.py
+@@ -366,18 +366,48 @@ class TestProductsCustomersJson:
+         for entry in data.values():
+             if entry["sales_history"]:
+                 ts = entry["sales_history"][0]["ticket_time"]
+                 assert isinstance(ts, str)
+                 assert ts[4] == "-" and ts[7] == "-"
+                 break
+         else:
+             pytest.fail("no product with sales_history found to check date serialization")
+ 
+ 
++class TestProductCustomerShells:
++
++    def test_writes_one_shell_per_language_not_per_entity(self, cfg, monkeypatch, tmp_path):
++        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
++        out_dir = export_static.export(cfg)
++        for lang in LANGUAGES:
++            assert (out_dir / lang / "product.html").is_file()
++            assert (out_dir / lang / "customer.html").is_file()
++        # The old per-entity trees still exist too (parallel path, not
++        # removed until Task 6) - both must be true right now.
++        assert (out_dir / "en" / "products").is_dir()
++        assert (out_dir / "en" / "customers").is_dir()
++
++    def test_shell_contains_static_labels_and_fetch_call(self, cfg, monkeypatch, tmp_path):
++        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
++        out_dir = export_static.export(cfg)
++        html = (out_dir / "en" / "product.html").read_text(encoding="utf-8")
++        assert "fetch(\"../products.json\")" in html
++        assert "id=\"rd-item-name\"" in html
++        html = (out_dir / "en" / "customer.html").read_text(encoding="utf-8")
++        assert "fetch(\"../customers.json\")" in html
++
++    def test_catalog_links_point_at_shell_when_static_export(self, cfg, monkeypatch, tmp_path):
++        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
++        out_dir = export_static.export(cfg)
++        html = (out_dir / "en" / "catalog.html").read_text(encoding="utf-8")
++        assert "product.html?id=" in html
++        assert "/products/" not in html
++
++
+ class TestStatusPayload:
+ 
+     def test_handles_missing_cache_info_gracefully(self):
+         from poslib.present import status_payload
+         payload = status_payload({})
+         assert payload["parsed_at"] == ""
+         assert payload["source_modified"] == ""
+         assert payload["row_counts"] == {}

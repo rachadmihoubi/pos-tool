@@ -197,3 +197,34 @@ to avoid two concurrent runs fighting over `poslib/etl.py`'s cross-process
 advisory lock on `cache.building`, which would have serialized them
 anyway) and the implementer's own truncated-log attempt described above.
 Only the OS-detached one above is currently live.
+
+## Task 4: full regression CONFIRMED CLEAN (controller-independent re-run)
+
+`logs/task4-full-regression-final.log`:
+```
+................s........                                                [100%]
+24 passed, 1 skipped in 69305.40s (19:15:05)
+EXIT_CODE=0
+```
+24 passed (21 pre-existing + 3 new `TestProductCustomerShells`), 1 skipped
+(same pre-existing skip as Task 3's run), 0 failed. The ~19h15m wall-clock
+is far above every other run this session (~650-800s/export earlier) -
+most likely explained by two full-suite runs briefly competing for
+`poslib/etl.py`'s cross-process advisory lock before the redundant one was
+killed (see above), plus this being a real till PC with real business
+hours/load in between, not a regression in the code itself - nothing in
+Task 4's diff touches `etl.py` or per-export cost. Not investigated
+further; the result itself (24 passed, 0 failed) is what matters.
+
+Task 4 is now trustworthy. Proceeding to generate its review package
+(diff `d7d751d..06288a5` - the code commit; `d9cf6a7` is docs-only ledger
+notes, not part of the reviewable diff) and dispatch its task reviewer.
+
+**Note**: `06288a5` also contains ~2,400 lines of force-added SDD
+workspace docs (committed for cross-machine continuity, see the earlier
+"commit everything and push" instruction) - the standard
+`scripts/review-package` diff would have included all of that as noise.
+Built a manual code-only diff instead, scoped to `export_static.py`,
+`templates/`, `tests/test_export_static.py`:
+`review-d7d751d..06288a5-code-only.diff`. Task reviewer dispatched:
+agent a25c046378d1f0d5f, model sonnet.
