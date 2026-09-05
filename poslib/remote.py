@@ -70,16 +70,60 @@ _API_BASE = "https://api.cloudflare.com/client/v4"
 # See CLAUDE.md's "Store #1 migration ... PAUSED, STUCK" section - this is
 # the mechanism behind the 11-28 minute installer hangs recorded there.
 _REQUEST_TIMEOUT_SECONDS = (10, 30)
-_UPLOAD_TIMEOUT_SECONDS = (10, 120)
+# Root-caused 2026-09-05 on store #1's own till PC, after two days of every
+# push failing with "Connection aborted ... TimeoutError('The write
+# operation timed out')" during asset upload.
+#
+# The trap: in a requests (connect, read) tuple, the READ half does NOT
+# govern sending the request body. urllib3's HTTPConnectionPool._make_request
+# sets the socket timeout to the CONNECT timeout, then writes the entire
+# request body under it, and only swaps in the read timeout afterwards, for
+# the response:
+#
+#     conn.timeout = Timeout.resolve_default_timeout(timeout_obj.connect_timeout)
+#     ...
+#     conn.request(...)              # <- whole body written under connect timeout
+#     ...
+#     conn.timeout = read_timeout    # <- only now, for reading the response
+#
+# So the old (10, 120) meant "this batch's body must be fully written within
+# 10 seconds", not 120 - and the 120 was never reached on a failing push.
+# Confirmed empirically on this machine: an identical size ladder that failed
+# at 300/700/900/1200KB with a 10s connect timeout succeeded at every one of
+# those sizes with a 30s connect timeout, on the same link minutes apart.
+#
+# Raising it is safe here specifically because _force_ipv4_only() above means
+# only IPv4 addresses are ever tried - the multi-address stall that the short
+# 10s bound was originally defending against (see _REQUEST_TIMEOUT_SECONDS'
+# own comment) cannot happen once the AAAA records are never attempted.
+# Small-body calls keep the short bound; only the three calls that send a
+# genuinely large body use this one.
+_LARGE_BODY_TIMEOUT_SECONDS = (180, 180)
 # Cloudflare's own limits (wrangler's ceiling is 1000/bucket; batching
 # tighter than that leaves headroom without needing to tune it further).
 _MAX_FILES_PER_UPLOAD_BATCH = 500
 # wrangler batches by bytes as well as file count (MAX_BUCKET_SIZE in
 # packages/wrangler/src/pages/constants.ts) - this codebase's own batching
 # used to be file-count-only, which let a handful of ~1MB pages in a large
-# export produce an unpredictably large single POST body. 40MB matches
-# wrangler's own constant.
-_MAX_BATCH_BYTES = 40 * 1024 * 1024
+# export produce an unpredictably large single POST body.
+#
+# This was 40MB (wrangler's own MAX_BUCKET_SIZE) until 2026-09-05. Wrangler
+# can afford that because it assumes a developer-grade uplink; a real store
+# till PC is not that. Two things make a smaller cap strictly better here:
+# a batch must now finish writing inside _LARGE_BODY_TIMEOUT_SECONDS, and a
+# batch that does fail is re-sent whole on retry, so a smaller cap also
+# shrinks the cost of each retry. The extra round trips are negligible
+# against a keep-alive session.
+#
+# Note this caps RAW file bytes, but the wire payload is base64 (plus JSON
+# overhead), so it is ~4/3 larger: an 8MB batch sends ~11MB and therefore
+# needs roughly 62 KB/s to clear the 180s write window, where the old 40MB
+# batch sent ~53MB and needed ~300 KB/s. Neither value rescues a genuinely
+# broken link - store #1's own uplink measured a steady ~10 KB/s on
+# 2026-09-05, at which even one 8MB batch cannot finish in time and the
+# full ~263MB export would need ~10 hours regardless of batching. This cap
+# is sized for a healthy-but-modest connection, not as a fix for that.
+_MAX_BATCH_BYTES = 8 * 1024 * 1024
 _MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 # Root-caused 2026-08-31: store #1's first real full-catalog export (263MB
 # / 12,625 files) failed to push with "write operation timed out" and no
@@ -249,7 +293,7 @@ def _check_missing_hashes(session: requests.Session, jwt: str,
     for attempt in range(1, _MAX_CHECK_MISSING_ATTEMPTS + 1):
         try:
             resp = session.post(f"{_API_BASE}/pages/assets/check-missing", headers=headers,
-                                json={"hashes": hashes}, timeout=_REQUEST_TIMEOUT_SECONDS)
+                                json={"hashes": hashes}, timeout=_LARGE_BODY_TIMEOUT_SECONDS)
             resp.raise_for_status()
             result = resp.json()
             if not result.get("success"):
@@ -292,7 +336,7 @@ def _upload_assets(session: requests.Session, account_id: str, project: str, jwt
         ok, jwt = _post_with_retry(
             session, f"{_API_BASE}/pages/assets/upload",
             account_id=account_id, project=project, jwt=jwt,
-            json_payload=payload, timeout=_UPLOAD_TIMEOUT_SECONDS,
+            json_payload=payload, timeout=_LARGE_BODY_TIMEOUT_SECONDS,
             max_attempts=_MAX_UPLOAD_ATTEMPTS, what="asset upload batch")
         if not ok:
             return False, jwt
@@ -305,7 +349,7 @@ def _upsert_hashes(session: requests.Session, account_id: str, project: str, jwt
     return _post_with_retry(
         session, f"{_API_BASE}/pages/assets/upsert-hashes",
         account_id=account_id, project=project, jwt=jwt,
-        json_payload={"hashes": hashes}, timeout=_REQUEST_TIMEOUT_SECONDS,
+        json_payload={"hashes": hashes}, timeout=_LARGE_BODY_TIMEOUT_SECONDS,
         max_attempts=_MAX_UPLOAD_ATTEMPTS, what="upsert-hashes")
 
 
