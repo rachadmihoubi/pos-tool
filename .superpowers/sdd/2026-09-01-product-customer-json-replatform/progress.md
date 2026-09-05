@@ -228,3 +228,45 @@ Built a manual code-only diff instead, scoped to `export_static.py`,
 `templates/`, `tests/test_export_static.py`:
 `review-d7d751d..06288a5-code-only.diff`. Task reviewer dispatched:
 agent a25c046378d1f0d5f, model sonnet.
+
+Task 4 review: Spec compliant, task quality Approved. Zero Critical
+findings. One Important finding, but in a DIFFERENT task's already-
+reviewed file (`static/remote-detail.js`, Task 2), surfaced only as a
+byproduct of the required Task2↔Task4 DOM-hook interface check:
+`renderProduct`'s competitor-row builder rendered an empty 5th cell
+instead of the real (non-functional-when-remote, same accepted parity
+tradeoff as the add form) delete button `product_detail.html` always
+shows - a real visible-parity regression versus both the local page and
+the old per-entity remote export (which rendered the real button, since
+it dispatched the real template). Two Minor (both deferred): stale
+"[WIP]" commit message (cosmetic only); shell `<title>` doesn't update to
+the entity name post-fetch (not covered by the "reproduce visible
+content" constraint).
+
+**Ruling**: fixed directly by the controller rather than looping back
+through a fresh Task-2 implementer/reviewer cycle - the fix is small
+(29 lines across 2 files + 1 test), fully scoped to the exact gap named,
+and empirically verified (see below), so the overhead of a full
+dispatch cycle wasn't justified. Cost if this ruling is wrong: the fix
+itself is still real code someone would need to review eventually - a
+full whole-branch review happens before this branch merges regardless
+(see the skill's final-review step), so nothing here escapes review
+permanently, only skips an extra dedicated per-fix review pass.
+
+Fix: `templates/product_shell.html`'s `strings` object gained `lang`/
+`competitorDelete`; `static/remote-detail.js`'s competitor-row builder
+now renders a real `<form method="post">`+`<button>` pointed at the real
+`product_competitor_price_delete` route (`app.py:733`), matching the
+already-accepted "visible but non-functional when remote" tradeoff. New
+regression test `test_competitor_delete_button_is_reproduced_on_the_shell`
+added to `TestProductCustomerShells`. Verified: full
+`TestProductCustomerShells` class (4 tests, including the new one) ran
+clean against the real database - 4 passed, 0 failed (73508s / 20h25m,
+another very slow real-DB run on this till PC, consistent with the
+Task 4 full-regression run's own ~19h - not investigated further, same
+non-code-related explanation). Committed as `6f0fce8`.
+
+## Task 4: COMPLETE (commits d7d751d..6f0fce8: 06288a5 code +
+d9cf6a7/52c3a8b docs + 6f0fce8 fix). Review clean, 1 Important finding
+fixed same-session, 2 Minor deferred (cosmetic commit-message staleness;
+shell `<title>` not entity-specific).
