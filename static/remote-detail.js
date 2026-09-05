@@ -157,12 +157,20 @@
           cls: "num", value: r.price,
         };
       }
+      var deleteHtml = "";
+      if (strings.lang && r.item_id !== undefined && r.id !== undefined) {
+        deleteHtml = '<form method="post" style="margin:0;" action="/products/' +
+          encodeURIComponent(r.item_id) + '/competitor-price/' + encodeURIComponent(r.id) +
+          '/delete?lang=' + encodeURIComponent(strings.lang) + '">' +
+          '<button type="submit" class="btn btn-quiet">' + escapeHtml(strings.competitorDelete || "") + '</button>' +
+          '</form>';
+      }
       return [
         { text: r.competitor_name, cls: "name" },
         priceCell,
         { text: formatDate(fmt, r.observed_date), cls: "num", value: r.observed_date },
         { text: r.note || fmt.dash, cls: "muted" },
-        { text: "", cls: "" },
+        { html: deleteHtml, cls: "" },
       ];
     });
     if (dom.competitorEmpty) { dom.competitorEmpty.hidden = !!(data.competitor_prices && data.competitor_prices.length); }

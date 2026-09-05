@@ -402,6 +402,24 @@ class TestProductCustomerShells:
         assert "product.html?id=" in html
         assert "/products/" not in html
 
+    def test_competitor_delete_button_is_reproduced_on_the_shell(self, cfg, monkeypatch, tmp_path):
+        # Regression test: an earlier draft of RemoteDetail.renderProduct's
+        # competitor-row builder rendered an empty 5th cell instead of a
+        # (non-functional-when-remote, same parity tradeoff as the add form)
+        # delete button - silently dropping a real feature the local page
+        # and the old per-entity remote export both show. The shell must
+        # carry enough (strings.lang, strings.competitorDelete, and
+        # remote-detail.js's own delete-form-building code) for the button
+        # to render once the fetched JSON resolves client-side.
+        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
+        out_dir = export_static.export(cfg)
+        html = (out_dir / "en" / "product.html").read_text(encoding="utf-8")
+        assert "competitorDelete" in html
+        assert "lang:" in html
+        js = (out_dir / "en" / "static" / "remote-detail.js").read_text(encoding="utf-8")
+        assert "/competitor-price/" in js
+        assert "/delete?lang=" in js
+
 
 class TestStatusPayload:
 

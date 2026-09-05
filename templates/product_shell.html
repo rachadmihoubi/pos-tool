@@ -154,6 +154,8 @@
     familyAverageSuffix: {{ (' (' ~ t('common.average')|lower ~ ')') | tojson }},
     notFound: {{ t('app.no_findings') | tojson }},
     notMeasurable: {{ t('common.not_measurable') | tojson }},
+    lang: {{ lang | tojson }},
+    competitorDelete: {{ t('products.competitor_delete') | tojson }},
   };
   var params = new URLSearchParams(window.location.search);
   var id = params.get("id");
