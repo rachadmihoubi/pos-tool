@@ -1672,6 +1672,188 @@ customer-distribution build are now done.** Weighted-average cost (the
 feature the owner explicitly sequenced after Component 5) is also already
 built — see "Weighted-average cost (AVCO) + last purchase cost" below.
 
+## Store #1 watcher outage + timeout bug (2026-09-05) — one real bug fixed, one systemic gap found and NOT yet fixed
+
+Picked up mid-way through the product/customer JSON-replatform plan
+(`docs/superpowers/plans/2026-09-01-product-customer-json-replatform.md`,
+Tasks 1-4 done on branch `product-customer-json-replatform` in
+`.claude/worktrees/product-customer-json-replatform` — see that branch's
+own SDD ledger for the full per-task detail) — Task 5 (live verification)
+needed a real Cloudflare push, which surfaced a real, still-live
+production incident on this same machine (confirmed via hostname to be
+`DESKTOP-94UHGGD`, store #1 "Pro Makeup Boumati" per the machine-identity
+table above): **the real store's dashboard (`promakeupboumati.pages.dev`)
+had been stale since 2026-09-03**, silently, with nothing telling the
+owner.
+
+### Bug #1 — FIXED, committed to `main` (`8e2b170`): large uploads were truncated to a 10-second window, not 120
+
+Root-caused by reading urllib3's own source (installed version 2.7.0):
+in a `requests`/urllib3 `(connect, read)` timeout tuple, **the connect
+half, not the read half, governs how long sending the request body is
+allowed to take** — `HTTPConnectionPool._make_request` sets the socket
+timeout to the connect value, writes the *entire* body under it, and
+only swaps in the read timeout afterwards for the response. So the old
+`_UPLOAD_TIMEOUT_SECONDS = (10, 120)` in `poslib/remote.py` actually meant
+"finish sending this batch within 10 seconds" - the 120 was never
+reached on a failing push. This explains the confusing pattern seen both
+in the real store's log (`%LOCALAPPDATA%\Shop Analysis\logs\pos-tool.log`,
+every push from 2026-09-03 07:xx onward failing identically during asset
+upload) and in a disposable-project diagnostic built this session (sizes
+from 1MB to 35MB all failed at a suspiciously *constant* ~10-15s,
+regardless of size - the exact signature of a fixed-window cutoff, not a
+bandwidth ceiling).
+
+Fixed: a dedicated `_LARGE_BODY_TIMEOUT_SECONDS = (180, 180)` now covers
+the three large-body Cloudflare calls (asset upload, check-missing,
+upsert-hashes); `_MAX_BATCH_BYTES` dropped 40MB -> 8MB (wrangler's own
+40MB assumes a developer-grade uplink, not a real store's connection).
+Raising the timeout is safe specifically because `_force_ipv4_only()`
+(already shipped 2026-08-29) means only IPv4 addresses are ever tried -
+the multi-address stall the original short bound was defending against
+cannot happen once AAAA records are never attempted. `tests/test_remote.py`
+41/41 pass. **Deliberately committed to `main` directly, not the
+replatform branch** - that plan's own Global Constraints mark
+`poslib/remote.py`'s upload mechanics out of scope; the replatform branch
+will pick this fix up via a future rebase/merge, not a duplicate fix.
+
+### The network scare that turned out to be mostly a red herring - re-verify before trusting either reading
+
+An extensive live diagnostic (dispatched to an Opus subagent, since the
+network-vs-code question needed real experimentation, not more reading)
+initially found a consistent ~9-10 KB/s upload ceiling to *both*
+Cloudflare and an unrelated host (httpbin.org), with zero packet loss
+anywhere (ping/pathping clean at every hop) - pointing at the Wi-Fi
+extender's backhaul specifically (PC<->extender wireless hop flawless,
+extender<->router hop carrying all the latency/jitter). Kaspersky was
+fully quit (service confirmed `Stopped`, not just the tray app) and the
+same slow reading persisted, ruling Kaspersky out.
+
+**But a follow-up retest minutes later, prompted by the owner pointing
+out a live speedtest showing 18 Mbps down / 33 Mbps up (utterly
+inconsistent with ~10 KB/s), found healthy throughput instead**
+(650-900 KB/s via plain Python `requests` to httpbin.org) - and **two
+real live pushes to `promakeupmihoubipos` both succeeded** immediately
+after (cold: 486.3s; warm, re-exported with zero data change seconds
+later: 722.2s - slower, likely because the "Synced {when}" badge embeds
+a live timestamp into every page, so nearly every file's hash changes on
+every export regardless of real data change, defeating the
+check-missing-hashes optimization for a full export - not a bug, just a
+real limit on how much that optimization can help here).
+
+**Net honest conclusion: the connection is real but intermittent, not
+a fixed hardware fault** - the extender-backhaul theory may still be
+correct as a *contributing* factor (worth trying an Ethernet cable to
+the DSL router if this recurs, bypassing the extender entirely - owner
+confirmed the extender is otherwise the only realistic option), but it
+does not explain a 400x swing in measured throughput within the same
+session. **Don't treat this as fully diagnosed** - if push failures
+recur, re-run the same diagnostic (disposable Cloudflare project,
+size-ladder upload test - see git history around this date for the
+exact script) before assuming either the network or the timeout fix is
+to blame; the honest state is "reproducibly worked twice after the code
+fix, on a connection that tested badly once and well twice."
+
+### Bug #2 - found, NOT fixed: the real watcher process died and nothing brought it back (this is the part that could hit any store)
+
+Investigated *why* the real store's dashboard was stale for 2 full days,
+per the owner's explicit ask to find root cause rather than just patch
+the symptom - and the answer is a real, systemic architectural gap:
+
+- This machine's last boot was 2026-09-03 07:14 - no reboot, no new
+  logon since (confirmed via `Get-CimInstance Win32_OperatingSystem`).
+  The `Shop Analysis - Watcher` scheduled task's `LastRunTime` matches
+  that boot exactly - its trigger is `onlogon`, a **one-shot** trigger,
+  not recurring.
+- The real watcher's own log shows it working correctly for hours on
+  2026-09-03 (cache rebuilding every ~10-15 min as real till activity
+  happened, matching `watcher.py`'s `rebuild()`/`_run_remote_push()`
+  cadence) - then the log simply **stops** at 16:08 that day. No
+  `ShopAnalysis.exe`/`python` crash entry exists anywhere in the Windows
+  Application event log near that time. No process is running now.
+- Read `watcher.py`'s actual loop end-to-end: `rebuild()`,
+  `_run_remote_push()`, `_run_digest()`, `_run_backup()` each have their
+  own `except Exception` guard - good instincts already in the code. But
+  **`Watcher.run()`'s outer loop (lines 236-282) only catches
+  `KeyboardInterrupt`, and `main()` calls `watcher.run()` (line 323) with
+  no catch-all around it at all.** A few seams are genuinely unguarded -
+  e.g. `_digest_due()`/`_backup_due()`'s own condition checks are called
+  directly in the loop body, outside any try/except (only the `_run_*`
+  functions they gate are wrapped). If anything at all raises there, or
+  anywhere else not already wrapped, the entire process dies with **zero
+  visible evidence** - no dialog (this build is `console=False`, an
+  already-known, previously-accepted gap - see the packaging component
+  table above), no Windows Error Reporting entry (a clean Python
+  exception exits normally; WER generally only catches native faults),
+  nothing beyond whatever the logger already wrote before the fatal
+  instant. This is exactly why the *specific* triggering line could not
+  be identified this session - that unprovability is itself the finding,
+  not a gap in the investigation.
+- **And nothing restarts it.** The scheduled task is one-shot-per-logon
+  only, with no "restart on failure" action and no independent recurring
+  "is the watcher still alive? if not, start it" check. A till PC that
+  stays logged in for days or weeks without a fresh logon (this one:
+  still running since the 2026-09-03 boot, no logon since) has no
+  self-healing path at all once the process dies once, for any reason.
+
+**This is a store-agnostic gap, not something specific to this
+machine's hardware/network** - the same silent-death-with-no-restart
+exposure exists on every store's packaged install. Proposed permanent
+fix (discussed with the owner, **not yet implemented** - paused here so
+the owner could pick this back up on another PC):
+
+1. Harden `Watcher.run()`'s loop with a real `except Exception` around
+   each iteration's body (not just `KeyboardInterrupt`), so no single
+   unexpected exception - wherever it comes from - can kill the whole
+   process.
+2. Make the Scheduled Task self-healing - either Windows Task
+   Scheduler's native restart-on-failure settings, or a second, separate
+   recurring trigger (e.g. every 5-15 minutes) that checks whether the
+   watcher process is alive and starts it if not - the standard way to
+   emulate a real Windows Service's auto-restart without converting the
+   whole app into one.
+3. Give the non-technical owner a visible signal when sync goes stale -
+   e.g. the daily digest (already emailed) could include a "remote sync
+   last succeeded N hours ago" warning line when it's overdue, so a
+   silent failure becomes a noticed one instead of a multi-day surprise
+   (this closes the gap the "Full-export push reliability fix" section
+   above already flagged and left open: "Silently-failing remote pushes
+   have no visible indication to the shop owner at all").
+
+### Session state at pause - read this before continuing on another PC
+
+- **`main` has 2 unpushed-as-of-this-writing commits**: `1abd0e3` (Synced
+  badge, predates this session) and `8e2b170` (the timeout fix above).
+  Check `git log origin/main..HEAD` before assuming these landed.
+- **The replatform branch (`product-customer-json-replatform`) needed a
+  new SDD ledger entry for Task 5's live-push results** - see that
+  branch's own `.superpowers/sdd/2026-09-01-product-customer-json-replatform/progress.md`
+  for the up-to-date detail (both pushes succeeded; the interim file
+  count with the old per-entity loops still present was ~12,695 files /
+  ~250.7MB; Task 6 - deleting those old loops - is still not started).
+- **This worktree's own local ETL cache was 2 days stale** when the
+  owner did the Task 5 phone check (the "Synced" badge reflects
+  `cache.parsed_at` - when the *local* cache was last rebuilt - not push
+  recency; nothing in a manually-driven dev worktree refreshes it
+  automatically, unlike a real running watcher). A forced
+  `ETL.refresh(force=True)` + fresh export + push was kicked off before
+  this session paused - **check whether that actually completed and
+  succeeded before assuming the live site reflects current data.**
+- **Kaspersky was fully quit on this machine during network diagnosis
+  and, as of this write-up, had NOT yet been confirmed turned back
+  on** - check `Get-Service` for `Kaspersky Service 21.26` before
+  assuming this production till PC is protected again.
+- **The real store's own dashboard (`promakeupboumati`) was not
+  re-pushed this session** - the timeout fix and the (probably
+  transient) network improvement both suggest a retry would likely
+  succeed now, but the watcher process itself is still dead and won't
+  restart on its own (see Bug #2 above) - it needs either a manual
+  restart of the scheduled task, a fresh logon, or the permanent fix
+  above before this store's own sync resumes unattended.
+- **The 3-part permanent fix for Bug #2 was proposed but explicitly not
+  implemented** - the owner asked to commit/push and continue elsewhere
+  before answering whether to proceed with it.
+
 ## What's left (optional, not blocking)
 
 - **DONE 2026-08-31 — adding a newly provisioned store to the cross-store
