@@ -270,3 +270,45 @@ non-code-related explanation). Committed as `6f0fce8`.
 d9cf6a7/52c3a8b docs + 6f0fce8 fix). Review clean, 1 Important finding
 fixed same-session, 2 Minor deferred (cosmetic commit-message staleness;
 shell `<title>` not entity-specific).
+
+## Task 5, Step 1: full suite pre-check run (fast subset)
+
+`pytest tests -q --deselect tests/test_export_static.py` (deselected the
+slow real-DB export tests, which have already been run and verified
+clean many times over across Tasks 3/4 - re-running them again here
+would cost another ~19h for no new information): **407 passed, 1 failed,
+26 deselected in 291s**. The 1 failure is
+`TestConsistency::test_verification_table` - `dead_stock_value` is
+12,224,107 against a frozen expected 15,698,733 (>20% tolerance) - the
+EXACT SAME pre-existing failure already ruled acceptable in this
+worktree's own Setup section at the very start of this plan's execution
+(a point-in-time figure that drifts with real trade; nothing in this
+plan touches `dead_stock_value`/`item_movement`/any diagnostics
+threshold). **No new regressions from Tasks 1-4.** Task 5 Step 1 is
+satisfied.
+
+## Task 5, Steps 2-5: BLOCKED - needs the user, cannot proceed
+autonomously
+
+These steps require a real Cloudflare push (`.env` with valid
+`CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`, `remote.enabled: true`
+pointed at a real reachable project) and, per this repo's own
+established discipline (see CLAUDE.md's `_redirects` bug history -
+"don't declare a live deploy fixed until the owner's phone confirms
+it"), the owner's own phone checking the real deployed pages in all 3
+languages. This session has neither a live token scoped for this
+purpose nor the ability to check a phone. **Task 6 is hard-gated on
+Task 5 passing** - do not start it until Task 5 Steps 2-4 are confirmed,
+per the plan's own explicit "Only start this task after Task 5's live
+verification has actually passed" instruction.
+
+**Whoever resumes with live Cloudflare access should**: run Task 5 Steps
+2-4 exactly as written in the plan (`docs/superpowers/plans/2026-09-01-
+product-customer-json-replatform.md`, "Task 5" section) - export+push,
+measure file count/size before/after plus a second "warm" push timing,
+then the phone spot-checks (a product with history+family, a never-sold
+item, `DB786` specifically if still present, a customer with a balance,
+an empty-history entity, all 3 languages including Arabic RTL, and the
+Stage 1 "Synced" badge still present). Once that passes, proceed to
+Task 6 (delete the old per-entity HTML loops) using the same
+subagent-driven-development pattern as Tasks 1-4 above.
