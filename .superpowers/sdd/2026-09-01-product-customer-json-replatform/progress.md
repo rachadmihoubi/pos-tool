@@ -312,3 +312,82 @@ an empty-history entity, all 3 languages including Arabic RTL, and the
 Stage 1 "Synced" badge still present). Once that passes, proceed to
 Task 6 (delete the old per-entity HTML loops) using the same
 subagent-driven-development pattern as Tasks 1-4 above.
+
+## Task 5, Steps 2-3: DONE 2026-09-05, on store #1's own till PC (real Cloudflare access) - but read CLAUDE.md's "Store #1 watcher outage + timeout bug" section first, this ran into a real production incident along the way
+
+Live access became available this session on the real till PC
+(`DESKTOP-94UHGGD`). Attempting the real push immediately surfaced a
+genuine, already-in-progress production incident (store #1's own
+`promakeupboumati` dashboard had been silently stale since 2026-09-03) -
+fully root-caused and partly fixed; see CLAUDE.md's new section for the
+complete story (a real `poslib/remote.py` timeout bug, now fixed and
+committed to `main` as `8e2b170` - deliberately NOT on this branch, since
+this plan's own Global Constraints mark `remote.py`'s upload mechanics
+out of scope; a network scare that mostly turned out to be a red herring;
+and a second, NOT-yet-fixed systemic gap where the packaged watcher can
+die silently with no restart). **This worktree's own `poslib/remote.py`
+still has the pre-fix code** - a future rebase/merge from `main` will
+pick up `8e2b170` naturally; don't re-fix it independently here.
+
+Once the timeout fix was applied (copied in locally for testing, not
+committed to this branch) and the network came back healthy, two full
+live pushes to `promakeupmihoubipos` succeeded:
+- Cold push: 486.3s, `push_remote` returned `True`.
+- Warm push (re-exported immediately after, no real data change):
+  722.2s - slower, not faster, likely because the Stage 1 "Synced
+  {when}" badge embeds a live timestamp into every page, so nearly every
+  file's content-hash changes on every export regardless of real data
+  change, defeating `poslib/remote.py`'s check-missing-hashes
+  optimization for a full export. Not a bug in this plan's own code -
+  worth knowing as a real limit on how cheap a "no-op" push can ever be
+  here.
+
+**File count/size** (interim - the old per-entity HTML loops are still
+present, Task 6 hasn't run yet): 12,695 files, ~250.7MB. Compare against
+the plan's own 12,555-files/~232.6MB baseline once Task 6 actually
+removes the old loops - this number is not the real "after" yet.
+
+## Task 5, Step 4: PARTIALLY DONE - one real finding, needs a proper re-check before this task is called complete
+
+The owner did check the live `promakeupmihoubipos.pages.dev` pages
+directly and reported "everything is showing" (catalog -> product page,
+receivables -> customer page, language switching, no visible breakage) -
+but also reported the "Synced" badge showing "2 days ago", which read as
+a possible push failure.
+
+**Root cause, checked and confirmed harmless**: `templates/base.html`'s
+badge reads `cache.parsed_at` - when the *local* ETL cache
+(`cache.db`) was last rebuilt from the real database - not when the last
+push happened (`export_static.export()` just opens whatever cache
+already exists via `ETL.connect()`, which never calls `refresh()` -
+`poslib/etl.py:402-410`). This worktree is a manually-driven dev
+environment with no watcher loop running in it, so of course its local
+cache goes stale between manual test runs - this is expected for this
+kind of test worktree, not a symptom of the push failing (the push
+itself independently returned `True` twice, per above).
+
+A forced `ETL.refresh(force=True)` + fresh `export_static.export(cfg)` +
+`push_remote(cfg)` was kicked off to get a genuinely fresh "Synced just
+now" badge on the live site before this session paused (per the owner's
+explicit request to stop debugging and hand off to another PC) - **its
+final result was not confirmed before the session ended.** Whoever
+resumes should:
+1. Check whether that run actually completed and succeeded (there is no
+   automatic record of it beyond this note - re-run it if unsure:
+   `ETL(cfg).refresh(force=True)` then `export_static.export(cfg)` then
+   `remote.push_remote(cfg)`, same pattern as Step 2 above).
+2. Re-check the live site's "Synced" badge shows a recent, correct time.
+3. Finish the rest of Step 4's checklist properly: a product WITH
+   purchase history and a family, a NEVER-sold item, `DB786`
+   specifically if still present (known avg-cost/last-cost divergence),
+   a customer with a balance, an empty-history entity, and explicit
+   confirmation of Arabic's right-to-left rendering and its
+   thousands/decimal separators - none of these specific checks were
+   confirmed individually this session, only a general "everything is
+   showing."
+
+**Do not treat Task 5 as fully passed yet** - Steps 2-3 are solid
+(two independently-succeeding live pushes), but Step 4's checklist needs
+finishing properly before Task 6 (deleting the old per-entity loops)
+starts. Task 6 is still hard-gated on Task 5 actually passing, per the
+plan's own instruction.
