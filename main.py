@@ -41,9 +41,23 @@ from poslib.provision import ProvisionResult, provision_store
 
 # 40 minutes: well above the ~31-minute worst case for every network call
 # in provision_store timing out on its own (6 verify_reachable attempts x2
-# + 5 post_access_app attempts x2 + 3 push retries, each a handful of
-# poslib/remote.py's (10, 30)-bounded calls) - see
-# _run_provisioning_with_watchdog's docstring.
+# + 5 post_access_app attempts x2, still (10, 30)-bounded and unchanged, +
+# 3 push_remote retries).
+#
+# Corrected 2026-09-05 (opus-reviewer pass on poslib/remote.py's
+# connect-timeout fix): the "3 push retries" component used to assume
+# push_remote's internal calls were (10, 30)-bounded like everything else
+# here - they are not, since that fix. push_remote's own calls now use a
+# 180s large-body timeout with up to 5 retries each, which would have
+# blown this budget on its own (up to ~915s per call x several calls x 3
+# outer retries) if left unbounded. Fixed by capping poslib/provision.py's
+# own push_remote() calls to _PROVISION_PUSH_MAX_SECONDS (150s, see that
+# constant's own comment) - 3 outer retries x 150s = 450s (7.5 min),
+# which is smaller than the "3 push retries" slice this 31-minute estimate
+# already budgeted for under the old (10, 30)-bounded assumption, so the
+# total stays comfortably under this 40-minute watchdog. If either
+# _PROVISION_PUSH_MAX_SECONDS or the retry counts here ever change, re-add
+# up this arithmetic again rather than assuming 40 minutes is still enough.
 _PROVISIONING_TIMEOUT_SECONDS = 40 * 60
 
 

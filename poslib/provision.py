@@ -56,6 +56,13 @@ _API_BASE = "https://api.cloudflare.com/client/v4"
 # address can cost the full timeout before urllib3 falls back to IPv4.
 _REQUEST_TIMEOUT_SECONDS = (10, 30)
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,56}[a-z0-9])?$")
+# Added 2026-09-05 alongside poslib/remote.py's own _MAX_PUSH_SECONDS: every
+# push_remote() call in this module pushes a tiny placeholder site or the
+# hub registry (a handful of files), never a full store catalog, so it
+# should never legitimately need remote.py's full 25-minute default budget.
+# Bounding it here keeps main.py's _PROVISIONING_TIMEOUT_SECONDS watchdog
+# arithmetic sane - see that constant's own comment.
+_PROVISION_PUSH_MAX_SECONDS = 150.0
 
 
 def _urllib3_gai_family_name() -> str:
@@ -610,7 +617,8 @@ def _push_placeholder_with_retry(cfg: Config, project_slug: str, export_dir: Pat
     """
     for attempt in range(max_attempts):
         attempt_start = time.monotonic()
-        ok = _remote.push_remote(cfg, project=project_slug, export_dir=export_dir)
+        ok = _remote.push_remote(cfg, project=project_slug, export_dir=export_dir,
+                                  max_seconds=_PROVISION_PUSH_MAX_SECONDS)
         log.info("_push_placeholder_with_retry(%s): attempt %d/%d %s (%.1fs)",
                   project_slug, attempt + 1, max_attempts,
                   "succeeded" if ok else "failed", time.monotonic() - attempt_start)
@@ -868,7 +876,8 @@ def register_store_with_hub(
             encoding="utf-8",
         )
         pushed = _remote.push_remote(
-            cfg, project=HUB_PROJECT_SLUG, export_dir=tmp_dir, api_token=powerful_token
+            cfg, project=HUB_PROJECT_SLUG, export_dir=tmp_dir, api_token=powerful_token,
+            max_seconds=_PROVISION_PUSH_MAX_SECONDS,
         )
     if not pushed:
         raise ProvisionError(

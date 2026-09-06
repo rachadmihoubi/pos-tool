@@ -641,6 +641,140 @@ class TestUploadBatching:
         assert len(jwt_gets) == 2  # initial token + one mid-push refresh
 
 
+class TestLargeBodyTimeouts:
+
+    def test_all_large_body_calls_use_the_large_body_timeout(self, tmp_path, monkeypatch):
+        """
+        Regression guard for the connect-timeout bug (root-caused 2026-09-05):
+        urllib3 applies the CONNECT half of a (connect, read) tuple to
+        writing the request body, not just to establishing the connection
+        (HTTPConnectionPool._make_request sets the socket timeout to the
+        connect value and writes the whole body under it, only swapping in
+        the read timeout afterwards for the response) - so every call that
+        sends a genuinely large body must use _LARGE_BODY_TIMEOUT_SECONDS,
+        never the short _REQUEST_TIMEOUT_SECONDS. An opus-reviewer pass on
+        the original fix found _create_deployment had been missed - this
+        test covers all four call sites so that gap can't recur silently.
+        """
+        export_dir = _make_export_dir(tmp_path, {"index.html": "hi"})
+        cfg = FakeConfig(export_dir=export_dir)
+        session = FakeSession()
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is True
+
+        large_body_urls = ("/pages/assets/check-missing", "/pages/assets/upload",
+                           "/pages/assets/upsert-hashes", "/deployments")
+        checked = 0
+        for _method, url, kwargs in session.calls:
+            if url.endswith(large_body_urls):
+                assert kwargs["timeout"] == remote._LARGE_BODY_TIMEOUT_SECONDS, url
+                checked += 1
+        assert checked == 4  # one of each - fails loudly if a call site is ever missed
+
+
+class TestCreateDeploymentRetry:
+
+    def test_deployment_retries_on_transient_error_then_succeeds(self, tmp_path, monkeypatch):
+        export_dir = _make_export_dir(tmp_path, {"index.html": "hi"})
+        cfg = FakeConfig(export_dir=export_dir)
+        monkeypatch.setattr(remote.time, "sleep", lambda _s: None)
+
+        attempts = {"n": 0}
+
+        class FlakyDeploySession(FakeSession):
+            def post(self, url, **kwargs):
+                if url.endswith("/deployments"):
+                    attempts["n"] += 1
+                    if attempts["n"] == 1:
+                        raise requests.ConnectionError("write operation timed out")
+                    return _ok({"url": "https://my-shop.pages.dev"})
+                return super().post(url, **kwargs)
+
+        session = FlakyDeploySession()
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is True
+        assert attempts["n"] == 2
+
+    def test_deployment_gives_up_after_max_attempts(self, tmp_path, monkeypatch):
+        export_dir = _make_export_dir(tmp_path, {"index.html": "hi"})
+        cfg = FakeConfig(export_dir=export_dir)
+        monkeypatch.setattr(remote.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(remote, "_MAX_UPLOAD_ATTEMPTS", 3)
+
+        attempts = {"n": 0}
+
+        class AlwaysFlakyDeploySession(FakeSession):
+            def post(self, url, **kwargs):
+                if url.endswith("/deployments"):
+                    attempts["n"] += 1
+                    raise requests.ConnectionError("write operation timed out")
+                return super().post(url, **kwargs)
+
+        session = AlwaysFlakyDeploySession()
+        _patch_session(monkeypatch, session)
+
+        assert remote.push_remote(cfg) is False
+        assert attempts["n"] == 3
+
+
+class TestPushDeadline:
+
+    def test_post_with_retry_gives_up_early_once_deadline_is_reached(self, monkeypatch):
+        """
+        Regression guard, added 2026-09-05 alongside _MAX_PUSH_SECONDS: an
+        opus-reviewer pass on the connect-timeout fix found it had no
+        overall bound - a persistently slow-but-not-fast-failing connection
+        could chain (max_attempts x timeout) per large-body call into an
+        unbounded total push time. A call whose deadline has effectively
+        already arrived must stop retrying immediately instead of still
+        burning through every remaining attempt's own backoff delay.
+        """
+        monkeypatch.setattr(remote.time, "monotonic", lambda: 1000.0)
+        monkeypatch.setattr(remote.time, "sleep", lambda _s: None)
+
+        class AlwaysFailingSession:
+            def __init__(self):
+                self.calls = 0
+
+            def post(self, *_a, **_k):
+                self.calls += 1
+                raise requests.ConnectionError("write operation timed out")
+
+        session = AlwaysFailingSession()
+        # deadline (1000.5) is far enough ahead of the frozen "now" (1000.0)
+        # to let the first attempt fire, but the first failure's own 1s
+        # backoff (1000.0 + 1.0 = 1001.0) already lands past it.
+        ok, _jwt = remote._post_with_retry(
+            session, "https://api.cloudflare.com/client/v4/pages/assets/upload",
+            account_id="acct", project="proj", jwt="jwt",
+            json_payload={}, timeout=remote._LARGE_BODY_TIMEOUT_SECONDS,
+            max_attempts=5, what="test call", deadline=1000.5)
+
+        assert ok is False
+        assert session.calls == 1  # gave up early, not all 5 max_attempts
+
+    def test_create_deployment_gives_up_early_once_deadline_is_reached(self, monkeypatch):
+        monkeypatch.setattr(remote.time, "monotonic", lambda: 1000.0)
+        monkeypatch.setattr(remote.time, "sleep", lambda _s: None)
+
+        class AlwaysFailingSession:
+            def __init__(self):
+                self.calls = 0
+
+            def post(self, *_a, **_k):
+                self.calls += 1
+                raise requests.ConnectionError("write operation timed out")
+
+        session = AlwaysFailingSession()
+        url = remote._create_deployment(
+            session, "acct", "proj", {"/index.html": "abc"}, None, deadline=1000.5)
+
+        assert url is None
+        assert session.calls == 1
+
+
 class TestCfHash:
     """
     Regression-locks the hash formula against wrangler's own documented

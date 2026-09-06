@@ -92,13 +92,40 @@ _REQUEST_TIMEOUT_SECONDS = (10, 30)
 # at 300/700/900/1200KB with a 10s connect timeout succeeded at every one of
 # those sizes with a 30s connect timeout, on the same link minutes apart.
 #
-# Raising it is safe here specifically because _force_ipv4_only() above means
-# only IPv4 addresses are ever tried - the multi-address stall that the short
-# 10s bound was originally defending against (see _REQUEST_TIMEOUT_SECONDS'
-# own comment) cannot happen once the AAAA records are never attempted.
-# Small-body calls keep the short bound; only the three calls that send a
-# genuinely large body use this one.
+# Correction (2026-09-05, opus-reviewer pass on this fix): the paragraph
+# below originally claimed raising this was safe because IPv4-only means
+# "only one address is ever tried" - that is FALSE and was never checked
+# before shipping. api.cloudflare.com resolves to *six* IPv4 A records, and
+# util/connection.py's connect loop re-arms the full connect timeout for
+# EACH address tried, so a black-holed path could in principle cost
+# 6 x 180s = 1080s on a cold connect, not 180s. What actually makes a 180s
+# connect-timeout tolerable in practice: by the time any of the three
+# large-body calls below run, _get_upload_token()'s own GET has already
+# completed on this same requests.Session, so a pooled, already-established
+# keep-alive connection is reused - the 180s connect budget is essentially
+# never spent on cold-connecting in the normal case, only the write-timeout
+# half matters. This is a real gap in the reasoning, not just a documentation
+# fix: _MAX_PUSH_SECONDS below is the actual, load-bearing bound that keeps a
+# pathological case (repeated cold connects to a black-holed address) from
+# hanging the caller indefinitely - don't rely on this timeout tuple alone.
+# Small-body calls keep the short bound; only the three (now four, see
+# _create_deployment) calls that send a genuinely large body use this one.
 _LARGE_BODY_TIMEOUT_SECONDS = (180, 180)
+# Wall-clock ceiling for one whole push_remote() call, checked between
+# retry attempts in _post_with_retry/_create_deployment so a run that keeps
+# failing slowly (rather than failing fast) still gives up in bounded time
+# instead of chaining every call's own (attempts x timeout) up to a total
+# that's expensive to reason about and, per the opus-reviewer pass that
+# added this, was silently invalidating main.py's own provisioning-watchdog
+# arithmetic. 25 minutes gives roughly 2x headroom over the slowest real
+# successful full-catalog push measured on store #1 (722.2s, ~12 min, on a
+# connection that had just tested slow once and healthy twice - see
+# CLAUDE.md's "Store #1 watcher outage" section) while still bounding a
+# background watcher's worst-case unresponsiveness to a known number.
+# poslib/provision.py's own push_remote() calls (a tiny placeholder site or
+# the hub registry, never a full catalog) deliberately pass a much smaller
+# override - see push_remote's own max_seconds parameter.
+_MAX_PUSH_SECONDS = 25 * 60
 # Cloudflare's own limits (wrangler's ceiling is 1000/bucket; batching
 # tighter than that leaves headroom without needing to tune it further).
 _MAX_FILES_PER_UPLOAD_BATCH = 500
@@ -124,6 +151,14 @@ _MAX_FILES_PER_UPLOAD_BATCH = 500
 # full ~263MB export would need ~10 hours regardless of batching. This cap
 # is sized for a healthy-but-modest connection, not as a fix for that.
 _MAX_BATCH_BYTES = 8 * 1024 * 1024
+# Deliberately larger than _MAX_BATCH_BYTES above (Cloudflare's own real
+# per-asset ceiling, unrelated to this codebase's batch-size choice) - a
+# single file between 8MB and 25MB is real and allowed, it just forms its
+# own one-file batch that exceeds _MAX_BATCH_BYTES on the wire (~33MB
+# base64). Not live today (the largest real exported file is ~1MB), but if
+# a future single aggregate page ever grows past 8MB, don't be surprised
+# that one batch alone needs more like ~187 KB/s to clear
+# _LARGE_BODY_TIMEOUT_SECONDS - that's this invariant, not a bug.
 _MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 # Root-caused 2026-08-31: store #1's first real full-catalog export (263MB
 # / 12,625 files) failed to push with "write operation timed out" and no
@@ -230,7 +265,8 @@ def _batches(files: list[tuple[str, bytes, str]], max_count: int, max_bytes: int
 
 def _post_with_retry(session: requests.Session, url: str, *, account_id: str, project: str,
                       jwt: str, json_payload, timeout: tuple[int, int],
-                      max_attempts: int, what: str) -> tuple[bool, str]:
+                      max_attempts: int, what: str,
+                      deadline: float | None = None) -> tuple[bool, str]:
     """
     Shared retry/backoff/JWT-refresh wrapper for the two JWT-authed
     Cloudflare endpoints (asset upload, upsert-hashes). Root-caused
@@ -240,12 +276,21 @@ def _post_with_retry(session: requests.Session, url: str, *, account_id: str, pr
     the JWT's own lifetime) is refreshed and retried rather than treated as
     a hard failure.
 
+    deadline (time.monotonic()-scale, optional): a wall-clock ceiling for
+    the whole call, checked before each attempt and before each sleep -
+    added 2026-09-05 alongside _MAX_PUSH_SECONDS so a run of slow-but-not-
+    fast-failing attempts can't chain (max_attempts x timeout) into an
+    unbounded total; see push_remote's own deadline computation.
+
     Returns (success, current_jwt) - the caller must keep using the
     returned JWT for any further JWT-authed call, since a refresh may have
     replaced it.
     """
     headers = {"Authorization": f"Bearer {jwt}"}
     for attempt in range(1, max_attempts + 1):
+        if deadline is not None and time.monotonic() >= deadline:
+            log.warning("%s: giving up - push deadline exceeded.", what)
+            return False, jwt
         try:
             resp = session.post(url, headers=headers, json=json_payload, timeout=timeout)
             if resp.status_code in (401, 403):
@@ -265,6 +310,9 @@ def _post_with_retry(session: requests.Session, url: str, *, account_id: str, pr
         except requests.RequestException as exc:
             if attempt < max_attempts:
                 delay = _RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                if deadline is not None and time.monotonic() + delay >= deadline:
+                    log.warning("%s: giving up - push deadline exceeded.", what)
+                    return False, jwt
                 log.warning("%s: attempt %d/%d failed (%s) - retrying in %.0fs.",
                             what, attempt, max_attempts, exc, delay)
                 time.sleep(delay)
@@ -274,7 +322,8 @@ def _post_with_retry(session: requests.Session, url: str, *, account_id: str, pr
 
 
 def _check_missing_hashes(session: requests.Session, jwt: str,
-                           hashes: list[str]) -> list[str] | None:
+                           hashes: list[str],
+                           deadline: float | None = None) -> list[str] | None:
     """
     Which of these asset hashes Cloudflare does NOT already have - so a
     retried push, or a routine push of a mostly-unchanged large export,
@@ -291,6 +340,9 @@ def _check_missing_hashes(session: requests.Session, jwt: str,
     headers = {"Authorization": f"Bearer {jwt}"}
     last_exc: Exception | None = None
     for attempt in range(1, _MAX_CHECK_MISSING_ATTEMPTS + 1):
+        if deadline is not None and time.monotonic() >= deadline:
+            log.warning("check-missing: giving up - push deadline exceeded, uploading everything.")
+            return None
         try:
             resp = session.post(f"{_API_BASE}/pages/assets/check-missing", headers=headers,
                                 json={"hashes": hashes}, timeout=_LARGE_BODY_TIMEOUT_SECONDS)
@@ -304,14 +356,20 @@ def _check_missing_hashes(session: requests.Session, jwt: str,
         except requests.RequestException as exc:
             last_exc = exc
             if attempt < _MAX_CHECK_MISSING_ATTEMPTS:
-                time.sleep(_RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+                delay = _RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                if deadline is not None and time.monotonic() + delay >= deadline:
+                    log.warning("check-missing: giving up - push deadline exceeded, "
+                                "uploading everything.")
+                    return None
+                time.sleep(delay)
     log.warning("check-missing failed after %d attempts (%s) - uploading everything.",
                 _MAX_CHECK_MISSING_ATTEMPTS, last_exc)
     return None
 
 
 def _upload_assets(session: requests.Session, account_id: str, project: str, jwt: str,
-                    files: list[tuple[str, bytes, str]]) -> tuple[bool, str]:
+                    files: list[tuple[str, bytes, str]],
+                    deadline: float | None = None) -> tuple[bool, str]:
     """
     Uses the short-lived JWT from the upload-token step, not the API token -
     and, confirmed from Cloudflare's own docs, no /accounts/{id}/ prefix
@@ -337,25 +395,29 @@ def _upload_assets(session: requests.Session, account_id: str, project: str, jwt
             session, f"{_API_BASE}/pages/assets/upload",
             account_id=account_id, project=project, jwt=jwt,
             json_payload=payload, timeout=_LARGE_BODY_TIMEOUT_SECONDS,
-            max_attempts=_MAX_UPLOAD_ATTEMPTS, what="asset upload batch")
+            max_attempts=_MAX_UPLOAD_ATTEMPTS, what="asset upload batch",
+            deadline=deadline)
         if not ok:
             return False, jwt
     return True, jwt
 
 
 def _upsert_hashes(session: requests.Session, account_id: str, project: str, jwt: str,
-                    hashes: list[str]) -> tuple[bool, str]:
+                    hashes: list[str],
+                    deadline: float | None = None) -> tuple[bool, str]:
     """Same JWT auth and no-account-prefix URL shape as the upload step."""
     return _post_with_retry(
         session, f"{_API_BASE}/pages/assets/upsert-hashes",
         account_id=account_id, project=project, jwt=jwt,
         json_payload={"hashes": hashes}, timeout=_LARGE_BODY_TIMEOUT_SECONDS,
-        max_attempts=_MAX_UPLOAD_ATTEMPTS, what="upsert-hashes")
+        max_attempts=_MAX_UPLOAD_ATTEMPTS, what="upsert-hashes",
+        deadline=deadline)
 
 
 def _create_deployment(session: requests.Session, account_id: str, project: str,
                         manifest: dict[str, str],
-                        redirects_content: str | None) -> str | None:
+                        redirects_content: str | None,
+                        deadline: float | None = None) -> str | None:
     """
     Step 4 of 4. Back to the normal API-token auth and full account path.
 
@@ -366,6 +428,19 @@ def _create_deployment(session: requests.Session, account_id: str, project: str,
     straight out of the normal uploaded asset set, but "_redirects" is only
     honored when it arrives this way - confirmed against a disposable
     throwaway project (see _IGNORED_FILE_NAMES's comment).
+
+    Root-caused 2026-09-05 (opus-reviewer pass on the connect-timeout fix
+    in this same file): this call sends the full asset manifest as a
+    single JSON-string multipart field - for a real ~13,000-file export
+    that's ~750-800KB, a single-chunk write exactly like _upload_assets'
+    own payload - but it used to share _REQUEST_TIMEOUT_SECONDS' 10-second
+    connect/write bound with *zero retry at all*, making it the single
+    most expensive point in the whole push to fail at: a fully successful,
+    otherwise-complete upload thrown away for one transient blip on the
+    very last step. Now uses the same large-body timeout, retry/backoff,
+    and deadline as every other large-body call - no JWT to refresh here
+    (this call uses the session's own bearer token, not a per-call JWT),
+    so the retry loop is simpler than _post_with_retry's.
     """
     url = f"{_API_BASE}/accounts/{account_id}/pages/projects/{project}/deployments"
     # multipart/form-data with a JSON-string manifest field, per Cloudflare's
@@ -373,18 +448,38 @@ def _create_deployment(session: requests.Session, account_id: str, project: str,
     files: dict[str, tuple] = {"manifest": (None, json.dumps(manifest))}
     if redirects_content is not None:
         files["_redirects"] = ("_redirects", redirects_content, "text/plain")
-    resp = session.post(url, files=files, timeout=_REQUEST_TIMEOUT_SECONDS)
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("success"):
-        log.warning("Cloudflare rejected the deployment: %s", data.get("errors"))
-        return None
-    return data["result"].get("url")
+
+    for attempt in range(1, _MAX_UPLOAD_ATTEMPTS + 1):
+        if deadline is not None and time.monotonic() >= deadline:
+            log.warning("create-deployment: giving up - push deadline exceeded.")
+            return None
+        try:
+            resp = session.post(url, files=files, timeout=_LARGE_BODY_TIMEOUT_SECONDS)
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("success"):
+                log.warning("Cloudflare rejected the deployment: %s", data.get("errors"))
+                return None
+            return data["result"].get("url")
+        except requests.RequestException as exc:
+            if attempt < _MAX_UPLOAD_ATTEMPTS:
+                delay = _RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                if deadline is not None and time.monotonic() + delay >= deadline:
+                    log.warning("create-deployment: giving up - push deadline exceeded.")
+                    return None
+                log.warning("create-deployment: attempt %d/%d failed (%s) - retrying in %.0fs.",
+                            attempt, _MAX_UPLOAD_ATTEMPTS, exc, delay)
+                time.sleep(delay)
+            else:
+                log.warning("create-deployment: giving up after %d attempts (%s).",
+                            _MAX_UPLOAD_ATTEMPTS, exc)
+    return None
 
 
 def push_remote(cfg: Config, *, project: str | None = None,
                  export_dir: Path | None = None,
-                 api_token: str | None = None) -> bool:
+                 api_token: str | None = None,
+                 max_seconds: float = _MAX_PUSH_SECONDS) -> bool:
     """
     Deploy a directory to Cloudflare Pages. Returns True on success, False
     on any problem at all - never raises.
@@ -403,6 +498,13 @@ def push_remote(cfg: Config, *, project: str | None = None,
     powerful one-time provisioning token already in hand, rather than
     requiring a store's own persisted watcher token to be minted first.
     account_id still always comes from cfg (same account either way).
+
+    max_seconds bounds the whole call's wall-clock time (see
+    _MAX_PUSH_SECONDS's own comment for why this exists and how the
+    default was chosen) - poslib/provision.py's own calls (a tiny
+    placeholder site or the hub registry, never a full catalog) pass a
+    much smaller override so a slow connection during provisioning can't
+    single-handedly blow main.py's own provisioning watchdog budget.
     """
     if project is None:
         project = str(cfg.get("remote.cloudflare_project_name", "")).strip()
@@ -456,6 +558,12 @@ def push_remote(cfg: Config, *, project: str | None = None,
         session = requests.Session()
         session.headers["Authorization"] = f"Bearer {api_token}"
 
+        # A shared wall-clock deadline for every large-body call below (see
+        # _MAX_PUSH_SECONDS). Started here, not earlier - the file-walking/
+        # hashing above is local disk work, not network time, and shouldn't
+        # eat into the network budget.
+        deadline = time.monotonic() + max_seconds
+
         # Per-step timing, not just a final success/failure line - this is
         # the one place a stuck installer provisioning run (which retries
         # this whole function up to 3x) was silent for the longest, see the
@@ -468,7 +576,7 @@ def push_remote(cfg: Config, *, project: str | None = None,
 
         all_hashes = [key for key, _data, _ctype in files]
         step_start = time.monotonic()
-        missing = _check_missing_hashes(session, jwt, all_hashes)
+        missing = _check_missing_hashes(session, jwt, all_hashes, deadline=deadline)
         log.info("push_remote(%s): checked %d hash(es) in %.1fs",
                   project, len(all_hashes), time.monotonic() - step_start)
         if missing is None:
@@ -481,7 +589,8 @@ def push_remote(cfg: Config, *, project: str | None = None,
 
         step_start = time.monotonic()
         if files_to_upload:
-            uploaded, jwt = _upload_assets(session, account_id, project, jwt, files_to_upload)
+            uploaded, jwt = _upload_assets(session, account_id, project, jwt, files_to_upload,
+                                            deadline=deadline)
         else:
             uploaded = True
         log.info("push_remote(%s): uploaded %d asset(s) in %.1fs",
@@ -490,13 +599,15 @@ def push_remote(cfg: Config, *, project: str | None = None,
             return False
 
         step_start = time.monotonic()
-        upserted, jwt = _upsert_hashes(session, account_id, project, jwt, all_hashes)
+        upserted, jwt = _upsert_hashes(session, account_id, project, jwt, all_hashes,
+                                        deadline=deadline)
         log.info("push_remote(%s): upserted hashes in %.1fs", project, time.monotonic() - step_start)
         if not upserted:
             return False
 
         step_start = time.monotonic()
-        url = _create_deployment(session, account_id, project, manifest, redirects_content)
+        url = _create_deployment(session, account_id, project, manifest, redirects_content,
+                                  deadline=deadline)
         log.info("push_remote(%s): created deployment in %.1fs", project, time.monotonic() - step_start)
         if url is None:
             return False

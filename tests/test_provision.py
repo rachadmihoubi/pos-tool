@@ -817,7 +817,7 @@ def test_provision_store_happy_path_full_sequence(tmp_path, monkeypatch):
 
     push_calls = []
 
-    def fake_push_remote(fresh_cfg, *, project=None, export_dir=None):
+    def fake_push_remote(fresh_cfg, *, project=None, export_dir=None, max_seconds=None):
         push_calls.append((project, export_dir))
         return True
 
@@ -1316,7 +1316,7 @@ def test_register_store_with_hub_appends_new_store_and_pushes(tmp_path, monkeypa
 
     push_calls = []
 
-    def fake_push_remote(cfg_arg, *, project=None, export_dir=None, api_token=None):
+    def fake_push_remote(cfg_arg, *, project=None, export_dir=None, api_token=None, max_seconds=None):
         push_calls.append((project, api_token))
         data = json.loads((export_dir / provision.HUB_REGISTRY_FILENAME).read_text(encoding="utf-8"))
         assert data["stores"][-1] == {
@@ -1380,7 +1380,7 @@ def test_register_store_with_hub_replaces_existing_entry_for_same_domain(tmp_pat
 
     captured = {}
 
-    def fake_push_remote(cfg_arg, *, project=None, export_dir=None, api_token=None):
+    def fake_push_remote(cfg_arg, *, project=None, export_dir=None, api_token=None, max_seconds=None):
         captured["stores"] = json.loads(
             (export_dir / provision.HUB_REGISTRY_FILENAME).read_text(encoding="utf-8")
         )["stores"]
@@ -1604,7 +1604,7 @@ def test_provision_store_registers_with_hub_on_success(tmp_path, monkeypatch):
 
     push_calls = []
 
-    def fake_push_remote(cfg_arg, *, project=None, export_dir=None, api_token=None):
+    def fake_push_remote(cfg_arg, *, project=None, export_dir=None, api_token=None, max_seconds=None):
         push_calls.append(project)
         if project == provision.HUB_PROJECT_SLUG:
             data = json.loads(
