@@ -1894,6 +1894,61 @@ the owner could pick this back up on another PC):
   implemented** - the owner asked to commit/push and continue elsewhere
   before answering whether to proceed with it.
 
+### Bug #1's fix, reviewed and shipped as v1.0.10 (2026-09-05, same day)
+
+Per the new hard rule above ("Every real bug gets an opus-reviewer
+root-cause pass and ships as a new setup.exe release"), Bug #1's fix
+(`8e2b170`) was independently reviewed before being considered closed.
+**Root cause CONFIRMED** against the actually-installed urllib3 2.7.0
+source (read directly, not recalled) - the connect half of a
+`(connect, read)` tuple really does govern the whole body-write, and
+`connection.py`'s `sock.settimeout(self.timeout)` re-applies it on every
+keep-alive reuse. **But the fix itself was INCOMPLETE**, missing a real
+blocker:
+
+- `_create_deployment` (the final step of every push - sends the full
+  asset manifest, ~750-800KB for a real ~13,000-file export, as a single
+  multipart write) was still on the old short timeout with **zero
+  retry at all** - the single most expensive place in the whole push to
+  fail, since it throws away an otherwise fully successful upload. Fixed:
+  now uses the large-body timeout with its own retry/backoff.
+- The IPv4-forcing safety comment was factually wrong - api.cloudflare.com
+  resolves to **six** IPv4 A records, not one, and each one re-arms the
+  full connect timeout in urllib3's connect loop. Corrected, and replaced
+  with a real bound instead of relying on that reasoning: `_MAX_PUSH_SECONDS`,
+  a wall-clock deadline (25 minutes, ~2x the slowest real successful push
+  measured) threaded through every large-body call in `poslib/remote.py`,
+  so a persistently slow connection can't chain `attempts x timeout` per
+  call into an unbounded total - this also bounds the watcher's own
+  worst-case unresponsiveness, which the review flagged as having grown
+  ~16x under the original fix alone.
+- `poslib/provision.py`'s own `push_remote` calls (a tiny placeholder site
+  or the hub registry, never a full catalog) now pass a much smaller
+  `_PROVISION_PUSH_MAX_SECONDS` (150s) override, and `main.py`'s
+  provisioning-watchdog comment (`_PROVISIONING_TIMEOUT_SECONDS`) was
+  corrected - the review found the original fix had silently invalidated
+  that comment's arithmetic without anyone noticing.
+- A real regression test now asserts all four large-body call sites use
+  the large-body timeout (previously only implied, never actually
+  checked - reverting any one of them back to the short timeout would
+  have left every existing test green).
+
+Fixed in `2391066`. `tests/test_remote.py` 46/46, `tests/test_provision.py`
++ `tests/test_main.py` 83/83, full fast suite 410/411 (the same
+pre-existing, unrelated `dead_stock_value` drift).
+
+**Shipped as `v1.0.10`** on GitHub Releases (`Setup.exe`, built from this
+fix, `VERSION`/`packaging/setup.iss`'s `AppVersion` both bumped together) -
+confirmed **v1.0.9 had already been published**, so every real store
+install that auto-updates was still running the broken 10-second write
+window until this release. `gh` had no stored credentials on this
+machine; the owner ran `gh auth login` (browser device-code flow) to
+unblock the actual publish. Not yet installed/verified on any real store -
+per this file's own standing "don't declare a live deploy fixed until
+confirmed against the real thing" discipline, the next real store update
+(automatic, if `update.enabled: true`, or a manual reinstall) is what
+actually confirms this.
+
 ## What's left (optional, not blocking)
 
 - **DONE 2026-08-31 — adding a newly provisioned store to the cross-store
