@@ -22,6 +22,46 @@ copied to a temp folder before parsing (`poslib/etl.py:copy_database_readonly`).
 Every change must preserve this. If you're ever tempted to open the source path
 directly for anything other than a read-only copy, stop.
 
+## Every real bug gets an opus-reviewer root-cause pass and ships as a new setup.exe release
+
+**Hard rule, added 2026-09-05 after the store #1 watcher-outage/timeout-bug
+session.** Whenever something in the tool actually breaks for a real
+store (not a test failure, not a hypothetical - a real bug hit in
+practice, the way the connect-timeout truncation bug and the
+silently-dying watcher both were), two things are now mandatory before
+considering it closed, not optional extras:
+
+1. **Dispatch the opus-reviewer subagent to review the root cause and the
+   proposed fix** - even when the root cause already seems obvious or has
+   already been diagnosed by hand (e.g. via `systematic-debugging`, a
+   live diagnostic script, or another subagent). The review's job is to
+   check that the diagnosis is actually correct (not just plausible) and
+   that the fix addresses the real cause rather than papering over a
+   symptom - the same bar this file already holds financial-logic and
+   installer/Access-config changes to, now generalized to every real bug.
+2. **The fix must ship as a new `Setup.exe` published to GitHub
+   Releases** - a commit sitting on `main` (or any branch) is not enough
+   on its own. A store PC only ever gets a fix via
+   `poslib/updater.py`'s auto-update mechanism pulling a new release (see
+   the Component 3 row in the checklist below), so a real bug isn't
+   actually fixed for a real store until: `VERSION` is bumped (bump it
+   *before* running PyInstaller - see the `v1.0.5` build-order gotcha
+   later in this file), a new build is produced from
+   `packaging/pos-tool.spec`/`packaging/setup.iss`, and that installer is
+   published as a GitHub Release. Skipping this step leaves every
+   already-installed store exactly as broken as before, no matter how
+   correct the code change is.
+
+Why this is a hard rule and not a judgment call: this session's own
+timeout-bug fix is the exact case this rule exists to prevent from
+repeating - it was correctly root-caused and correctly fixed in
+`poslib/remote.py`, but as of that fix landing on `main` it had not yet
+been reviewed by an opus-reviewer pass or cut into a release, so store
+#1's real watcher would still have shipped and run the old, broken
+timeout value indefinitely even after the "fix" was "done." Treat a bug
+as open - regardless of what CLAUDE.md or an SDD ledger says elsewhere -
+until both of these have actually happened, not just the code change.
+
 ## Machine identity — check this before assuming which PC you're on
 
 This repo is git-synced (via the `SessionStart` hook's `git pull --ff-only`)
