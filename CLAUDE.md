@@ -158,6 +158,19 @@ goods is always computed from `ReceiptEntry` lines, never the header.
    R.Lynx's own demo template) — the feature apparently doesn't persist in
    this edition, or this database predates it. Not built. Revisit only if a
    fresh copy from the actual till PC someday shows otherwise.
+   **Correction, 2026-09-07**: "doesn't correspond to any table/column at
+   all" was too strong. The current `BlankDB` template (R.Lynx 10.3.0.0)
+   has `Item.PeremptionWarningDays` (int) and `Item.LastStockTaking`
+   (datetime) — a per-item expiry-warning threshold, not a dated
+   per-batch/per-unit expiry record. So there's a real, if partial,
+   schema hook for the "Dates péremptions" UI (probably "warn me N days
+   before this item's stock is due to expire"), it's just not the full
+   per-batch expiry-date tracking the UI section name might suggest.
+   Still nothing to build against for real dated-batch expiry — but worth
+   checking `PeremptionWarningDays` for real (non-zero/non-null) values in
+   each store's live `.dblx` next time this is revisited, since a
+   populated field would mean the feature actually is in use, just not
+   observed on this data.
 7. **`Item.Picture` (OLE) is stripped by the ETL cache** (`SKIPPED_COLUMN_TYPES`
    in `etl.py`) but the low-level reader can still read it directly —
    `poslib/photos.py` opens a fresh copy for this on demand. Empirically, 0 of
