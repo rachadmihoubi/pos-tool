@@ -386,6 +386,27 @@ class TestLaunchSilentInstall:
         assert "/NORESTART" in seen["cmd"]
         assert "/SUPPRESSMSGBOXES" in seen["cmd"]
 
+    def test_passes_a_log_path_so_a_hang_leaves_evidence(self, monkeypatch, tmp_path):
+        """
+        This whole bug chain (2026-09-07) was hard to diagnose specifically
+        because a silent Inno Setup run leaves no evidence when something
+        goes wrong. /LOG gives Inno's own log (admin-install-mode, every
+        [Run] entry, every suppressed message box) for next time.
+        """
+        installer = tmp_path / "Setup.exe"
+        installer.write_bytes(b"fake")
+        seen = {}
+
+        class FakePopen:
+            def __init__(self, cmd, **kwargs):
+                seen["cmd"] = cmd
+        monkeypatch.setattr(updater.subprocess, "Popen", FakePopen)
+
+        assert updater.launch_silent_install(installer) is True
+        log_args = [a for a in seen["cmd"] if a.startswith("/LOG=")]
+        assert len(log_args) == 1
+        assert log_args[0] == f"/LOG={updater.user_data_dir() / 'logs' / 'setup-update.log'}"
+
     def test_returns_false_when_spawning_fails(self, monkeypatch, tmp_path):
         installer = tmp_path / "Setup.exe"
         installer.write_bytes(b"fake")

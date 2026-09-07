@@ -309,9 +309,19 @@ def launch_silent_install(installer_path: Path) -> bool:
     spawning itself failed. Never raises.
     """
     _close_other_running_instances()
+    # /LOG: this whole investigation (both the CloseApplications hang and
+    # the SYSTEM-context post-install bugs it uncovered, 2026-09-07) was
+    # hard to diagnose specifically because a silent Inno Setup run leaves
+    # no evidence of its own when something goes wrong - Inno's own /LOG
+    # records administrative-install-mode, every [Run] entry actually
+    # executed, and every message box that would have shown (see
+    # SuppressibleMsgBox's own comments in packaging/setup.iss), which is
+    # exactly the evidence that was missing this session.
+    log_path = user_data_dir() / "logs" / "setup-update.log"
     try:
         subprocess.Popen(
-            [str(installer_path), "/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES"],
+            [str(installer_path), "/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES",
+             f"/LOG={log_path}"],
             close_fds=True,
             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
         )

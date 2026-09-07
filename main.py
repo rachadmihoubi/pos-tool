@@ -31,6 +31,7 @@ of separate exes:
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -91,7 +92,20 @@ def _apply_update(argv: list[str]) -> int:
         return 1
 
     setup_logging(cfg)
-    check_and_apply_update(cfg)
+    launched = check_and_apply_update(cfg)
+    if launched:
+        # This process is itself an instance of {#MyAppExeName}, and the
+        # installer we just spawned needs every OTHER instance closed
+        # before it starts copying files (see poslib/updater.py's
+        # _close_other_running_instances, which deliberately excludes
+        # this process's own PID for exactly that reason - it's expected
+        # to exit on its own "within moments"). A normal frozen-build
+        # interpreter teardown still takes some non-zero time; os._exit
+        # skips it entirely, closing that window as tightly as possible
+        # rather than trusting "moments" - added 2026-09-07 alongside the
+        # SYSTEM-context installer fixes found the same session.
+        logging.shutdown()
+        os._exit(0)
     return 0
 
 

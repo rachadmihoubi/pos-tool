@@ -41,6 +41,16 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Open Shop Analysis now"; Flags:
 ; update before that session, since every real attempt had hung earlier
 ; in the flow (see poslib/updater.py's _close_other_running_instances).
 Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Watcher"" /tr ""\""{app}\{#MyAppExeName}\"" --watcher"" /sc onlogon /rl limited /delay 0000:30"; Flags: runhidden skipifsilent
+; /end first: the task's own MultipleInstancesPolicy is IgnoreNew (checked
+; live on a real install, 2026-09-05), which means /run silently does
+; nothing if Task Scheduler still considers the previous instance
+; "Running" - plausible here specifically because the OLD watcher was
+; just force-killed moments earlier by poslib/updater.py's
+; _close_other_running_instances, and Task Scheduler's own bookkeeping
+; might not have caught up yet. Harmless if the task is already stopped
+; (or doesn't exist, on a fresh install before it's ever run) - exit code
+; is ignored the same as every other passive entry in this section.
+Filename: "schtasks.exe"; Parameters: "/end /tn ""Shop Analysis - Watcher"""; Flags: runhidden
 ; Runs the ALREADY-REGISTERED task rather than Exec'ing the exe directly -
 ; deliberately, not a style choice. A direct Exec runs at the CALLING
 ; process's own security context; during a silent auto-update that caller
@@ -490,10 +500,22 @@ begin
       SaveStringToFile(DataDir + '\updater_task_log.txt',
         'Could not create the Updater task (exit code ' + IntToStr(ResultCode) + '):' + #13#10#13#10 +
         Message, False);
-      MsgBox('Could not set up the background auto-update task:' + #13#10#13#10 + Message + #13#10#13#10 +
+      // SuppressibleMsgBox, not MsgBox: a plain MsgBox() ignores
+      // /SUPPRESSMSGBOXES entirely (it's only honored by the Suppressible
+      // variant - confirmed 2026-09-05, opus-reviewer pass, against Inno
+      // Setup's own source, Setup.ScriptFunc.pas). During a silent
+      // auto-update this whole procedure runs as SYSTEM, where
+      // IsAdminInstallMode() is always True, so an un-suppressed MsgBox
+      // here would raise a modal dialog on Session 0's own invisible
+      // desktop - nobody can ever see or click it, and Setup.exe blocks
+      // forever holding {app} open, silently reproducing the exact class
+      // of invisible hang this whole investigation started from. The
+      // detailed failure is still on disk (updater_task_log.txt, just
+      // written above) for whoever eventually looks.
+      SuppressibleMsgBox('Could not set up the background auto-update task:' + #13#10#13#10 + Message + #13#10#13#10 +
              'The app itself is fully installed and works normally - only ' +
              'silent auto-updates will not run until this is fixed. Details were saved to ' +
-             'updater_task_log.txt in the app data folder.', mbError, MB_OK);
+             'updater_task_log.txt in the app data folder.', mbError, MB_OK, IDOK);
     end;
   end
   else
@@ -501,9 +523,9 @@ begin
     ForceDirectories(DataDir);
     SaveStringToFile(DataDir + '\updater_task_log.txt',
       'Could not launch schtasks.exe at all.', False);
-    MsgBox('Could not launch schtasks.exe to set up the background auto-update task. ' +
+    SuppressibleMsgBox('Could not launch schtasks.exe to set up the background auto-update task. ' +
            'The app itself is fully installed and works normally - only silent ' +
-           'auto-updates will not run until this is fixed.', mbError, MB_OK);
+           'auto-updates will not run until this is fixed.', mbError, MB_OK, IDOK);
   end;
 end;
 
@@ -617,8 +639,23 @@ begin
            ewNoWait, ResultCode);
     end;
 
-    if IsAdminInstallMode() then
-      MsgBox(
+    // not WizardSilent(): this message ("log off, log back in as that
+    // person") is only meaningful for a genuine first-time interactive
+    // install - a silent run is always an auto-update (see the [Run]
+    // section's own skipifsilent comment), where it's both nonsensical
+    // and, per SuppressibleMsgBox below, would otherwise still need
+    // guarding against the same invisible-Session-0-hang risk.
+    // SuppressibleMsgBox, not MsgBox: confirmed 2026-09-05 (opus-reviewer
+    // pass, against Inno Setup's own source) that a plain MsgBox() is
+    // NOT suppressed by /SUPPRESSMSGBOXES at all - only the Suppressible
+    // variant honors it. IsAdminInstallMode() is always True when this
+    // whole installer runs as SYSTEM (an auto-update), so an unguarded
+    // MsgBox here would have raised a modal dialog on Session 0's own
+    // invisible desktop - nobody can ever see or click it, and Setup.exe
+    // would block forever holding {app} open, reproducing the exact
+    // class of invisible hang this whole investigation started from.
+    if IsAdminInstallMode() and (not WizardSilent()) then
+      SuppressibleMsgBox(
         'Shop Analysis saves its settings under the current Windows user''s ' +
         'own account, and the background watcher that keeps your numbers ' +
         'current only starts automatically when that same person logs in.' + #13#10#13#10 +
@@ -626,7 +663,7 @@ begin
         'account you just installed as), please log off, log back in as ' +
         'that person, and run Setup.exe again. It is safe to run more than ' +
         'once.',
-        mbInformation, MB_OK);
+        mbInformation, MB_OK, IDOK);
   end;
 end;
 
