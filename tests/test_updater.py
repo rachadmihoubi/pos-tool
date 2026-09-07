@@ -355,6 +355,19 @@ class FakeResponse2:
 
 
 class TestLaunchSilentInstall:
+    """
+    _close_other_running_instances is stubbed out (autouse) for every test
+    in this class except the dedicated integration test below - added
+    2026-09-05 (opus-reviewer pass, finding R4) so a future test added
+    here that forgets to think about it can never fire a REAL taskkill
+    against this machine's own running ShopAnalysis.exe. tests/CLAUDE.md's
+    own suite is run on real till PCs - a real taskkill from a test run
+    would kill the production watcher.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _stub_close_other_instances(self, monkeypatch):
+        monkeypatch.setattr(updater, "_close_other_running_instances", lambda: None)
 
     def test_launches_installer_with_silent_flags(self, monkeypatch, tmp_path):
         installer = tmp_path / "Setup.exe"
@@ -366,7 +379,6 @@ class TestLaunchSilentInstall:
                 seen["cmd"] = cmd
                 seen["kwargs"] = kwargs
         monkeypatch.setattr(updater.subprocess, "Popen", FakePopen)
-        monkeypatch.setattr(updater.subprocess, "run", lambda *a, **k: None)
 
         assert updater.launch_silent_install(installer) is True
         assert seen["cmd"][0] == str(installer)
@@ -377,7 +389,6 @@ class TestLaunchSilentInstall:
     def test_returns_false_when_spawning_fails(self, monkeypatch, tmp_path):
         installer = tmp_path / "Setup.exe"
         installer.write_bytes(b"fake")
-        monkeypatch.setattr(updater.subprocess, "run", lambda *a, **k: None)
 
         def _raise(*a, **k):
             raise OSError("cannot launch")
@@ -385,7 +396,16 @@ class TestLaunchSilentInstall:
 
         assert updater.launch_silent_install(installer) is False
 
-    def test_closes_other_instances_before_launching(self, monkeypatch, tmp_path):
+
+class TestLaunchSilentInstallClosesOtherInstancesFirst:
+    """
+    Deliberately its own class, without TestLaunchSilentInstall's autouse
+    stub - this is the one place that needs the real
+    _close_other_running_instances behavior exercised, with only its
+    subprocess calls mocked.
+    """
+
+    def test_closes_other_instances_before_launching_the_installer(self, monkeypatch, tmp_path):
         """
         Regression test for a real bug found live on store #1's own till PC
         (2026-09-07): the installer's own CloseApplications=force hangs
@@ -393,20 +413,35 @@ class TestLaunchSilentInstall:
         close a running ShopAnalysis.exe - confirmed by direct A/B test
         (the same installer completed in under 2 seconds with nothing to
         close, but hung for nearly an hour when the watcher was running).
-        launch_silent_install must close every OTHER instance itself first,
-        so Setup.exe's own CloseApplications never has anything to
-        negotiate.
+        launch_silent_install must close every OTHER instance itself
+        first, so Setup.exe's own CloseApplications never has anything to
+        negotiate - and it must do so BEFORE spawning the installer, not
+        after (checked explicitly below via a shared order list - added
+        2026-09-05, opus-reviewer finding R3, since the original version
+        of this test only checked that a taskkill call happened at all,
+        which would stay green even if the ordering were reversed and the
+        fix made useless).
         """
         installer = tmp_path / "Setup.exe"
         installer.write_bytes(b"fake")
-        monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: None)
-        calls = []
-        monkeypatch.setattr(updater.subprocess, "run",
-                            lambda cmd, **k: calls.append(cmd))
+        order = []
+        run_calls = []
+
+        def fake_run(cmd, **k):
+            order.append("taskkill")
+            run_calls.append(cmd)
+            return updater.subprocess.CompletedProcess(cmd, 0, stdout="SUCCESS", stderr="")
+
+        def fake_popen(cmd, **k):
+            order.append("popen")
+
+        monkeypatch.setattr(updater.subprocess, "run", fake_run)
+        monkeypatch.setattr(updater.subprocess, "Popen", fake_popen)
 
         assert updater.launch_silent_install(installer) is True
-        assert len(calls) == 1
-        cmd = calls[0]
+        assert order == ["taskkill", "popen"]
+        assert len(run_calls) == 1
+        cmd = run_calls[0]
         assert cmd[:3] == ["taskkill", "/F", "/IM"]
         assert "ShopAnalysis.exe" in cmd
         assert "/FI" in cmd

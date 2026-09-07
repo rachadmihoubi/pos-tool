@@ -284,10 +284,18 @@ def _close_other_running_instances() -> None:
     """
     current_pid = os.getpid()
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["taskkill", "/F", "/IM", "ShopAnalysis.exe", "/FI", f"PID ne {current_pid}"],
             capture_output=True, text=True, timeout=30,
         )
+        # taskkill returns 0 even when the filter matches nothing (e.g.
+        # only this process's own excluded PID was running) - logged
+        # regardless so a genuine failure (access denied, taskkill.exe
+        # missing under this account) is visible instead of reproducing
+        # the exact invisible-hang problem this function exists to avoid.
+        log.info("Closed other ShopAnalysis.exe instance(s) before update "
+                  "(exit %d): %s", result.returncode,
+                  (result.stdout or result.stderr or "").strip() or "(no output)")
     except (OSError, subprocess.SubprocessError) as exc:
         log.warning("Could not close other running instances before update: %s", exc)
 
@@ -315,12 +323,14 @@ def launch_silent_install(installer_path: Path) -> bool:
 
 def check_and_apply_update(cfg: Config) -> bool:
     """
-    The one entry point watcher.py calls. Checks for a newer release and,
-    if everything checks out (found, downloaded, checksum verified,
-    installer launched), returns True - the caller must stop and exit
-    immediately so the installer can replace the running files. Returns
-    False if there's no update or any step failed; the next attempt is the
-    next watcher startup. Never raises.
+    The one entry point main.py's --apply-update dispatch calls (not
+    watcher.py - the watcher itself never checks for updates, see this
+    module's own docstring). Checks for a newer release and, if everything
+    checks out (found, downloaded, checksum verified, installer launched),
+    returns True - the caller must stop and exit immediately so the
+    installer can replace the running files. Returns False if there's no
+    update or any step failed; the next attempt is the next Updater task
+    run. Never raises.
     """
     try:
         release = check_for_update(cfg)

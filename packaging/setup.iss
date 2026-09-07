@@ -30,8 +30,32 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Open Shop Analysis now"; Flags: nowait postinstall skipifsilent
-Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Watcher"" /tr ""\""{app}\{#MyAppExeName}\"" --watcher"" /sc onlogon /rl limited /delay 0000:30"; Flags: runhidden
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--watcher"; Flags: nowait runhidden
+; skipifsilent: a silent run is always a silent AUTO-UPDATE (a fresh
+; interactive install is never /VERYSILENT), and the task already exists,
+; correctly, from the original interactive install - recreating it here
+; would run under whatever account launched THIS Setup.exe, which for an
+; auto-update is SYSTEM (see CreateUpdaterTask's own comment), silently
+; rewriting a correctly-configured "run as the real user" task into one
+; that runs as SYSTEM instead. Root-caused 2026-09-07 (opus-reviewer pass,
+; finding B1a) - this line had never actually run during a real silent
+; update before that session, since every real attempt had hung earlier
+; in the flow (see poslib/updater.py's _close_other_running_instances).
+Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Watcher"" /tr ""\""{app}\{#MyAppExeName}\"" --watcher"" /sc onlogon /rl limited /delay 0000:30"; Flags: runhidden skipifsilent
+; Runs the ALREADY-REGISTERED task rather than Exec'ing the exe directly -
+; deliberately, not a style choice. A direct Exec runs at the CALLING
+; process's own security context; during a silent auto-update that caller
+; is this same Setup.exe running as SYSTEM (via the Updater task), so a
+; direct launch would start the watcher itself running as SYSTEM instead
+; of the real installing user - the exact same class of mistake the
+; Cloudflare-provisioning code further down this file was already
+; corrected for (see its own "must relaunch via schtasks /run, not Exec"
+; comment) but this older line was missed until the same opus-reviewer
+; pass found it (finding B1a, 2026-09-07). schtasks /run always uses the
+; task's own configured principal (the real user, /rl limited) regardless
+; of who asked it to run - correct in both the interactive-install and
+; silent-auto-update cases, so this one line covers both without a
+; skipifsilent split.
+Filename: "schtasks.exe"; Parameters: "/run /tn ""Shop Analysis - Watcher"""; Flags: runhidden
 ; The second, always-elevated "Updater" task used to be created here too,
 ; as a passive [Run] entry - moved into CurStepChanged's CreateUpdaterTask
 ; procedure below (2026-08-31) after a real install left it silently
@@ -390,6 +414,31 @@ begin
     Result := ' --hub-store-name "' + CloudflareHubNameEdit.Text + '"';
 end;
 
+function GetShopDataDir(): String;
+begin
+  // {localappdata} resolves against the CURRENT process's own token - fine
+  // for a normal interactive install (runs as the real installing user),
+  // wrong for a silent auto-update, where this whole Setup.exe runs as
+  // SYSTEM (see CreateUpdaterTask's own comment) and {localappdata} would
+  // resolve to SYSTEM's own profile, not the shop's.
+  // poslib/updater.py's launch_silent_install spawns this installer
+  // without overriding env, so it inherits SHOP_ANALYSIS_DATA_DIR from its
+  // own parent --apply-update process (poslib/paths.py's user_data_dir()
+  // override, set from that process's own --data-dir argument) - prefer
+  // that when present, rather than trusting {localappdata} to resolve
+  // correctly under whatever account launched us.
+  // Root-caused 2026-09-07 (opus-reviewer pass, finding B1b): before this
+  // fix, every use of {localappdata} in this procedure baked a broken
+  // SYSTEM-profile path into the *next* Updater task and its own log file
+  // the moment a real auto-update ever actually completed - self-
+  // destructing auto-update on its very first real success, never caught
+  // earlier because every real attempt had hung before reaching this
+  // point (see poslib/updater.py's _close_other_running_instances).
+  Result := GetEnv('SHOP_ANALYSIS_DATA_DIR');
+  if Result = '' then
+    Result := ExpandConstant('{localappdata}\Shop Analysis');
+end;
+
 procedure CreateUpdaterTask;
 var
   ResultCode: Integer;
@@ -397,6 +446,7 @@ var
   Message: String;
   I: Integer;
   Params: String;
+  DataDir: String;
 begin
   // Second, narrow, always-elevated helper task - the watcher (created
   // above, in [Run]) stays deliberately de-elevated (least privilege), but
@@ -404,9 +454,9 @@ begin
   // Program Files. Running this one as SYSTEM means it never hits an
   // interactive UAC prompt (same mechanism Windows' own built-in
   // SilentCleanup task relies on) and needs no stored password.
-  // --data-dir is this (elevated, installing) user's own %LOCALAPPDATA%,
-  // captured now because SYSTEM's own %LOCALAPPDATA% is not the shop's -
-  // see docs/superpowers/specs/2026-08-27-update-elevation-fix.md.
+  // --data-dir is the real shop's own data dir, from GetShopDataDir() -
+  // see that function's own comment for why this can no longer just be
+  // {localappdata} unconditionally.
   //
   // Uses ExecAndCaptureOutput (like the Cloudflare provisioning call
   // below) instead of a passive [Run] entry, specifically so a failure is
@@ -417,9 +467,10 @@ begin
   // remaining candidates are something about the installer's own
   // execution context - this instrumentation is what will actually show
   // the real error on the next occurrence, instead of guessing again.
+  DataDir := GetShopDataDir();
   Params := '/create /f /tn "Shop Analysis - Updater" /tr "\"' +
     ExpandConstant('{app}\{#MyAppExeName}') + '\" --apply-update --data-dir \"' +
-    ExpandConstant('{localappdata}\Shop Analysis') + '\"" ' +
+    DataDir + '\"" ' +
     '/sc onlogon /rl highest /ru SYSTEM /delay 0000:45';
 
   if ExecAndCaptureOutput('schtasks.exe', Params, '', SW_HIDE, ewWaitUntilTerminated,
@@ -430,13 +481,13 @@ begin
       Message := Message + Output.StdOut[I] + #13#10;
     for I := 0 to GetArrayLength(Output.StdErr) - 1 do
       Message := Message + Output.StdErr[I] + #13#10;
-    ForceDirectories(ExpandConstant('{localappdata}\Shop Analysis'));
+    ForceDirectories(DataDir);
     if ResultCode = 0 then
-      SaveStringToFile(ExpandConstant('{localappdata}\Shop Analysis\updater_task_log.txt'),
+      SaveStringToFile(DataDir + '\updater_task_log.txt',
         'Updater task created successfully:' + #13#10#13#10 + Message, False)
     else
     begin
-      SaveStringToFile(ExpandConstant('{localappdata}\Shop Analysis\updater_task_log.txt'),
+      SaveStringToFile(DataDir + '\updater_task_log.txt',
         'Could not create the Updater task (exit code ' + IntToStr(ResultCode) + '):' + #13#10#13#10 +
         Message, False);
       MsgBox('Could not set up the background auto-update task:' + #13#10#13#10 + Message + #13#10#13#10 +
@@ -447,8 +498,8 @@ begin
   end
   else
   begin
-    ForceDirectories(ExpandConstant('{localappdata}\Shop Analysis'));
-    SaveStringToFile(ExpandConstant('{localappdata}\Shop Analysis\updater_task_log.txt'),
+    ForceDirectories(DataDir);
+    SaveStringToFile(DataDir + '\updater_task_log.txt',
       'Could not launch schtasks.exe at all.', False);
     MsgBox('Could not launch schtasks.exe to set up the background auto-update task. ' +
            'The app itself is fully installed and works normally - only silent ' +
