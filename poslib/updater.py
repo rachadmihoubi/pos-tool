@@ -28,6 +28,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import logging
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -249,6 +250,48 @@ def download_and_verify(release: ReleaseInfo, dest_dir: Path) -> Path | None:
     return installer_path
 
 
+def _close_other_running_instances() -> None:
+    """
+    Force-closes every OTHER running ShopAnalysis.exe process (in practice,
+    always the watcher - packaging/setup.iss's [Run] section relaunches it
+    unconditionally after every install) before the installer starts.
+    Excludes this process's own PID: this function runs from inside the
+    very same ShopAnalysis.exe (invoked as --apply-update), which must be
+    left alone here - it exits on its own within moments of
+    launch_silent_install returning, and killing it mid-function would be
+    both unnecessary and messy.
+
+    Root-caused live on store #1's own till PC, 2026-09-07: Setup.exe's own
+    CloseApplications=force (packaging/setup.iss) is supposed to handle
+    this via Windows' Restart Manager, and it does work correctly when
+    there is nothing to close - confirmed directly, an installer run with
+    no ShopAnalysis.exe process alive completed in under 2 seconds. But
+    when a real running instance actually needs to be force-closed, the
+    exact scenario auto-update exists for, the installer hung indefinitely
+    instead - no error, no timeout, no visible sign anything was wrong
+    (near-zero CPU, threads parked in a Wait state) - reproduced twice via
+    the real Updater scheduled task. Since Setup.exe's own negotiation
+    with the still-running app can't be trusted, this process (already
+    running elevated as SYSTEM, so it can terminate a process in a
+    different user's session without issue) closes the other instance(s)
+    itself first - Setup.exe's CloseApplications then has nothing left to
+    negotiate, which is exactly the fast, reliable path already confirmed
+    above.
+
+    Never raises - a failure here just means Setup.exe falls back to its
+    own (unreliable, per the above) CloseApplications handling, no worse
+    than before this fix existed.
+    """
+    current_pid = os.getpid()
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "ShopAnalysis.exe", "/FI", f"PID ne {current_pid}"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("Could not close other running instances before update: %s", exc)
+
+
 def launch_silent_install(installer_path: Path) -> bool:
     """
     Spawns the installer detached and returns immediately without waiting
@@ -257,6 +300,7 @@ def launch_silent_install(installer_path: Path) -> bool:
     releases the lock. Returns True if the process was launched, False if
     spawning itself failed. Never raises.
     """
+    _close_other_running_instances()
     try:
         subprocess.Popen(
             [str(installer_path), "/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES"],

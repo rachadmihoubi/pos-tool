@@ -366,6 +366,7 @@ class TestLaunchSilentInstall:
                 seen["cmd"] = cmd
                 seen["kwargs"] = kwargs
         monkeypatch.setattr(updater.subprocess, "Popen", FakePopen)
+        monkeypatch.setattr(updater.subprocess, "run", lambda *a, **k: None)
 
         assert updater.launch_silent_install(installer) is True
         assert seen["cmd"][0] == str(installer)
@@ -376,12 +377,59 @@ class TestLaunchSilentInstall:
     def test_returns_false_when_spawning_fails(self, monkeypatch, tmp_path):
         installer = tmp_path / "Setup.exe"
         installer.write_bytes(b"fake")
+        monkeypatch.setattr(updater.subprocess, "run", lambda *a, **k: None)
 
         def _raise(*a, **k):
             raise OSError("cannot launch")
         monkeypatch.setattr(updater.subprocess, "Popen", _raise)
 
         assert updater.launch_silent_install(installer) is False
+
+    def test_closes_other_instances_before_launching(self, monkeypatch, tmp_path):
+        """
+        Regression test for a real bug found live on store #1's own till PC
+        (2026-09-07): the installer's own CloseApplications=force hangs
+        indefinitely instead of completing when it actually needs to force-
+        close a running ShopAnalysis.exe - confirmed by direct A/B test
+        (the same installer completed in under 2 seconds with nothing to
+        close, but hung for nearly an hour when the watcher was running).
+        launch_silent_install must close every OTHER instance itself first,
+        so Setup.exe's own CloseApplications never has anything to
+        negotiate.
+        """
+        installer = tmp_path / "Setup.exe"
+        installer.write_bytes(b"fake")
+        monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: None)
+        calls = []
+        monkeypatch.setattr(updater.subprocess, "run",
+                            lambda cmd, **k: calls.append(cmd))
+
+        assert updater.launch_silent_install(installer) is True
+        assert len(calls) == 1
+        cmd = calls[0]
+        assert cmd[:3] == ["taskkill", "/F", "/IM"]
+        assert "ShopAnalysis.exe" in cmd
+        assert "/FI" in cmd
+        # Must exclude this process's own PID - it must not kill itself.
+        filter_arg = cmd[cmd.index("/FI") + 1]
+        assert f"PID ne {updater.os.getpid()}" == filter_arg
+
+
+class TestCloseOtherRunningInstances:
+
+    def test_never_raises_when_taskkill_itself_fails(self, monkeypatch):
+        def _raise(*a, **k):
+            raise OSError("taskkill.exe not found")
+        monkeypatch.setattr(updater.subprocess, "run", _raise)
+
+        updater._close_other_running_instances()  # must not raise
+
+    def test_never_raises_on_subprocess_error(self, monkeypatch):
+        def _raise(*a, **k):
+            raise updater.subprocess.TimeoutExpired(cmd="taskkill", timeout=30)
+        monkeypatch.setattr(updater.subprocess, "run", _raise)
+
+        updater._close_other_running_instances()  # must not raise
 
 
 class TestCheckAndApplyUpdate:
