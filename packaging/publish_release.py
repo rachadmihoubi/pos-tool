@@ -84,11 +84,43 @@ def _commit_version_bump(version_text: str) -> None:
     _run(["git", "push"])
 
 
+def _release_asset_names(tag: str) -> set[str]:
+    result = subprocess.run(
+        ["gh", "release", "view", tag, "--repo", REPO,
+         "--json", "assets", "--jq", ".assets[].name"],
+        cwd=PROJECT_ROOT, check=True, capture_output=True, text=True,
+    )
+    return {line for line in result.stdout.splitlines() if line}
+
+
 def _publish(version_text: str) -> None:
     tag = f"v{version_text}"
+    expected = {INSTALLER_PATH.name, CHECKSUM_PATH.name}
     _run(["gh", "release", "create", tag,
           str(INSTALLER_PATH), str(CHECKSUM_PATH),
           "--repo", REPO, "--generate-notes"])
+
+    # gh release create uploads assets sequentially after creating the
+    # release object - a transient failure partway through (this store's
+    # connection has a documented history of exactly this) leaves a real,
+    # published release with a missing asset, exit code notwithstanding.
+    # This bit both the app teams's v1.0.10 AND v1.0.11 releases: Setup.exe
+    # landed, Setup.exe.sha256 silently did not, and poslib/updater.py
+    # correctly refused to apply the unverifiable update - but nobody
+    # noticed until an actual store install tried to update days later.
+    # Verify before declaring success instead of trusting the exit code.
+    missing = expected - _release_asset_names(tag)
+    if missing:
+        print(f"Retrying missing asset(s) after publish: {sorted(missing)}")
+        paths = {INSTALLER_PATH.name: INSTALLER_PATH, CHECKSUM_PATH.name: CHECKSUM_PATH}
+        for name in missing:
+            _run(["gh", "release", "upload", tag, str(paths[name]), "--repo", REPO])
+        still_missing = expected - _release_asset_names(tag)
+        if still_missing:
+            raise SystemExit(
+                f"Release {tag} is still missing asset(s) after retry: "
+                f"{sorted(still_missing)} - fix manually before trusting this release."
+            )
 
 
 def main() -> int:
