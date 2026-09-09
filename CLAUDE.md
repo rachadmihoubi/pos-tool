@@ -1964,6 +1964,166 @@ confirmed against the real thing" discipline, the next real store update
 (automatic, if `update.enabled: true`, or a manual reinstall) is what
 actually confirms this.
 
+## Bug #3 + Bug #4 — two more real auto-update hangs found live on store #1, both fixed, v1.0.14 shipped (2026-09-07 through 2026-09-09)
+
+Continuing the same store #1 live-verification effort as Bug #1/#2 above.
+With `update.enabled: true` now flipped on for real (the user's explicit
+condition: "I won't be shipping this product to other stores unless I am
+fully confident in its functionality"), the actual SYSTEM-context auto-
+update path got its first real exercise - and hung, twice, for two
+different root causes, each found, opus-reviewed, and fixed in turn. This
+section was never written up before now (a context-compaction gap) - both
+bugs are real, already shipped, and this is the first record of either in
+this file.
+
+### Bug #3 (fixed in `v1.0.11`) - `CloseApplications=force` hung negotiating with the still-running watcher
+
+The real Updater task (`schtasks /run /tn "Shop Analysis - Updater"`)
+launched a real `Setup.exe` under SYSTEM twice and both times hung with
+zero progress for 45+ minutes - reproduced directly, then isolated with a
+controlled A/B test (same cached `Setup.exe`, run manually: with the
+watcher process running, hung ~45 min; with it killed first, completed in
+under 2 seconds). Root cause: Inno Setup's `CloseApplications=force`
+still negotiates with a running target process before force-closing it,
+and that negotiation step itself can stall indefinitely with no UI to
+resolve it under SYSTEM/Session 0. Fixed with
+`poslib/updater.py::_close_other_running_instances()` - a `taskkill /F
+/IM ShopAnalysis.exe /FI "PID ne <self>"` called by `launch_silent_install()`
+right before spawning `Setup.exe`, so nothing is left running for
+`CloseApplications` to negotiate with at all. Commit `fce05ba`.
+
+**An opus-reviewer pass on this fix found the fix would unblock a second,
+previously-unreachable bug**: because auto-update had never once
+completed via SYSTEM before (every real attempt had hung on Bug #3
+itself), the post-install steps that only run on a real success -
+recreating the Watcher scheduled task, `CreateUpdaterTask`'s own
+`--data-dir` argument - had never actually executed as SYSTEM and would
+self-destruct on the very first real success: `{localappdata}` resolves
+to SYSTEM's empty profile, so the *next* Watcher task would get created
+running as SYSTEM instead of the real user, and the *next* Updater task
+would get baked with a `--data-dir` pointing at nothing real. Fixed with
+`skipifsilent` on the passive Watcher-task-recreate `[Run]` line (an
+auto-update never needs to recreate an already-correct task) plus
+`schtasks /run` instead of a direct `Exec` (always uses the task's own
+configured principal, not the caller's), and the new `GetShopDataDir()`
+helper (env-var-first, `{localappdata}`-fallback) used everywhere
+`CreateUpdaterTask` previously assumed `{localappdata}` was correct.
+Commit `5226539`.
+
+**A third opus-reviewer pass, on THAT fix, found a third layer**: plain
+`MsgBox()` in Pascal Script is not suppressed by `/SUPPRESSMSGBOXES` -
+verified directly against Inno Setup's own source - so any of the
+existing failure-path `MsgBox` calls inside `CreateUpdaterTask` (and one
+informational one about the watcher-account mismatch) would still hang a
+SYSTEM run invisibly if they ever fired. Fixed by converting those to
+`SuppressibleMsgBox(..., IDOK)`, the watcher-account one additionally
+gated behind `not WizardSilent()`. Commit `d50c1b2`.
+
+All three layers shipped together as **`v1.0.11`**. Live-verified on this
+store, eventually: the real `v1.0.11` Updater-task run launched at
+2026-09-08 10:16:03, took several hours longer than expected to actually
+finish (likely still working through a pre-fix cached download/retry
+state, not re-diagnosed in detail since it did complete), but `VERSION`
+at `C:\Program Files\Shop Analysis` did confirm `1.0.11` afterward - the
+three-layer fix works for a real update that reaches completion.
+
+### Bug #4 (fixed in `v1.0.14`) - the DB-locate wizard page's own MsgBox hung the very next update cycle
+
+The very next real update cycle on this same store (v1.0.11 -> v1.0.13,
+launched automatically at 2026-09-08 14:44:29) hung again, immediately -
+Inno's own `/LOG=` file
+(`%LOCALAPPDATA%\Shop Analysis\logs\setup-update.log`) shows Setup opening
+at `14:44:29.731`, confirming `Administrative install mode: Yes`, then
+at `14:44:29.853` - nine-tenths of a second later - logging
+`Message box (OK): Please click Browse and select your point-of-sale
+database file (it ends in .dblx) before continuing.` and nothing further.
+**Root cause**: `ConfigIsConfigured()` and `WriteDatabaseConfig()`
+predate `GetShopDataDir()` (built for Bug #3 above) and were never
+migrated to it - they still resolved `{localappdata}` directly, which
+under SYSTEM means "not configured" is always the answer, regardless of
+whether the store has a perfectly real `config.yaml`. That un-skips
+`DatabasePage` (`ShouldSkipPage`), and Inno's own silent-mode page walker
+(`ClickThroughPages`) then hits that page's validation, finds the never-
+populated `DatabaseEdit.Text` empty, and calls the same class of
+unsuppressible `MsgBox` Bug #3's third layer had just fixed three other
+instances of - just not this one, since it wasn't part of that earlier
+audit.
+
+**Real cost**: this store stayed on `v1.0.11` (never reached `v1.0.13`'s
+real content), `update_attempted.txt` is now permanently stuck refusing
+to retry the `v1.0.13` tag (by design - the marker exists specifically to
+stop a genuinely broken release from looping forever), and the watcher -
+force-killed by `_close_other_running_instances()` moments before the
+hang - stayed dead for **~17 hours** until the next Windows logon
+(2026-09-09 07:18) self-healed it via the Watcher task's own `onlogon`
+trigger. This is Bug #2's still-open self-healing gap (see the "Store #1
+watcher outage" section above) manifesting again through a different
+trigger - worth remembering these are two separate problems (a hang that
+kills the watcher, and nothing bringing a dead watcher back) that
+compound each other.
+
+**Fix, opus-reviewer-confirmed correct and complete** (verified directly
+against Inno Setup's own source, not just plausibility - see the
+review's own findings: `MsgBox`/`SuppressibleMsgBox` share one internal
+handler that only suppresses when *both* `/SUPPRESSMSGBOXES` is present
+*and* the call site opted in, so a plain `MsgBox` is genuinely
+un-suppressible, and it was the only unsuppressible dialog class in this
+entire installer): `ConfigIsConfigured()`, `WriteDatabaseConfig()`, and
+the Cloudflare-provisioning data-dir/log paths now all route through
+`GetShopDataDir()` (moved earlier in the file so it's defined before
+first use). Every remaining plain `MsgBox(...)` anywhere in
+`packaging/setup.iss` was converted to `SuppressibleMsgBox(..., IDOK)` -
+defense in depth against this exact bug class recurring from a call site
+nobody has audited yet, confirmed to change nothing for a real
+interactive user (a normal install never passes `/SUPPRESSMSGBOXES`, so
+both variants take the identical real-dialog code path). On the
+reviewer's own recommendation, `ShouldSkipPage` also now skips
+`DatabasePage` unconditionally under `WizardSilent()` rather than relying
+solely on `ConfigIsConfigured()` succeeding - a silent run has no human
+to ever fill that page in regardless, so this closes the entire hang/
+abort class even against a future env-var-inheritance edge case this fix
+didn't anticipate. Commits `1bb6370` (fix), `fe512e4` (version bump).
+
+`update_attempted.txt` was deliberately left alone, not cleared -
+clearing it would let this store retry the still-broken `v1.0.13` build
+specifically, hanging identically again. Publishing a new tag
+(`v1.0.14`) is what naturally un-sticks the retry logic
+(`check_for_update`'s guard compares the exact tag string, not just
+"is a newer version available").
+
+**Shipped as `v1.0.14`.** `gh release create` hit this store's
+documented intermittent-connectivity failure twice in a row (`wsarecv:
+An existing connection was forcibly closed`, then a bare `connectex`
+timeout) before succeeding on a third attempt - both release assets
+(`Setup.exe`, `Setup.exe.sha256`) confirmed present via `gh release view`
+afterward, per `c0a8e74`'s own "verify assets landed" discipline.
+**Not yet live-verified** - this store gets exactly one automatic shot at
+`v1.0.14` (the next Updater-task run, gated by the store's own logon
+cadence and connectivity), and per this file's own standing "don't
+declare a live deploy fixed until confirmed against the real thing"
+discipline, whoever picks this up next should check
+`setup-update.log`/`pos-tool.log`/installed `VERSION` after that happens
+rather than assume this write-up alone settles it.
+
+### A correction to the 2026-08-31 "Updater task silently failing" entry
+
+The opus-reviewer pass on Bug #4 also re-examined the 2026-08-31 "Cross-
+store hub auto-registration" section's claim that the old passive
+`[Run]`-based Updater task creation was "silently failing on every fresh
+install" (which motivated moving it into `CreateUpdaterTask`/
+`ExecAndCaptureOutput`). Direct evidence from this session says that
+diagnosis was **very likely wrong**: `Get-ScheduledTask`/`schtasks
+/query` from a non-elevated session return "access denied" for a real,
+existing SYSTEM-owned task - not "not found" - and this exact confusion
+already independently recurred and got caught earlier in this same
+session (see "Non-elevated session masking the Updater task's existence"
+in the Bug #1/#2 section above). The `CreateUpdaterTask` rewrite itself
+is not wrong and doesn't need reverting - it's genuinely better
+(instrumented, visible failures) regardless of whether the original
+failure was real - but if the *original* passive `[Run]` version is ever
+reconsidered for some other reason, don't assume it was actually broken
+without re-checking from an elevated session first.
+
 ## R.Lynx clone/replacement decision + desktop app forensics (2026-09-07)
 
 The owner asked whether to clone R.Lynx 1:1 — first to fully document its
