@@ -146,6 +146,47 @@ begin
   end;
 end;
 
+function GetShopDataDir(): String;
+begin
+  // {localappdata} resolves against the CURRENT process's own token - fine
+  // for a normal interactive install (runs as the real installing user),
+  // wrong for a silent auto-update, where this whole Setup.exe runs as
+  // SYSTEM (see CreateUpdaterTask's own comment) and {localappdata} would
+  // resolve to SYSTEM's own profile, not the shop's.
+  // poslib/updater.py's launch_silent_install spawns this installer
+  // without overriding env, so it inherits SHOP_ANALYSIS_DATA_DIR from its
+  // own parent --apply-update process (poslib/paths.py's user_data_dir()
+  // override, set from that process's own --data-dir argument) - prefer
+  // that when present, rather than trusting {localappdata} to resolve
+  // correctly under whatever account launched us.
+  // Root-caused 2026-09-07 (opus-reviewer pass, finding B1b): before this
+  // fix, every use of {localappdata} in this procedure baked a broken
+  // SYSTEM-profile path into the *next* Updater task and its own log file
+  // the moment a real auto-update ever actually completed - self-
+  // destructing auto-update on its very first real success, never caught
+  // earlier because every real attempt had hung before reaching this
+  // point (see poslib/updater.py's _close_other_running_instances).
+  //
+  // Moved above ConfigIsConfigured()/WriteDatabaseConfig() 2026-09-09
+  // (opus-reviewer pass, finding B4) - those two still used raw
+  // {localappdata} directly, the exact same class of bug this function
+  // was created to fix, just never migrated to it. Under the SYSTEM-run
+  // Updater task, {localappdata}\Shop Analysis\config.yaml never exists
+  // (SYSTEM's own empty profile), so ConfigIsConfigured() always returned
+  // False - which un-skips the DatabasePage (see ShouldSkipPage below)
+  // even on an update to an already-fully-configured store, and the
+  // wizard's own silent page-validation pass then hit DatabasePage's
+  // plain (non-suppressible) MsgBox with no one there to click it -
+  // hanging the SYSTEM process forever. Reproduced for real on this exact
+  // store: v1.0.13's auto-update launched at 2026-09-08 14:44:29, hit
+  // this MsgBox at 14:44:29.853 (setup-update.log), and never progressed
+  // - the store stayed on v1.0.11 with update_attempted.txt stuck on the
+  // v1.0.13 tag it can no longer retry.
+  Result := GetEnv('SHOP_ANALYSIS_DATA_DIR');
+  if Result = '' then
+    Result := ExpandConstant('{localappdata}\Shop Analysis');
+end;
+
 procedure UpdateDatabaseStatusLabel();
 begin
   if DatabaseEdit.Text = '' then
@@ -298,8 +339,16 @@ begin
   begin
     if (DatabaseEdit.Text = '') or (not FileExists(DatabaseEdit.Text)) then
     begin
-      MsgBox('Please click Browse and select your point-of-sale database file ' +
-             '(it ends in .dblx) before continuing.', mbError, MB_OK);
+      // SuppressibleMsgBox, not MsgBox: this page is skipped entirely
+      // (ShouldSkipPage) whenever ConfigIsConfigured() finds a real
+      // existing config, which is the normal case for every silent
+      // auto-update - but a plain MsgBox here would hang forever, exactly
+      // as it did for real on 2026-09-08/09 (see GetShopDataDir's own
+      // comment), if that skip ever fails to trigger for any reason this
+      // fix didn't anticipate. Defense in depth, not the root-cause fix
+      // itself.
+      SuppressibleMsgBox('Please click Browse and select your point-of-sale database file ' +
+             '(it ends in .dblx) before continuing.', mbError, MB_OK, IDOK);
       Result := False;
     end;
   end;
@@ -311,8 +360,8 @@ begin
       if (CloudflareAccountIdEdit.Text = '') or (CloudflareSlugEdit.Text = '') or
          (CloudflareOwnerEmailEdit.Text = '') then
       begin
-        MsgBox('A provisioning token was entered, so the account ID, project ' +
-               'name, and owner email are all required too.', mbError, MB_OK);
+        SuppressibleMsgBox('A provisioning token was entered, so the account ID, project ' +
+               'name, and owner email are all required too.', mbError, MB_OK, IDOK);
         Result := False;
       end
       else if (CloudflareHubNameEdit.Text <> '') and
@@ -321,8 +370,8 @@ begin
         // Blank means "skip adding it to the hub" - that's valid. Whitespace-
         // only isn't a real skip and isn't a real name either, so treat it
         // as a mistake rather than silently doing one or the other.
-        MsgBox('The hub display name can''t be just spaces - clear it ' +
-               'entirely to skip adding this store to the hub.', mbError, MB_OK);
+        SuppressibleMsgBox('The hub display name can''t be just spaces - clear it ' +
+               'entirely to skip adding this store to the hub.', mbError, MB_OK, IDOK);
         Result := False;
       end
       else if (Pos('"', CloudflareAccountIdEdit.Text) > 0) or
@@ -333,8 +382,8 @@ begin
         // These values are interpolated unescaped into a command line in
         // Step 3 below - a literal " would let its contents break out of
         // the quoted argument it's meant to stay inside.
-        MsgBox('The account ID, project name, owner email, and hub display ' +
-               'name cannot contain a " character.', mbError, MB_OK);
+        SuppressibleMsgBox('The account ID, project name, owner email, and hub display ' +
+               'name cannot contain a " character.', mbError, MB_OK, IDOK);
         Result := False;
       end
       else if (Copy(CloudflareAccountIdEdit.Text, Length(CloudflareAccountIdEdit.Text), 1) = '\') or
@@ -346,7 +395,7 @@ begin
         // A trailing backslash immediately before the closing " in Step 3's
         // command line escapes that quote instead of ending the argument -
         // CommandLineToArgvW's own documented quoting rule.
-        MsgBox('None of these fields can end with a backslash.', mbError, MB_OK);
+        SuppressibleMsgBox('None of these fields can end with a backslash.', mbError, MB_OK, IDOK);
         Result := False;
       end;
     end;
@@ -364,7 +413,7 @@ var
   I: Integer;
 begin
   Result := False;
-  ConfigFile := ExpandConstant('{localappdata}\Shop Analysis\config.yaml');
+  ConfigFile := GetShopDataDir() + '\config.yaml';
   if not FileExists(ConfigFile) then
     Exit;
   Result := True;
@@ -387,7 +436,7 @@ var
   Lines: TArrayOfString;
   I: Integer;
 begin
-  ConfigDir := ExpandConstant('{localappdata}\Shop Analysis');
+  ConfigDir := GetShopDataDir();
   ConfigFile := ConfigDir + '\config.yaml';
   TemplateFile := ExpandConstant('{app}\config.template.yaml');
 
@@ -424,30 +473,6 @@ begin
     Result := ' --hub-store-name "' + CloudflareHubNameEdit.Text + '"';
 end;
 
-function GetShopDataDir(): String;
-begin
-  // {localappdata} resolves against the CURRENT process's own token - fine
-  // for a normal interactive install (runs as the real installing user),
-  // wrong for a silent auto-update, where this whole Setup.exe runs as
-  // SYSTEM (see CreateUpdaterTask's own comment) and {localappdata} would
-  // resolve to SYSTEM's own profile, not the shop's.
-  // poslib/updater.py's launch_silent_install spawns this installer
-  // without overriding env, so it inherits SHOP_ANALYSIS_DATA_DIR from its
-  // own parent --apply-update process (poslib/paths.py's user_data_dir()
-  // override, set from that process's own --data-dir argument) - prefer
-  // that when present, rather than trusting {localappdata} to resolve
-  // correctly under whatever account launched us.
-  // Root-caused 2026-09-07 (opus-reviewer pass, finding B1b): before this
-  // fix, every use of {localappdata} in this procedure baked a broken
-  // SYSTEM-profile path into the *next* Updater task and its own log file
-  // the moment a real auto-update ever actually completed - self-
-  // destructing auto-update on its very first real success, never caught
-  // earlier because every real attempt had hung before reaching this
-  // point (see poslib/updater.py's _close_other_running_instances).
-  Result := GetEnv('SHOP_ANALYSIS_DATA_DIR');
-  if Result = '' then
-    Result := ExpandConstant('{localappdata}\Shop Analysis');
-end;
 
 procedure CreateUpdaterTask;
 var
@@ -576,7 +601,7 @@ begin
          ' --project-slug "' + CloudflareSlugEdit.Text + '"' +
          ' --owner-email "' + CloudflareOwnerEmailEdit.Text + '"' +
          GetHubStoreNameArg() +
-         ' --data-dir "' + ExpandConstant('{localappdata}\Shop Analysis') + '"',
+         ' --data-dir "' + GetShopDataDir() + '"',
          '', SW_HIDE, ewWaitUntilTerminated, ResultCode, ProvisionOutput) then
       begin
         SetEnvironmentVariableW('POS_TOOL_PROVISION_TOKEN', '');
@@ -590,15 +615,15 @@ begin
         else
           ProvisionMessage := 'Cloudflare setup did not finish (exit code ' +
             IntToStr(ResultCode) + '):' + #13#10#13#10 + ProvisionMessage;
-        ForceDirectories(ExpandConstant('{localappdata}\Shop Analysis'));
+        ForceDirectories(GetShopDataDir());
         SaveStringToFile(
-          ExpandConstant('{localappdata}\Shop Analysis\cloudflare_provision_log.txt'),
+          GetShopDataDir() + '\cloudflare_provision_log.txt',
           ProvisionMessage, False);
         if ResultCode <> 0 then
-          MsgBox('Cloudflare setup did not finish successfully:' + #13#10#13#10 +
+          SuppressibleMsgBox('Cloudflare setup did not finish successfully:' + #13#10#13#10 +
                  ProvisionMessage + #13#10#13#10 +
                  'Full details were also saved to cloudflare_provision_log.txt ' +
-                 'in the app data folder.', mbError, MB_OK)
+                 'in the app data folder.', mbError, MB_OK, IDOK)
         else if Pos('HUB REGISTRATION FAILED', ProvisionMessage) > 0 then
           // The store itself is live and fully set up (ResultCode = 0) -
           // only adding it to the cross-store hub failed. This must stay a
@@ -606,22 +631,22 @@ begin
           // line in the log - the whole point of this feature is removing
           // a manual step that was easy to forget, so a silently-skipped
           // hub registration would reproduce exactly that problem.
-          MsgBox('The store is set up and live, but adding it to the ' +
+          SuppressibleMsgBox('The store is set up and live, but adding it to the ' +
                  'cross-store hub failed:' + #13#10#13#10 + ProvisionMessage + #13#10#13#10 +
                  'Full details were also saved to cloudflare_provision_log.txt ' +
                  'in the app data folder.',
-                 mbError, MB_OK);
+                 mbError, MB_OK, IDOK);
       end
       else
       begin
         SetEnvironmentVariableW('POS_TOOL_PROVISION_TOKEN', '');
-        ForceDirectories(ExpandConstant('{localappdata}\Shop Analysis'));
+        ForceDirectories(GetShopDataDir());
         SaveStringToFile(
-          ExpandConstant('{localappdata}\Shop Analysis\cloudflare_provision_log.txt'),
+          GetShopDataDir() + '\cloudflare_provision_log.txt',
           'Could not launch Cloudflare setup at all.', False);
-        MsgBox('Could not launch Cloudflare setup at all. See ' +
+        SuppressibleMsgBox('Could not launch Cloudflare setup at all. See ' +
                'cloudflare_provision_log.txt in the app data folder.',
-               mbError, MB_OK);
+               mbError, MB_OK, IDOK);
       end;
 
       WizardForm.StatusLabel.Caption := '';
@@ -671,5 +696,20 @@ function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
   if PageID = DatabasePage.ID then
-    Result := ConfigIsConfigured();
+    // WizardSilent() or ...: a silent run (always an auto-update, never a
+    // fresh interactive install - see the [Run] section's own skipifsilent
+    // comment) has no human to ever fill DatabaseEdit in, so validating
+    // this page can only fail, never succeed - ClickThroughPages (Inno's
+    // own silent-mode page walker) would Abort the whole install rather
+    // than hang once every plain MsgBox in this file became Suppressible
+    // (2026-09-09), but "silently declined update" is still a worse
+    // outcome than "correctly skipped" for a case that can never be
+    // anything but skippable. Added on an opus-reviewer's recommendation
+    // after this file's ConfigIsConfigured()/GetShopDataDir() mismatch
+    // (finding B4) caused a real hang on this exact store - this makes
+    // the skip unconditional under silent mode instead of depending on
+    // GetShopDataDir() successfully finding the real config, so a future
+    // env-var-inheritance edge case this fix didn't anticipate degrades
+    // to "correctly skipped" rather than "aborted update" either way.
+    Result := WizardSilent() or ConfigIsConfigured();
 end;
