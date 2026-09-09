@@ -2097,13 +2097,28 @@ An existing connection was forcibly closed`, then a bare `connectex`
 timeout) before succeeding on a third attempt - both release assets
 (`Setup.exe`, `Setup.exe.sha256`) confirmed present via `gh release view`
 afterward, per `c0a8e74`'s own "verify assets landed" discipline.
-**Not yet live-verified** - this store gets exactly one automatic shot at
-`v1.0.14` (the next Updater-task run, gated by the store's own logon
-cadence and connectivity), and per this file's own standing "don't
-declare a live deploy fixed until confirmed against the real thing"
-discipline, whoever picks this up next should check
-`setup-update.log`/`pos-tool.log`/installed `VERSION` after that happens
-rather than assume this write-up alone settles it.
+**Live-verified 2026-09-09, same day, once the user elevated the session
+so the SYSTEM-owned Updater task could actually be triggered on demand**
+(the exact same non-elevated-visibility artifact documented elsewhere in
+this file blocked triggering it beforehand - `schtasks /run` from a
+non-elevated session returns a plain "Access Denied", not "not found").
+First trigger hit a transient `connect timeout=120` downloading
+`Setup.exe` from `github.com` (this store's documented intermittent
+connectivity, unrelated to the fix) - no tag gets burned by a download
+failure, so a second `schtasks /run /tn "Shop Analysis - Updater"`
+moments later re-downloaded and installed cleanly. Confirmed by direct
+inspection, not just "no error": `setup-update.log` for this run has
+**zero** `Message box` lines (down from the one that killed `v1.0.13`),
+ends with `Process exit code: 0` on both the Watcher-task `/end` and
+`/run` steps followed by a clean `Deinitializing Setup` / `Log closed`;
+`C:\Program Files\Shop Analysis\VERSION` reads `1.0.14`; no
+`C:\Windows\System32\config\systemprofile\...\Shop Analysis` directory
+was created; the Watcher task's principal is still `Quick Tech`
+(confirmed via `schtasks /query /v`, not SYSTEM); and the watcher process
+itself came back up under a fresh PID immediately after. **Bug #4 is
+closed** - the DB-locate wizard page hang cannot recur through the path
+that caused it, and the broader `SuppressibleMsgBox` conversion covers
+every other call site in the file the same way.
 
 ### A correction to the 2026-08-31 "Updater task silently failing" entry
 
