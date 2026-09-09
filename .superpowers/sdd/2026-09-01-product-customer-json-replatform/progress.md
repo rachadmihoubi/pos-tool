@@ -498,3 +498,93 @@ upload mechanics - worth re-measuring since the old 486s/722s numbers
 predate the timeout/batching fixes), (4) a phone or curl-based real-
 domain spot check of at least DB786 and the Arabic RTL page, matching
 what was just verified locally.
+
+## Task 5, Steps 2-3: RE-DONE for real (2026-09-09) with a working token and the fixed remote.py - numbers below supersede the 2026-09-05 ones
+
+The user supplied a fresh Cloudflare token. First one verified as
+active/valid but carried zero real permissions (403 Forbidden even on a
+read-only `list projects` call - likely created without "Cloudflare
+Pages > Edit" actually attached, or scoped to the wrong account). Second
+token, recreated with that permission explicitly added, verified working
+end to end (`list projects` returned all 6 real projects on this
+account including `promakeupmihoubipos` and the real store's own
+`promakeupboumati`).
+
+**Cold push** (current export, already fresh from the earlier
+force-refresh): `push_remote` returned `True` in **577.9s**. Confirmed
+independently via Cloudflare's own deployments API (not just the
+process's own return value) - deployment `3190b788`,
+`https://3190b788.promakeupmihoubipos.pages.dev`, `latest_stage.status:
+"success"`, timestamped exactly when this push ran.
+
+**Warm push** (re-exported immediately after with no real data change,
+matching Step 3's own instructions): export 754.2s, `push_remote`
+returned `True` in **822.1s** - slower than cold, same already-documented
+reason as the 2026-09-05 numbers (the "Synced {when}" badge embeds a live
+timestamp into every page, so a full re-export changes nearly every
+file's hash regardless of real data change, defeating
+check-missing-hashes for this specific export shape).
+
+**File count/size** (still interim - old per-entity loops not yet
+removed, Task 6 pending): **12,935 files, 284 MB** - same as the
+pre-push measurement, confirming the push didn't change what's on disk
+locally (as expected, `push_remote` only uploads, never mutates
+`remote-site/`).
+
+**These numbers are measured against the FIXED `remote.py`** (post-merge
+from `main`, `50fbe90` - `_LARGE_BODY_TIMEOUT_SECONDS`, `_MAX_PUSH_SECONDS`
+deadline, `_check_missing_hashes`, per-batch retry), unlike the
+2026-09-05 numbers (486.3s cold / 722.2s warm) which predate all of that.
+Directly comparable and consistent - both cold numbers are in the same
+~500-600s range, the fix didn't change the shape of a healthy push, it
+made a struggling one survive.
+
+**One real, per-step timing detail was lost this run**: `logs/pos-tool.log`
+does not exist in this worktree as of this session (checked directly -
+the whole `logs/` directory is gone, not just rotated; confirmed via
+`find`). The overall push numbers above come from the script's own
+`time.monotonic()` wrapper around `push_remote()`, which is reliable
+regardless - just the per-step (`got upload token in Xs` /
+`checked N hash(es) in Xs` / etc.) breakdown `poslib/remote.py` normally
+emits to that log wasn't captured. Not investigated further (low value -
+the numbers that matter for this task are the top-level ones); worth
+knowing if a future session expects that log to exist here.
+
+## Task 5, Step 4 (real domain): Access-gating confirmed active; full authenticated content check blocked by this machine's connectivity right now, not by anything in this branch's code
+
+One real, meaningful signal was captured before the connection degraded
+further: an unauthenticated `requests.get` to
+`https://promakeupmihoubipos.pages.dev/en/catalog` was redirected to
+Cloudflare Access's real login domain
+(`broad-violet-b829.cloudflareaccess.com/cdn-cgi/access/login/...`,
+`200`, ~35KB body - the login page itself) - direct proof Access is
+actively gating the freshly-pushed deployment exactly as designed, not
+serving content unauthenticated.
+
+**Every further attempt to reach the live domain failed on this
+machine** - Python `requests` (`ConnectTimeout`), PowerShell
+`Invoke-WebRequest` (timed out, including to `google.com` - not specific
+to Cloudflare), and gstack's own Chromium-backed `browse` skill (also
+timed out) all failed the same way within the same ~15-minute window,
+despite `ping`/ICMP to the same hostname succeeding at healthy latency
+(7-8ms) and the push itself succeeding via this exact machine's network
+moments earlier. This is this store's own well-documented intermittent-
+connectivity pattern (see CLAUDE.md's "network scare" section from
+2026-09-05) reasserting itself, not an Access/deployment/code problem -
+the deployment's own success is independently confirmed via Cloudflare's
+API regardless of whether this machine can currently reach it over
+HTTPS.
+
+**Task 5 is still not being marked fully complete** - the plan's own
+gate is a real authenticated content check (owner's phone, or at minimum
+a successful unauthenticated-vs-authenticated distinction via curl),
+which this session could not complete due to transient local
+connectivity, not because anything is actually broken. Asked the user to
+spot-check `https://promakeupmihoubipos.pages.dev/en/product.html?id=595`
+from their own device (a different network) as the fastest path to
+closing this out, given local retries kept failing. If the user confirms
+it looks correct (matching what was already verified locally - DB786's
+name, two distinct purchase costs, family comparison), that satisfies
+Step 4 and Task 5 can be marked passed; if this session's own
+connectivity recovers first, retry the Python `requests` check above
+before waiting further on the user.
