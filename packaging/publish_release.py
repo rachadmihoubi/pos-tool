@@ -27,7 +27,29 @@ SETUP_ISS = PROJECT_ROOT / "packaging" / "setup.iss"
 INSTALLER_PATH = PROJECT_ROOT / "dist-installer" / "Setup.exe"
 CHECKSUM_PATH = PROJECT_ROOT / "dist-installer" / "Setup.exe.sha256"
 REPO = "rachadmihoubi/pos-tool"
-_ISCC_FALLBACK = r"C:\Users\RACHAD\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
+# This script now legitimately runs on more than one machine - the dev PC
+# and, per CLAUDE.md's "till PC doubles as a dev machine" note, store #1's
+# own till PC too - so a single hardcoded username fallback breaks on
+# every machine but the one it was written on. Try every current user's
+# own install location plus the common machine-wide one before giving up.
+_ISCC_CANDIDATES = [
+    Path.home() / "AppData" / "Local" / "Programs" / "Inno Setup 6" / "ISCC.exe",
+    Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
+    Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
+]
+
+
+def _find_iscc() -> str:
+    found = shutil.which("iscc") or shutil.which("ISCC")
+    if found:
+        return found
+    for candidate in _ISCC_CANDIDATES:
+        if candidate.exists():
+            return str(candidate)
+    raise SystemExit(
+        "Could not find ISCC.exe (Inno Setup) on PATH or in any known "
+        f"install location: {[str(c) for c in _ISCC_CANDIDATES]}"
+    )
 
 
 def _read_version() -> tuple[int, int, int]:
@@ -64,8 +86,7 @@ def _build() -> None:
     _run([str(PROJECT_ROOT / ".venv" / "Scripts" / "pyinstaller.exe"),
           "packaging/pos-tool.spec", "--distpath", "dist", "--workpath", "build",
           "--noconfirm"])
-    iscc = shutil.which("iscc") or shutil.which("ISCC") or _ISCC_FALLBACK
-    _run([iscc, "packaging/setup.iss"])
+    _run([_find_iscc(), "packaging/setup.iss"])
 
 
 def _write_checksum() -> str:
