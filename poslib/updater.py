@@ -28,6 +28,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import logging
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -249,6 +250,56 @@ def download_and_verify(release: ReleaseInfo, dest_dir: Path) -> Path | None:
     return installer_path
 
 
+def _close_other_running_instances() -> None:
+    """
+    Force-closes every OTHER running ShopAnalysis.exe process (in practice,
+    always the watcher - packaging/setup.iss's [Run] section relaunches it
+    unconditionally after every install) before the installer starts.
+    Excludes this process's own PID: this function runs from inside the
+    very same ShopAnalysis.exe (invoked as --apply-update), which must be
+    left alone here - it exits on its own within moments of
+    launch_silent_install returning, and killing it mid-function would be
+    both unnecessary and messy.
+
+    Root-caused live on store #1's own till PC, 2026-09-07: Setup.exe's own
+    CloseApplications=force (packaging/setup.iss) is supposed to handle
+    this via Windows' Restart Manager, and it does work correctly when
+    there is nothing to close - confirmed directly, an installer run with
+    no ShopAnalysis.exe process alive completed in under 2 seconds. But
+    when a real running instance actually needs to be force-closed, the
+    exact scenario auto-update exists for, the installer hung indefinitely
+    instead - no error, no timeout, no visible sign anything was wrong
+    (near-zero CPU, threads parked in a Wait state) - reproduced twice via
+    the real Updater scheduled task. Since Setup.exe's own negotiation
+    with the still-running app can't be trusted, this process (already
+    running elevated as SYSTEM, so it can terminate a process in a
+    different user's session without issue) closes the other instance(s)
+    itself first - Setup.exe's CloseApplications then has nothing left to
+    negotiate, which is exactly the fast, reliable path already confirmed
+    above.
+
+    Never raises - a failure here just means Setup.exe falls back to its
+    own (unreliable, per the above) CloseApplications handling, no worse
+    than before this fix existed.
+    """
+    current_pid = os.getpid()
+    try:
+        result = subprocess.run(
+            ["taskkill", "/F", "/IM", "ShopAnalysis.exe", "/FI", f"PID ne {current_pid}"],
+            capture_output=True, text=True, timeout=30,
+        )
+        # taskkill returns 0 even when the filter matches nothing (e.g.
+        # only this process's own excluded PID was running) - logged
+        # regardless so a genuine failure (access denied, taskkill.exe
+        # missing under this account) is visible instead of reproducing
+        # the exact invisible-hang problem this function exists to avoid.
+        log.info("Closed other ShopAnalysis.exe instance(s) before update "
+                  "(exit %d): %s", result.returncode,
+                  (result.stdout or result.stderr or "").strip() or "(no output)")
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("Could not close other running instances before update: %s", exc)
+
+
 def launch_silent_install(installer_path: Path) -> bool:
     """
     Spawns the installer detached and returns immediately without waiting
@@ -257,9 +308,20 @@ def launch_silent_install(installer_path: Path) -> bool:
     releases the lock. Returns True if the process was launched, False if
     spawning itself failed. Never raises.
     """
+    _close_other_running_instances()
+    # /LOG: this whole investigation (both the CloseApplications hang and
+    # the SYSTEM-context post-install bugs it uncovered, 2026-09-07) was
+    # hard to diagnose specifically because a silent Inno Setup run leaves
+    # no evidence of its own when something goes wrong - Inno's own /LOG
+    # records administrative-install-mode, every [Run] entry actually
+    # executed, and every message box that would have shown (see
+    # SuppressibleMsgBox's own comments in packaging/setup.iss), which is
+    # exactly the evidence that was missing this session.
+    log_path = user_data_dir() / "logs" / "setup-update.log"
     try:
         subprocess.Popen(
-            [str(installer_path), "/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES"],
+            [str(installer_path), "/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES",
+             f"/LOG={log_path}"],
             close_fds=True,
             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
         )
@@ -271,12 +333,14 @@ def launch_silent_install(installer_path: Path) -> bool:
 
 def check_and_apply_update(cfg: Config) -> bool:
     """
-    The one entry point watcher.py calls. Checks for a newer release and,
-    if everything checks out (found, downloaded, checksum verified,
-    installer launched), returns True - the caller must stop and exit
-    immediately so the installer can replace the running files. Returns
-    False if there's no update or any step failed; the next attempt is the
-    next watcher startup. Never raises.
+    The one entry point main.py's --apply-update dispatch calls (not
+    watcher.py - the watcher itself never checks for updates, see this
+    module's own docstring). Checks for a newer release and, if everything
+    checks out (found, downloaded, checksum verified, installer launched),
+    returns True - the caller must stop and exit immediately so the
+    installer can replace the running files. Returns False if there's no
+    update or any step failed; the next attempt is the next Updater task
+    run. Never raises.
     """
     try:
         release = check_for_update(cfg)

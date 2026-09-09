@@ -31,6 +31,7 @@ of separate exes:
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -41,9 +42,23 @@ from poslib.provision import ProvisionResult, provision_store
 
 # 40 minutes: well above the ~31-minute worst case for every network call
 # in provision_store timing out on its own (6 verify_reachable attempts x2
-# + 5 post_access_app attempts x2 + 3 push retries, each a handful of
-# poslib/remote.py's (10, 30)-bounded calls) - see
-# _run_provisioning_with_watchdog's docstring.
+# + 5 post_access_app attempts x2, still (10, 30)-bounded and unchanged, +
+# 3 push_remote retries).
+#
+# Corrected 2026-09-05 (opus-reviewer pass on poslib/remote.py's
+# connect-timeout fix): the "3 push retries" component used to assume
+# push_remote's internal calls were (10, 30)-bounded like everything else
+# here - they are not, since that fix. push_remote's own calls now use a
+# 180s large-body timeout with up to 5 retries each, which would have
+# blown this budget on its own (up to ~915s per call x several calls x 3
+# outer retries) if left unbounded. Fixed by capping poslib/provision.py's
+# own push_remote() calls to _PROVISION_PUSH_MAX_SECONDS (150s, see that
+# constant's own comment) - 3 outer retries x 150s = 450s (7.5 min),
+# which is smaller than the "3 push retries" slice this 31-minute estimate
+# already budgeted for under the old (10, 30)-bounded assumption, so the
+# total stays comfortably under this 40-minute watchdog. If either
+# _PROVISION_PUSH_MAX_SECONDS or the retry counts here ever change, re-add
+# up this arithmetic again rather than assuming 40 minutes is still enough.
 _PROVISIONING_TIMEOUT_SECONDS = 40 * 60
 
 
@@ -77,7 +92,20 @@ def _apply_update(argv: list[str]) -> int:
         return 1
 
     setup_logging(cfg)
-    check_and_apply_update(cfg)
+    launched = check_and_apply_update(cfg)
+    if launched:
+        # This process is itself an instance of {#MyAppExeName}, and the
+        # installer we just spawned needs every OTHER instance closed
+        # before it starts copying files (see poslib/updater.py's
+        # _close_other_running_instances, which deliberately excludes
+        # this process's own PID for exactly that reason - it's expected
+        # to exit on its own "within moments"). A normal frozen-build
+        # interpreter teardown still takes some non-zero time; os._exit
+        # skips it entirely, closing that window as tightly as possible
+        # rather than trusting "moments" - added 2026-09-07 alongside the
+        # SYSTEM-context installer fixes found the same session.
+        logging.shutdown()
+        os._exit(0)
     return 0
 
 

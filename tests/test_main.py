@@ -60,16 +60,24 @@ class FakeConfig:
     pass
 
 
-def _patch_apply_update_deps(monkeypatch, *, config_error=None):
+def _patch_apply_update_deps(monkeypatch, *, config_error=None, apply_update_result=True):
     """
     poslib.config/poslib.updater are imported lazily inside
     main._apply_update, so they must be patched on the real modules, not on
     main_module's own namespace.
+
+    Also neutralizes os._exit: _apply_update calls it for real (deliberately
+    skipping normal interpreter teardown, added 2026-09-07 alongside the
+    SYSTEM-context installer fixes) whenever check_and_apply_update returns
+    True - the default here - which would otherwise kill the test process
+    itself, not just fail the test. calls["exit_code"] records what it was
+    called with (None if never called).
     """
     import poslib.config as config_module
     import poslib.updater as updater_module
 
-    calls = {"get_config": 0, "setup_logging": 0, "check_and_apply_update": []}
+    calls = {"get_config": 0, "setup_logging": 0, "check_and_apply_update": [],
+             "exit_code": None}
 
     def fake_get_config():
         calls["get_config"] += 1
@@ -81,7 +89,10 @@ def _patch_apply_update_deps(monkeypatch, *, config_error=None):
     monkeypatch.setattr(config_module, "setup_logging",
                         lambda cfg: calls.__setitem__("setup_logging", calls["setup_logging"] + 1))
     monkeypatch.setattr(updater_module, "check_and_apply_update",
-                        lambda cfg: calls["check_and_apply_update"].append(cfg) or True)
+                        lambda cfg: calls["check_and_apply_update"].append(cfg) or apply_update_result)
+    monkeypatch.setattr(main_module.os, "_exit",
+                        lambda code: calls.__setitem__("exit_code", code))
+    monkeypatch.setattr(main_module.logging, "shutdown", lambda: None)
     return calls
 
 
@@ -93,6 +104,25 @@ class TestApplyUpdateDispatch:
         assert calls["get_config"] == 1
         assert calls["setup_logging"] == 1
         assert len(calls["check_and_apply_update"]) == 1
+
+    def test_installer_launched_exits_immediately_instead_of_normal_teardown(self, monkeypatch):
+        """
+        Regression test, added 2026-09-07 alongside the SYSTEM-context
+        installer fixes: when check_and_apply_update reports the installer
+        was actually launched, this process (itself an instance of
+        ShopAnalysis.exe, which Setup.exe's own CloseApplications will try
+        to close) must exit via os._exit rather than a normal return, to
+        close the race window as tightly as possible instead of trusting a
+        frozen build's own interpreter teardown to be fast enough.
+        """
+        calls = _patch_apply_update_deps(monkeypatch, apply_update_result=True)
+        main_module.main(["--apply-update"])
+        assert calls["exit_code"] == 0
+
+    def test_no_update_available_does_not_call_os_exit(self, monkeypatch):
+        calls = _patch_apply_update_deps(monkeypatch, apply_update_result=False)
+        assert main_module.main(["--apply-update"]) == 0
+        assert calls["exit_code"] is None
 
     def test_data_dir_sets_the_override_env_var_before_loading_config(self, monkeypatch):
         monkeypatch.delenv("SHOP_ANALYSIS_DATA_DIR", raising=False)

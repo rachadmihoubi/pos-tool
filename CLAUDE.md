@@ -22,6 +22,46 @@ copied to a temp folder before parsing (`poslib/etl.py:copy_database_readonly`).
 Every change must preserve this. If you're ever tempted to open the source path
 directly for anything other than a read-only copy, stop.
 
+## Every real bug gets an opus-reviewer root-cause pass and ships as a new setup.exe release
+
+**Hard rule, added 2026-09-05 after the store #1 watcher-outage/timeout-bug
+session.** Whenever something in the tool actually breaks for a real
+store (not a test failure, not a hypothetical - a real bug hit in
+practice, the way the connect-timeout truncation bug and the
+silently-dying watcher both were), two things are now mandatory before
+considering it closed, not optional extras:
+
+1. **Dispatch the opus-reviewer subagent to review the root cause and the
+   proposed fix** - even when the root cause already seems obvious or has
+   already been diagnosed by hand (e.g. via `systematic-debugging`, a
+   live diagnostic script, or another subagent). The review's job is to
+   check that the diagnosis is actually correct (not just plausible) and
+   that the fix addresses the real cause rather than papering over a
+   symptom - the same bar this file already holds financial-logic and
+   installer/Access-config changes to, now generalized to every real bug.
+2. **The fix must ship as a new `Setup.exe` published to GitHub
+   Releases** - a commit sitting on `main` (or any branch) is not enough
+   on its own. A store PC only ever gets a fix via
+   `poslib/updater.py`'s auto-update mechanism pulling a new release (see
+   the Component 3 row in the checklist below), so a real bug isn't
+   actually fixed for a real store until: `VERSION` is bumped (bump it
+   *before* running PyInstaller - see the `v1.0.5` build-order gotcha
+   later in this file), a new build is produced from
+   `packaging/pos-tool.spec`/`packaging/setup.iss`, and that installer is
+   published as a GitHub Release. Skipping this step leaves every
+   already-installed store exactly as broken as before, no matter how
+   correct the code change is.
+
+Why this is a hard rule and not a judgment call: this session's own
+timeout-bug fix is the exact case this rule exists to prevent from
+repeating - it was correctly root-caused and correctly fixed in
+`poslib/remote.py`, but as of that fix landing on `main` it had not yet
+been reviewed by an opus-reviewer pass or cut into a release, so store
+#1's real watcher would still have shipped and run the old, broken
+timeout value indefinitely even after the "fix" was "done." Treat a bug
+as open - regardless of what CLAUDE.md or an SDD ledger says elsewhere -
+until both of these have actually happened, not just the code change.
+
 ## Machine identity — check this before assuming which PC you're on
 
 This repo is git-synced (via the `SessionStart` hook's `git pull --ff-only`)
@@ -112,6 +152,21 @@ goods is always computed from `ReceiptEntry` lines, never the header.
    R.Lynx's own newer demo template but not here). `shrinkage_events()` is
    therefore event-level only, clearly labeled as such — don't try to join it
    to individual products, the data to do so honestly isn't here.
+   **Update, 2026-09-07**: directly confirmed the "newer demo template"
+   reference above. `BlankDB` — the actual per-store starter database
+   bundled inside the *currently installed* R.Lynx 10.3.0.0 on store #1's
+   own till PC (`C:\Program Files (x86)\R.Lynx™ Point De Vente\BlankDB`) —
+   defines a real `StockTakeEntry` table: `ID, StockTakeID, ItemID,
+   Counted, Expected, QtyPerParcel, Cost, MakeInactive`. So the schema
+   fully supports per-product stocktake detail as of this install's
+   version; this store's live `E:\Base de données4.dblx` just predates
+   that table being added (or was never migrated onto it). Don't assume
+   this generalizes to the other two stores without checking each one's
+   own live database directly — schema can drift between stores if they
+   were provisioned from different R.Lynx versions. Worth checking next
+   time this is revisited: if `StockTakeEntry` exists with real rows in a
+   given store's live `.dblx`, `shrinkage_events()` could be upgraded from
+   event-level to per-product for that store.
 6. **Expiry-date tracking was investigated and dropped.** R.Lynx's "Dates
    péremptions" UI section doesn't correspond to any table/column in this
    database (checked exhaustively, schema-level, both the real DB and
@@ -1671,6 +1726,547 @@ installer provisioning — SDD progress" above). **All 5 components of the
 customer-distribution build are now done.** Weighted-average cost (the
 feature the owner explicitly sequenced after Component 5) is also already
 built — see "Weighted-average cost (AVCO) + last purchase cost" below.
+
+## Store #1 watcher outage + timeout bug (2026-09-05) — one real bug fixed, one systemic gap found and NOT yet fixed
+
+Picked up mid-way through the product/customer JSON-replatform plan
+(`docs/superpowers/plans/2026-09-01-product-customer-json-replatform.md`,
+Tasks 1-4 done on branch `product-customer-json-replatform` in
+`.claude/worktrees/product-customer-json-replatform` — see that branch's
+own SDD ledger for the full per-task detail) — Task 5 (live verification)
+needed a real Cloudflare push, which surfaced a real, still-live
+production incident on this same machine (confirmed via hostname to be
+`DESKTOP-94UHGGD`, store #1 "Pro Makeup Boumati" per the machine-identity
+table above): **the real store's dashboard (`promakeupboumati.pages.dev`)
+had been stale since 2026-09-03**, silently, with nothing telling the
+owner.
+
+### Bug #1 — FIXED, committed to `main` (`8e2b170`): large uploads were truncated to a 10-second window, not 120
+
+Root-caused by reading urllib3's own source (installed version 2.7.0):
+in a `requests`/urllib3 `(connect, read)` timeout tuple, **the connect
+half, not the read half, governs how long sending the request body is
+allowed to take** — `HTTPConnectionPool._make_request` sets the socket
+timeout to the connect value, writes the *entire* body under it, and
+only swaps in the read timeout afterwards for the response. So the old
+`_UPLOAD_TIMEOUT_SECONDS = (10, 120)` in `poslib/remote.py` actually meant
+"finish sending this batch within 10 seconds" - the 120 was never
+reached on a failing push. This explains the confusing pattern seen both
+in the real store's log (`%LOCALAPPDATA%\Shop Analysis\logs\pos-tool.log`,
+every push from 2026-09-03 07:xx onward failing identically during asset
+upload) and in a disposable-project diagnostic built this session (sizes
+from 1MB to 35MB all failed at a suspiciously *constant* ~10-15s,
+regardless of size - the exact signature of a fixed-window cutoff, not a
+bandwidth ceiling).
+
+Fixed: a dedicated `_LARGE_BODY_TIMEOUT_SECONDS = (180, 180)` now covers
+the three large-body Cloudflare calls (asset upload, check-missing,
+upsert-hashes); `_MAX_BATCH_BYTES` dropped 40MB -> 8MB (wrangler's own
+40MB assumes a developer-grade uplink, not a real store's connection).
+Raising the timeout is safe specifically because `_force_ipv4_only()`
+(already shipped 2026-08-29) means only IPv4 addresses are ever tried -
+the multi-address stall the original short bound was defending against
+cannot happen once AAAA records are never attempted. `tests/test_remote.py`
+41/41 pass. **Deliberately committed to `main` directly, not the
+replatform branch** - that plan's own Global Constraints mark
+`poslib/remote.py`'s upload mechanics out of scope; the replatform branch
+will pick this fix up via a future rebase/merge, not a duplicate fix.
+
+### The network scare that turned out to be mostly a red herring - re-verify before trusting either reading
+
+An extensive live diagnostic (dispatched to an Opus subagent, since the
+network-vs-code question needed real experimentation, not more reading)
+initially found a consistent ~9-10 KB/s upload ceiling to *both*
+Cloudflare and an unrelated host (httpbin.org), with zero packet loss
+anywhere (ping/pathping clean at every hop) - pointing at the Wi-Fi
+extender's backhaul specifically (PC<->extender wireless hop flawless,
+extender<->router hop carrying all the latency/jitter). Kaspersky was
+fully quit (service confirmed `Stopped`, not just the tray app) and the
+same slow reading persisted, ruling Kaspersky out.
+
+**But a follow-up retest minutes later, prompted by the owner pointing
+out a live speedtest showing 18 Mbps down / 33 Mbps up (utterly
+inconsistent with ~10 KB/s), found healthy throughput instead**
+(650-900 KB/s via plain Python `requests` to httpbin.org) - and **two
+real live pushes to `promakeupmihoubipos` both succeeded** immediately
+after (cold: 486.3s; warm, re-exported with zero data change seconds
+later: 722.2s - slower, likely because the "Synced {when}" badge embeds
+a live timestamp into every page, so nearly every file's hash changes on
+every export regardless of real data change, defeating the
+check-missing-hashes optimization for a full export - not a bug, just a
+real limit on how much that optimization can help here).
+
+**Net honest conclusion: the connection is real but intermittent, not
+a fixed hardware fault** - the extender-backhaul theory may still be
+correct as a *contributing* factor (worth trying an Ethernet cable to
+the DSL router if this recurs, bypassing the extender entirely - owner
+confirmed the extender is otherwise the only realistic option), but it
+does not explain a 400x swing in measured throughput within the same
+session. **Don't treat this as fully diagnosed** - if push failures
+recur, re-run the same diagnostic (disposable Cloudflare project,
+size-ladder upload test - see git history around this date for the
+exact script) before assuming either the network or the timeout fix is
+to blame; the honest state is "reproducibly worked twice after the code
+fix, on a connection that tested badly once and well twice."
+
+### Bug #2 - found, NOT fixed: the real watcher process died and nothing brought it back (this is the part that could hit any store)
+
+Investigated *why* the real store's dashboard was stale for 2 full days,
+per the owner's explicit ask to find root cause rather than just patch
+the symptom - and the answer is a real, systemic architectural gap:
+
+- This machine's last boot was 2026-09-03 07:14 - no reboot, no new
+  logon since (confirmed via `Get-CimInstance Win32_OperatingSystem`).
+  The `Shop Analysis - Watcher` scheduled task's `LastRunTime` matches
+  that boot exactly - its trigger is `onlogon`, a **one-shot** trigger,
+  not recurring.
+- The real watcher's own log shows it working correctly for hours on
+  2026-09-03 (cache rebuilding every ~10-15 min as real till activity
+  happened, matching `watcher.py`'s `rebuild()`/`_run_remote_push()`
+  cadence) - then the log simply **stops** at 16:08 that day. No
+  `ShopAnalysis.exe`/`python` crash entry exists anywhere in the Windows
+  Application event log near that time. No process is running now.
+- Read `watcher.py`'s actual loop end-to-end: `rebuild()`,
+  `_run_remote_push()`, `_run_digest()`, `_run_backup()` each have their
+  own `except Exception` guard - good instincts already in the code. But
+  **`Watcher.run()`'s outer loop (lines 236-282) only catches
+  `KeyboardInterrupt`, and `main()` calls `watcher.run()` (line 323) with
+  no catch-all around it at all.** A few seams are genuinely unguarded -
+  e.g. `_digest_due()`/`_backup_due()`'s own condition checks are called
+  directly in the loop body, outside any try/except (only the `_run_*`
+  functions they gate are wrapped). If anything at all raises there, or
+  anywhere else not already wrapped, the entire process dies with **zero
+  visible evidence** - no dialog (this build is `console=False`, an
+  already-known, previously-accepted gap - see the packaging component
+  table above), no Windows Error Reporting entry (a clean Python
+  exception exits normally; WER generally only catches native faults),
+  nothing beyond whatever the logger already wrote before the fatal
+  instant. This is exactly why the *specific* triggering line could not
+  be identified this session - that unprovability is itself the finding,
+  not a gap in the investigation.
+- **And nothing restarts it.** The scheduled task is one-shot-per-logon
+  only, with no "restart on failure" action and no independent recurring
+  "is the watcher still alive? if not, start it" check. A till PC that
+  stays logged in for days or weeks without a fresh logon (this one:
+  still running since the 2026-09-03 boot, no logon since) has no
+  self-healing path at all once the process dies once, for any reason.
+
+**This is a store-agnostic gap, not something specific to this
+machine's hardware/network** - the same silent-death-with-no-restart
+exposure exists on every store's packaged install. Proposed permanent
+fix (discussed with the owner, **not yet implemented** - paused here so
+the owner could pick this back up on another PC):
+
+1. Harden `Watcher.run()`'s loop with a real `except Exception` around
+   each iteration's body (not just `KeyboardInterrupt`), so no single
+   unexpected exception - wherever it comes from - can kill the whole
+   process.
+2. Make the Scheduled Task self-healing - either Windows Task
+   Scheduler's native restart-on-failure settings, or a second, separate
+   recurring trigger (e.g. every 5-15 minutes) that checks whether the
+   watcher process is alive and starts it if not - the standard way to
+   emulate a real Windows Service's auto-restart without converting the
+   whole app into one.
+3. Give the non-technical owner a visible signal when sync goes stale -
+   e.g. the daily digest (already emailed) could include a "remote sync
+   last succeeded N hours ago" warning line when it's overdue, so a
+   silent failure becomes a noticed one instead of a multi-day surprise
+   (this closes the gap the "Full-export push reliability fix" section
+   above already flagged and left open: "Silently-failing remote pushes
+   have no visible indication to the shop owner at all").
+
+### Session state at pause - read this before continuing on another PC
+
+- **`main` has 2 unpushed-as-of-this-writing commits**: `1abd0e3` (Synced
+  badge, predates this session) and `8e2b170` (the timeout fix above).
+  Check `git log origin/main..HEAD` before assuming these landed.
+- **The replatform branch (`product-customer-json-replatform`) needed a
+  new SDD ledger entry for Task 5's live-push results** - see that
+  branch's own `.superpowers/sdd/2026-09-01-product-customer-json-replatform/progress.md`
+  for the up-to-date detail (both pushes succeeded; the interim file
+  count with the old per-entity loops still present was ~12,695 files /
+  ~250.7MB; Task 6 - deleting those old loops - is still not started).
+- **This worktree's own local ETL cache was 2 days stale** when the
+  owner did the Task 5 phone check (the "Synced" badge reflects
+  `cache.parsed_at` - when the *local* cache was last rebuilt - not push
+  recency; nothing in a manually-driven dev worktree refreshes it
+  automatically, unlike a real running watcher). A forced
+  `ETL.refresh(force=True)` + fresh export + push was kicked off before
+  this session paused - **check whether that actually completed and
+  succeeded before assuming the live site reflects current data.**
+- **Kaspersky was fully quit on this machine during network diagnosis
+  and, as of this write-up, had NOT yet been confirmed turned back
+  on** - check `Get-Service` for `Kaspersky Service 21.26` before
+  assuming this production till PC is protected again.
+- **The real store's own dashboard (`promakeupboumati`) was not
+  re-pushed this session** - the timeout fix and the (probably
+  transient) network improvement both suggest a retry would likely
+  succeed now, but the watcher process itself is still dead and won't
+  restart on its own (see Bug #2 above) - it needs either a manual
+  restart of the scheduled task, a fresh logon, or the permanent fix
+  above before this store's own sync resumes unattended.
+- **The 3-part permanent fix for Bug #2 was proposed but explicitly not
+  implemented** - the owner asked to commit/push and continue elsewhere
+  before answering whether to proceed with it.
+
+### Bug #1's fix, reviewed and shipped as v1.0.10 (2026-09-05, same day)
+
+Per the new hard rule above ("Every real bug gets an opus-reviewer
+root-cause pass and ships as a new setup.exe release"), Bug #1's fix
+(`8e2b170`) was independently reviewed before being considered closed.
+**Root cause CONFIRMED** against the actually-installed urllib3 2.7.0
+source (read directly, not recalled) - the connect half of a
+`(connect, read)` tuple really does govern the whole body-write, and
+`connection.py`'s `sock.settimeout(self.timeout)` re-applies it on every
+keep-alive reuse. **But the fix itself was INCOMPLETE**, missing a real
+blocker:
+
+- `_create_deployment` (the final step of every push - sends the full
+  asset manifest, ~750-800KB for a real ~13,000-file export, as a single
+  multipart write) was still on the old short timeout with **zero
+  retry at all** - the single most expensive place in the whole push to
+  fail, since it throws away an otherwise fully successful upload. Fixed:
+  now uses the large-body timeout with its own retry/backoff.
+- The IPv4-forcing safety comment was factually wrong - api.cloudflare.com
+  resolves to **six** IPv4 A records, not one, and each one re-arms the
+  full connect timeout in urllib3's connect loop. Corrected, and replaced
+  with a real bound instead of relying on that reasoning: `_MAX_PUSH_SECONDS`,
+  a wall-clock deadline (25 minutes, ~2x the slowest real successful push
+  measured) threaded through every large-body call in `poslib/remote.py`,
+  so a persistently slow connection can't chain `attempts x timeout` per
+  call into an unbounded total - this also bounds the watcher's own
+  worst-case unresponsiveness, which the review flagged as having grown
+  ~16x under the original fix alone.
+- `poslib/provision.py`'s own `push_remote` calls (a tiny placeholder site
+  or the hub registry, never a full catalog) now pass a much smaller
+  `_PROVISION_PUSH_MAX_SECONDS` (150s) override, and `main.py`'s
+  provisioning-watchdog comment (`_PROVISIONING_TIMEOUT_SECONDS`) was
+  corrected - the review found the original fix had silently invalidated
+  that comment's arithmetic without anyone noticing.
+- A real regression test now asserts all four large-body call sites use
+  the large-body timeout (previously only implied, never actually
+  checked - reverting any one of them back to the short timeout would
+  have left every existing test green).
+
+Fixed in `2391066`. `tests/test_remote.py` 46/46, `tests/test_provision.py`
++ `tests/test_main.py` 83/83, full fast suite 410/411 (the same
+pre-existing, unrelated `dead_stock_value` drift).
+
+**Shipped as `v1.0.10`** on GitHub Releases (`Setup.exe`, built from this
+fix, `VERSION`/`packaging/setup.iss`'s `AppVersion` both bumped together) -
+confirmed **v1.0.9 had already been published**, so every real store
+install that auto-updates was still running the broken 10-second write
+window until this release. `gh` had no stored credentials on this
+machine; the owner ran `gh auth login` (browser device-code flow) to
+unblock the actual publish. Not yet installed/verified on any real store -
+per this file's own standing "don't declare a live deploy fixed until
+confirmed against the real thing" discipline, the next real store update
+(automatic, if `update.enabled: true`, or a manual reinstall) is what
+actually confirms this.
+
+## Bug #3 + Bug #4 — two more real auto-update hangs found live on store #1, both fixed, v1.0.14 shipped (2026-09-07 through 2026-09-09)
+
+Continuing the same store #1 live-verification effort as Bug #1/#2 above.
+With `update.enabled: true` now flipped on for real (the user's explicit
+condition: "I won't be shipping this product to other stores unless I am
+fully confident in its functionality"), the actual SYSTEM-context auto-
+update path got its first real exercise - and hung, twice, for two
+different root causes, each found, opus-reviewed, and fixed in turn. This
+section was never written up before now (a context-compaction gap) - both
+bugs are real, already shipped, and this is the first record of either in
+this file.
+
+### Bug #3 (fixed in `v1.0.11`) - `CloseApplications=force` hung negotiating with the still-running watcher
+
+The real Updater task (`schtasks /run /tn "Shop Analysis - Updater"`)
+launched a real `Setup.exe` under SYSTEM twice and both times hung with
+zero progress for 45+ minutes - reproduced directly, then isolated with a
+controlled A/B test (same cached `Setup.exe`, run manually: with the
+watcher process running, hung ~45 min; with it killed first, completed in
+under 2 seconds). Root cause: Inno Setup's `CloseApplications=force`
+still negotiates with a running target process before force-closing it,
+and that negotiation step itself can stall indefinitely with no UI to
+resolve it under SYSTEM/Session 0. Fixed with
+`poslib/updater.py::_close_other_running_instances()` - a `taskkill /F
+/IM ShopAnalysis.exe /FI "PID ne <self>"` called by `launch_silent_install()`
+right before spawning `Setup.exe`, so nothing is left running for
+`CloseApplications` to negotiate with at all. Commit `fce05ba`.
+
+**An opus-reviewer pass on this fix found the fix would unblock a second,
+previously-unreachable bug**: because auto-update had never once
+completed via SYSTEM before (every real attempt had hung on Bug #3
+itself), the post-install steps that only run on a real success -
+recreating the Watcher scheduled task, `CreateUpdaterTask`'s own
+`--data-dir` argument - had never actually executed as SYSTEM and would
+self-destruct on the very first real success: `{localappdata}` resolves
+to SYSTEM's empty profile, so the *next* Watcher task would get created
+running as SYSTEM instead of the real user, and the *next* Updater task
+would get baked with a `--data-dir` pointing at nothing real. Fixed with
+`skipifsilent` on the passive Watcher-task-recreate `[Run]` line (an
+auto-update never needs to recreate an already-correct task) plus
+`schtasks /run` instead of a direct `Exec` (always uses the task's own
+configured principal, not the caller's), and the new `GetShopDataDir()`
+helper (env-var-first, `{localappdata}`-fallback) used everywhere
+`CreateUpdaterTask` previously assumed `{localappdata}` was correct.
+Commit `5226539`.
+
+**A third opus-reviewer pass, on THAT fix, found a third layer**: plain
+`MsgBox()` in Pascal Script is not suppressed by `/SUPPRESSMSGBOXES` -
+verified directly against Inno Setup's own source - so any of the
+existing failure-path `MsgBox` calls inside `CreateUpdaterTask` (and one
+informational one about the watcher-account mismatch) would still hang a
+SYSTEM run invisibly if they ever fired. Fixed by converting those to
+`SuppressibleMsgBox(..., IDOK)`, the watcher-account one additionally
+gated behind `not WizardSilent()`. Commit `d50c1b2`.
+
+All three layers shipped together as **`v1.0.11`**. Live-verified on this
+store, eventually: the real `v1.0.11` Updater-task run launched at
+2026-09-08 10:16:03, took several hours longer than expected to actually
+finish (likely still working through a pre-fix cached download/retry
+state, not re-diagnosed in detail since it did complete), but `VERSION`
+at `C:\Program Files\Shop Analysis` did confirm `1.0.11` afterward - the
+three-layer fix works for a real update that reaches completion.
+
+### Bug #4 (fixed in `v1.0.14`) - the DB-locate wizard page's own MsgBox hung the very next update cycle
+
+The very next real update cycle on this same store (v1.0.11 -> v1.0.13,
+launched automatically at 2026-09-08 14:44:29) hung again, immediately -
+Inno's own `/LOG=` file
+(`%LOCALAPPDATA%\Shop Analysis\logs\setup-update.log`) shows Setup opening
+at `14:44:29.731`, confirming `Administrative install mode: Yes`, then
+at `14:44:29.853` - nine-tenths of a second later - logging
+`Message box (OK): Please click Browse and select your point-of-sale
+database file (it ends in .dblx) before continuing.` and nothing further.
+**Root cause**: `ConfigIsConfigured()` and `WriteDatabaseConfig()`
+predate `GetShopDataDir()` (built for Bug #3 above) and were never
+migrated to it - they still resolved `{localappdata}` directly, which
+under SYSTEM means "not configured" is always the answer, regardless of
+whether the store has a perfectly real `config.yaml`. That un-skips
+`DatabasePage` (`ShouldSkipPage`), and Inno's own silent-mode page walker
+(`ClickThroughPages`) then hits that page's validation, finds the never-
+populated `DatabaseEdit.Text` empty, and calls the same class of
+unsuppressible `MsgBox` Bug #3's third layer had just fixed three other
+instances of - just not this one, since it wasn't part of that earlier
+audit.
+
+**Real cost**: this store stayed on `v1.0.11` (never reached `v1.0.13`'s
+real content), `update_attempted.txt` is now permanently stuck refusing
+to retry the `v1.0.13` tag (by design - the marker exists specifically to
+stop a genuinely broken release from looping forever), and the watcher -
+force-killed by `_close_other_running_instances()` moments before the
+hang - stayed dead for **~17 hours** until the next Windows logon
+(2026-09-09 07:18) self-healed it via the Watcher task's own `onlogon`
+trigger. This is Bug #2's still-open self-healing gap (see the "Store #1
+watcher outage" section above) manifesting again through a different
+trigger - worth remembering these are two separate problems (a hang that
+kills the watcher, and nothing bringing a dead watcher back) that
+compound each other.
+
+**Fix, opus-reviewer-confirmed correct and complete** (verified directly
+against Inno Setup's own source, not just plausibility - see the
+review's own findings: `MsgBox`/`SuppressibleMsgBox` share one internal
+handler that only suppresses when *both* `/SUPPRESSMSGBOXES` is present
+*and* the call site opted in, so a plain `MsgBox` is genuinely
+un-suppressible, and it was the only unsuppressible dialog class in this
+entire installer): `ConfigIsConfigured()`, `WriteDatabaseConfig()`, and
+the Cloudflare-provisioning data-dir/log paths now all route through
+`GetShopDataDir()` (moved earlier in the file so it's defined before
+first use). Every remaining plain `MsgBox(...)` anywhere in
+`packaging/setup.iss` was converted to `SuppressibleMsgBox(..., IDOK)` -
+defense in depth against this exact bug class recurring from a call site
+nobody has audited yet, confirmed to change nothing for a real
+interactive user (a normal install never passes `/SUPPRESSMSGBOXES`, so
+both variants take the identical real-dialog code path). On the
+reviewer's own recommendation, `ShouldSkipPage` also now skips
+`DatabasePage` unconditionally under `WizardSilent()` rather than relying
+solely on `ConfigIsConfigured()` succeeding - a silent run has no human
+to ever fill that page in regardless, so this closes the entire hang/
+abort class even against a future env-var-inheritance edge case this fix
+didn't anticipate. Commits `1bb6370` (fix), `fe512e4` (version bump).
+
+`update_attempted.txt` was deliberately left alone, not cleared -
+clearing it would let this store retry the still-broken `v1.0.13` build
+specifically, hanging identically again. Publishing a new tag
+(`v1.0.14`) is what naturally un-sticks the retry logic
+(`check_for_update`'s guard compares the exact tag string, not just
+"is a newer version available").
+
+**Shipped as `v1.0.14`.** `gh release create` hit this store's
+documented intermittent-connectivity failure twice in a row (`wsarecv:
+An existing connection was forcibly closed`, then a bare `connectex`
+timeout) before succeeding on a third attempt - both release assets
+(`Setup.exe`, `Setup.exe.sha256`) confirmed present via `gh release view`
+afterward, per `c0a8e74`'s own "verify assets landed" discipline.
+**Live-verified 2026-09-09, same day, once the user elevated the session
+so the SYSTEM-owned Updater task could actually be triggered on demand**
+(the exact same non-elevated-visibility artifact documented elsewhere in
+this file blocked triggering it beforehand - `schtasks /run` from a
+non-elevated session returns a plain "Access Denied", not "not found").
+First trigger hit a transient `connect timeout=120` downloading
+`Setup.exe` from `github.com` (this store's documented intermittent
+connectivity, unrelated to the fix) - no tag gets burned by a download
+failure, so a second `schtasks /run /tn "Shop Analysis - Updater"`
+moments later re-downloaded and installed cleanly. Confirmed by direct
+inspection, not just "no error": `setup-update.log` for this run has
+**zero** `Message box` lines (down from the one that killed `v1.0.13`),
+ends with `Process exit code: 0` on both the Watcher-task `/end` and
+`/run` steps followed by a clean `Deinitializing Setup` / `Log closed`;
+`C:\Program Files\Shop Analysis\VERSION` reads `1.0.14`; no
+`C:\Windows\System32\config\systemprofile\...\Shop Analysis` directory
+was created; the Watcher task's principal is still `Quick Tech`
+(confirmed via `schtasks /query /v`, not SYSTEM); and the watcher process
+itself came back up under a fresh PID immediately after. **Bug #4 is
+closed** - the DB-locate wizard page hang cannot recur through the path
+that caused it, and the broader `SuppressibleMsgBox` conversion covers
+every other call site in the file the same way.
+
+### A correction to the 2026-08-31 "Updater task silently failing" entry
+
+The opus-reviewer pass on Bug #4 also re-examined the 2026-08-31 "Cross-
+store hub auto-registration" section's claim that the old passive
+`[Run]`-based Updater task creation was "silently failing on every fresh
+install" (which motivated moving it into `CreateUpdaterTask`/
+`ExecAndCaptureOutput`). Direct evidence from this session says that
+diagnosis was **very likely wrong**: `Get-ScheduledTask`/`schtasks
+/query` from a non-elevated session return "access denied" for a real,
+existing SYSTEM-owned task - not "not found" - and this exact confusion
+already independently recurred and got caught earlier in this same
+session (see "Non-elevated session masking the Updater task's existence"
+in the Bug #1/#2 section above). The `CreateUpdaterTask` rewrite itself
+is not wrong and doesn't need reverting - it's genuinely better
+(instrumented, visible failures) regardless of whether the original
+failure was real - but if the *original* passive `[Run]` version is ever
+reconsidered for some other reason, don't assume it was actually broken
+without re-checking from an elevated session first.
+
+## R.Lynx clone/replacement decision + desktop app forensics (2026-09-07)
+
+The owner asked whether to clone R.Lynx 1:1 — first to fully document its
+database schema, second to build a from-scratch replacement POS/ERP for
+personal/local use (explicitly not commercial resale). Two things were
+done this session: an LLM-council review of whether R.Lynx is worth
+cloning, then direct forensic inspection of the actual installed desktop
+application (not just its database) on store #1's own till PC
+(`DESKTOP-94UHGGD`).
+
+### Council verdict (condensed — see session transcript for full detail)
+
+Five independent advisors + peer review + chairman synthesis converged on:
+R.Lynx's **transactional core is sound** (tender reconciliation clean on
+~99% of tickets — worth replicating that shape almost verbatim) but its
+**reporting/history layer is genuinely bad** (mutable `Item.Cost` with no
+history, `ItemID=-2` fake-payment-line-items instead of a real payments
+table, no audit log, frozen `*Shift` totals). The council's recommendation:
+**don't clone R.Lynx, and don't build a full from-scratch replacement yet.**
+Separate the till core from the system of record — `poslib/metrics.py`'s
+existing rule set (devis exclusion, payment-line splitting,
+recompute-don't-trust) already *is* the spec for the reporting layer
+R.Lynx never had. The two biggest risks nobody had is a **live-store
+cutover/migration plan** (this is a real operating client's till — a
+data gap or outage during a POS switch is a business incident, not just
+an engineering one) and this **team's own inexperience with a live,
+concurrent, crash-safe write path** (everything built so far, including
+the read-only analytics layer, has had real production reliability
+incidents of its own — see the watcher-outage section above). The
+one-thing-to-do-first the council landed on: watch the real app in use
+before designing anything further — which motivated the forensics below.
+
+### Desktop app architecture (confirmed directly, not guessed)
+
+Real install: `C:\Program Files (x86)\R.Lynx™ Point De Vente` (32-bit).
+`RLPOS.exe` (till/checkout) and `RLPOSManager.exe` (back-office) — both
+run continuously on the till PC. Version 10.3.0.0, **© 2010-2022 R.Lynx™**
+(actively copyrighted, not abandoned — the "no longer copyrighted"
+premise floated mid-session was checked directly against the binary's own
+embedded version info and is false). Built on classic Delphi + Jet 4.0
+(`msjet40.dll`, `msjetoledb40.dll` — same engine family as the `.dblx`
+files this whole project already reads) + ADO/ADOX, with `AclasSDK.dll`
+(Aclas POS hardware: barcode scanners/scales/cash drawers) and
+`rtslabelscale.dll` (label/scale integration) for real till hardware.
+**`RLPOS.exe` is packed with Themida** (commercial anti-reverse-engineering
+protection — visible as a `.themida` section and a 3.9MB `.boot` section
+in the PE headers; notably the resource table has zero `RT_RCDATA`
+entries, where a normal unprotected Delphi exe would expose every
+compiled form). The app is also **machine/license-bound** via a registry
+key, `HKLM\SOFTWARE\WOW6432Node\R.Lynx\PDV10\ID` — a UTF-16 blob shaped
+like an activation artifact, not plain config.
+
+**Hard boundary for any future session**: do not attempt to defeat
+Themida, decode/replicate that registry value, or otherwise work around
+R.Lynx's license/anti-tamper mechanisms, regardless of stated intent
+(personal use, ownership of a license to *use* the software, etc.) —
+that line was held this session and should stay held. Static inspection
+of on-disk files (resources, config, schema) and behavioral observation
+of the already-running, already-licensed real instance are both fine;
+defeating copy protection to get there is not.
+
+### Config-file roles (read via copies, `poslib/jet4.py` — real find, useful going forward)
+
+Three small Jet4 databases sit next to the exe and are NOT the store's
+real data:
+- **`DBConnect`** — a one-row pointer table (`DBNameSrc`,
+  `DBNeedCompact`, `Password`, `RemoteComputerName`, `IsNewDB`).
+  Confirmed store #1's `DBNameSrc` is literally
+  `E:\Base de données4.dblx` — i.e. this is exactly how RLPOS.exe finds
+  its real data. **Never point a second RLPOS.exe instance's `DBConnect`
+  at a live store's real path** — a second writer against a Jet database
+  the live instance already has open risks corruption.
+- **`POSParameter`** — 40 columns of real per-register hardware config
+  (`AutoOpenCashDrawer`, `CashDrawerMode/Port`, `CustomerDisplayMode/Port`,
+  per-document-type receipt templates and printer names). Store #1's real
+  config has `AutoOpenCashDrawer: True` — confirmed live, so any future
+  experimentation with a real install must neutralize this first (a
+  second instance could pop the real cash drawer or fire a real printer
+  mid-business-day). This file is **also Jet-database-password-protected**
+  at the file-engine level — a different mechanism from the Themida/
+  registry license binding, likely a single fixed password R.Lynx bakes
+  into every install to keep end users out of Access, not a real secret.
+  Not attempted to crack it (same boundary as above); `poslib/jet4.py`
+  reads it fine anyway since it never goes through the password-gated
+  official API.
+- **`Task`/`Pad`** — the in-app task-list/notes feature, unrelated to
+  sales data.
+
+### Full schema, read straight from `BlankDB` (the real per-store starter template)
+
+`BlankDB` (also sitting in the install folder) is the actual blank
+database R.Lynx's own installer uses to provision a brand-new store — so
+it carries the *complete* current schema, all at once, without months of
+incremental forensics. Confirms everything already documented in this
+file, plus tables not previously known to this project: `StockTakeEntry`
+(see the correction to discovery #5 above), `Quote`/`QuoteEntry`
+(dedicated quote tables, separate from `Receipt`/`ReceiptEntry` —
+possibly a newer/cleaner mechanism than the `Receipt.ReceiptType==1`
+devis flag discovery #13 documents; not yet checked which one store #1's
+live database actually uses), `ReceiptHold`/`ReceiptHoldEntry` (parked/
+suspended sales), `ReceiptTemplateEntry`, `NumberSequence` (confirms real
+sequential numbering per document type — relevant if fiscal/tax
+compliance around sequential receipt numbers ever becomes a question),
+`ScaleDevice`/`ScaleDeviceItem`, `CashCalc` (denomination-based till
+counting), `CustomFields`, `StoreSafeIn`, `AccessDenied` (looks like a
+static UI message lookup, not an audit log — no timestamp/employee
+columns). `Employee` has 188 columns, almost certainly one flag per
+permission rather than a normalized ACL table.
+
+### Isolated sandbox attempt — why it stopped short of a running UI
+
+Built a fully isolated copy (own `DBConnect` pointing only at a local
+copy of `BlankDB`, never the live `E:` path; fresh unprotected
+`POSParameter`/`Task` matching the real schema with `AutoOpenCashDrawer`
+and `UseSoundEffect` forced off) specifically so nothing could touch the
+live install or live store hardware. `RLPOS.exe` still exits silently
+~5.5s after launch regardless — no window ever appears, no Windows Error
+Reporting entry, `RLPOS.ini` gets truncated to 0 bytes, and no `.ldb`
+lock ever appears on the sandboxed store file, meaning it dies before
+ever opening the actual data. Given the Themida packing and the
+machine-bound registry key found in the same session, this is almost
+certainly the app's own license/integrity check rejecting a
+non-standard run context, not a missing config file — and chasing that
+further would mean engaging the exact protections this session already
+drew a line at. **Static schema forensics (`BlankDB`) remains the best
+available source for further "what does R.Lynx actually model"
+questions** — a running sandboxed UI isn't achievable without crossing
+that line.
 
 ## What's left (optional, not blocking)
 

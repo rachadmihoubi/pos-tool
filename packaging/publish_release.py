@@ -27,7 +27,29 @@ SETUP_ISS = PROJECT_ROOT / "packaging" / "setup.iss"
 INSTALLER_PATH = PROJECT_ROOT / "dist-installer" / "Setup.exe"
 CHECKSUM_PATH = PROJECT_ROOT / "dist-installer" / "Setup.exe.sha256"
 REPO = "rachadmihoubi/pos-tool"
-_ISCC_FALLBACK = r"C:\Users\RACHAD\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
+# This script now legitimately runs on more than one machine - the dev PC
+# and, per CLAUDE.md's "till PC doubles as a dev machine" note, store #1's
+# own till PC too - so a single hardcoded username fallback breaks on
+# every machine but the one it was written on. Try every current user's
+# own install location plus the common machine-wide one before giving up.
+_ISCC_CANDIDATES = [
+    Path.home() / "AppData" / "Local" / "Programs" / "Inno Setup 6" / "ISCC.exe",
+    Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
+    Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
+]
+
+
+def _find_iscc() -> str:
+    found = shutil.which("iscc") or shutil.which("ISCC")
+    if found:
+        return found
+    for candidate in _ISCC_CANDIDATES:
+        if candidate.exists():
+            return str(candidate)
+    raise SystemExit(
+        "Could not find ISCC.exe (Inno Setup) on PATH or in any known "
+        f"install location: {[str(c) for c in _ISCC_CANDIDATES]}"
+    )
 
 
 def _read_version() -> tuple[int, int, int]:
@@ -64,8 +86,7 @@ def _build() -> None:
     _run([str(PROJECT_ROOT / ".venv" / "Scripts" / "pyinstaller.exe"),
           "packaging/pos-tool.spec", "--distpath", "dist", "--workpath", "build",
           "--noconfirm"])
-    iscc = shutil.which("iscc") or shutil.which("ISCC") or _ISCC_FALLBACK
-    _run([iscc, "packaging/setup.iss"])
+    _run([_find_iscc(), "packaging/setup.iss"])
 
 
 def _write_checksum() -> str:
@@ -84,11 +105,43 @@ def _commit_version_bump(version_text: str) -> None:
     _run(["git", "push"])
 
 
+def _release_asset_names(tag: str) -> set[str]:
+    result = subprocess.run(
+        ["gh", "release", "view", tag, "--repo", REPO,
+         "--json", "assets", "--jq", ".assets[].name"],
+        cwd=PROJECT_ROOT, check=True, capture_output=True, text=True,
+    )
+    return {line for line in result.stdout.splitlines() if line}
+
+
 def _publish(version_text: str) -> None:
     tag = f"v{version_text}"
+    expected = {INSTALLER_PATH.name, CHECKSUM_PATH.name}
     _run(["gh", "release", "create", tag,
           str(INSTALLER_PATH), str(CHECKSUM_PATH),
           "--repo", REPO, "--generate-notes"])
+
+    # gh release create uploads assets sequentially after creating the
+    # release object - a transient failure partway through (this store's
+    # connection has a documented history of exactly this) leaves a real,
+    # published release with a missing asset, exit code notwithstanding.
+    # This bit both the app teams's v1.0.10 AND v1.0.11 releases: Setup.exe
+    # landed, Setup.exe.sha256 silently did not, and poslib/updater.py
+    # correctly refused to apply the unverifiable update - but nobody
+    # noticed until an actual store install tried to update days later.
+    # Verify before declaring success instead of trusting the exit code.
+    missing = expected - _release_asset_names(tag)
+    if missing:
+        print(f"Retrying missing asset(s) after publish: {sorted(missing)}")
+        paths = {INSTALLER_PATH.name: INSTALLER_PATH, CHECKSUM_PATH.name: CHECKSUM_PATH}
+        for name in missing:
+            _run(["gh", "release", "upload", tag, str(paths[name]), "--repo", REPO])
+        still_missing = expected - _release_asset_names(tag)
+        if still_missing:
+            raise SystemExit(
+                f"Release {tag} is still missing asset(s) after retry: "
+                f"{sorted(still_missing)} - fix manually before trusting this release."
+            )
 
 
 def main() -> int:
