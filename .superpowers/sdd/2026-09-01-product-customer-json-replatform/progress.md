@@ -391,3 +391,110 @@ resumes should:
 finishing properly before Task 6 (deleting the old per-entity loops)
 starts. Task 6 is still hard-gated on Task 5 actually passing, per the
 plan's own instruction.
+
+## Task 5, Step 4: content/rendering fully verified locally (2026-09-09) - BLOCKED on a live push by a revoked Cloudflare token, not a code issue
+
+Resumed after a merge from `main` (see below) picked up `poslib/remote.py`'s
+real timeout/batching/retry fixes (`8e2b170` and everything after) that
+this branch was missing entirely - Task 5's live-push numbers from
+2026-09-05 were measured against the OLD pre-fix `remote.py`, worth
+knowing if revisited.
+
+**Merge from main**: `product-customer-json-replatform` was 18 commits
+behind `main` (missing the whole store #1 watcher-outage/timeout-bug/
+auto-update-hang saga - see CLAUDE.md). Merged clean, no conflicts
+(`50fbe90`). Fast suite re-run after merge: 418 passed, 1 pre-existing
+failure (same `dead_stock_value` drift already ruled acceptable at this
+worktree's own Setup section - nothing in this plan touches it).
+
+**Attempted a real forced refresh+export+push** (`ETL.refresh(force=True)`
++ `export_static.export(cfg)` + `remote.push_remote(cfg)`, same as Task 5
+Step 2's own instructions): export succeeded (942.1s, fresh real-DB
+data), but the push failed with `401 Client Error: Unauthorized` minting
+an upload token for `promakeupmihoubipos`. **Root cause confirmed, not
+guessed**: called Cloudflare's own `/user/tokens/verify` directly with
+this worktree's `.env` token - `{"success":false,"errors":[{"code":1000,
+"message":"Invalid API Token"}]}`. The token itself is dead (revoked or
+rotated since 2026-09-05, consistent with this project's own standing
+discipline of not leaving live tokens lying around). Checked the main
+checkout's own `.env` too - same dead token. **No live Cloudflare
+credential is available anywhere on this machine right now** - this
+needs a fresh disposable token from the user (same one-time-use pattern
+as every other live-account change documented in CLAUDE.md) before Task
+5 Steps 2-3 can be re-run and a real URL exists to phone-check against.
+
+**Interim file count/size** (fresh export, old per-entity loops from
+Task 4 still present - Task 6 not started): **12,935 files, 284 MB**
+(up slightly from the 2026-09-05 measurement of 12,695 files/250.7MB -
+consistent with real trade continuing on the live database since then,
+not a regression).
+
+**Given the live push is blocked, did the next best thing**: served the
+fresh `remote-site/` locally (`python -m http.server`) and drove it with
+gstack's `browse` skill to verify every item on Task 5 Step 4's checklist
+against the actual static files that would be pushed, not just unit
+tests:
+
+- **Product with purchase history + family, DB786/item 595**: renders
+  correctly - item name (mixed Arabic/Latin "DIAMOND BEAUTY ... DB786"),
+  family comparison section ("Famille diverse", 6.2% vs 9.0% average),
+  25-row sales history, and - the specific DB786 check the plan calls
+  out - the Purchase history table shows two distinct real cost figures
+  (2,550 DZD paid / 2,726 DZD running cost on one line, 2,800 DZD /
+  2,800 DZD on the other), not collapsed to one value. Zero console
+  errors beyond the known font gap (see below).
+- **Never-sold item, item 728**: `#rd-never-sold-banner` confirmed
+  actually visible (`is visible` returns true, not just present in
+  markup).
+- **Fully-empty item, item 56**: clean "No sales recorded."/"No
+  purchases recorded for this product." empty states, no blank table,
+  no JS error.
+- **Customer with a balance, id 14**: balance (3,720 DZD), "High risk"
+  credit-risk pill, and "Owes 3,720 DZD, 509 days since last purchase"
+  note all render correctly; real 40-row purchase history.
+- **Fully-empty customer, id 67**: clean "Has not bought anything
+  measurable yet."/"No purchases recorded."/"No account payments
+  recorded." empty states, no error.
+- **Arabic (`/ar/product.html?id=595`)**: `document.documentElement`
+  confirmed `dir="rtl"`/`lang="ar"` and computed `direction: rtl`; UI
+  strings correctly translated; thousands separator correctly
+  space-formatted per this locale ("157 500 DZD" style, not "157,500").
+- **Synced badge**: present and showing the correct fresh timestamp on
+  every page checked, all 3 languages.
+
+**One real false alarm, caught and ruled out before being reported as a
+bug** - worth recording since this project has a documented history of
+exactly this kind of premature "found a bug" mistake (see CLAUDE.md's
+Kaspersky/VPN red herring): the browse skill's plain-text extraction does
+NOT respect the `hidden` attribute - it initially looked like DB786's
+never-sold banner was incorrectly showing alongside real 54-unit sales
+data, which would have been a real bug in `remote-detail.js`'s
+`s.days_since_sale !== null` check. Verified directly instead of trusting
+that text output: `document.getElementById('rd-never-sold-banner').hidden`
+returned `true`, and an explicit visibility check also returned `false` -
+the element genuinely is hidden, the text-extraction command just doesn't
+honor `[hidden]` when flattening the DOM to text. **Lesson for next time
+this comes up**: check a conditionally-shown element's real hidden/visible
+state directly, don't trust flattened text output alone for anything
+gated by `hidden`.
+
+**One pre-existing, already-documented, unrelated gap re-confirmed**:
+every page load 404s on the Cairo web font files - this is CLAUDE.md's
+own "What's left" section, "Arabic web font not fetched
+(`tools/get_fonts.py` - harmless, falls back to Windows' own Arabic
+font)" - not caused by this plan's work, not a regression.
+
+**Still genuinely unconfirmed, and cannot be substituted for by local
+serving**: whether Cloudflare Access, once authenticated on the real
+gated domain, correctly serves these exact files the same way - this
+project has burned that exact shortcut before (see CLAUDE.md's
+`_redirects` bug history, "don't declare a deploy fully verified until
+the owner's phone confirms it"). **Task 5 is NOT being marked complete
+on the strength of local verification alone.** Needs, in order: (1) a
+fresh disposable Cloudflare token from the user, (2) re-run Step 2's
+real push (now against the merged-in fixed `remote.py`), (3) Step 3's
+before/after file count + cold/warm push timing (now against the fixed
+upload mechanics - worth re-measuring since the old 486s/722s numbers
+predate the timeout/batching fixes), (4) a phone or curl-based real-
+domain spot check of at least DB786 and the Arabic RTL page, matching
+what was just verified locally.
