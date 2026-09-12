@@ -599,3 +599,82 @@ gated). The owner then checked
 own device and confirmed it renders correctly ("everything sees fine").
 That's the plan's own real gate satisfied - **Task 5 is complete.**
 Proceeding to Task 6.
+
+## Task 6: implemented, tested, and live-pushed (2026-09-12)
+
+**Code changes** (`export_static.py`, `tests/test_export_static.py`):
+removed the old `products_dir = lang_dir / "products"` and
+`customers_dir = lang_dir / "customers"` per-entity-per-language HTML
+export loops entirely (the `products.json`/`customers.json` + shell
+architecture from Tasks 3/4 fully replaces them now); rewrote the module
+docstring's "Customer and product drill-down pages... ARE exported too,
+in full" paragraph to describe the new JSON+shell shape; removed the
+now-redundant `test_customer_and_product_drilldowns_are_exported` test
+(superseded by Task 3's `TestProductsCustomersJson`); updated
+`TestProductCustomerShells.test_writes_one_shell_per_language_not_per_entity`
+to assert the OLD per-entity directories are now **absent**
+(`assert not (out_dir / "en" / "products").exists()` /
+`.../"customers"`), per the plan's exact Step 3 instruction.
+`templates/product_detail.html`/`templates/customer_detail.html` and
+`app.py`'s local `/products/<id>`/`/customers/<id>` routes are untouched
+- confirmed unaffected, they serve the local live dashboard only.
+
+**Step 4 (full test file)**: `pytest tests/test_export_static.py -q` -
+**24 passed, 1 skipped, 0 failed** (real-database run, 6145.57s /
+1:42:25 - this run happened to land on a particularly loaded stretch of
+this shared till PC, consistent with this session's own earlier
+observation of highly variable real-DB export costs on this machine;
+not investigated further since the result itself, 0 failures, is what
+matters).
+
+**Full suite** (`pytest tests -q --deselect tests/test_export_static.py`):
+418 passed, 1 pre-existing failure (`dead_stock_value` drift, the exact
+same already-ruled-acceptable point-in-time figure from this worktree's
+own Setup section - nothing in Task 6 touches it), 25 deselected. No new
+regressions from Task 6's changes.
+
+**Step 5 (before/after file count and size)** - one real gotcha caught
+along the way: the first fresh export after this code change still
+showed 13,106 files, because `export_static.export()` never wipes its
+output directory first (only `mkdir(parents=True, exist_ok=True)`) - the
+old `en/products/`, `en/customers/` etc. directories from a *previous*
+export (predating Task 6) were still sitting on disk, untouched by the
+new code, and got miscounted as if the new code had regenerated them.
+Wiped `remote-site/` and re-exported from a genuinely clean slate to get
+a trustworthy number:
+
+- **Before Task 6** (2026-09-09 measurement, Task 5's own numbers, old
+  per-entity loops still present): 12,935 files, 284 MB.
+- **After Task 6** (this session, clean re-export, old loops actually
+  gone): **5,864 files, 89.2 MB** - confirmed via directory listing that
+  `en/products/`, `en/customers/` (and `ar`/`fr` equivalents) no longer
+  exist at all; only `static/`, `suppliers/`, `tickets/` remain per
+  language, plus the top-level `products.json`/`customers.json` and the
+  `product.html`/`customer.html` shells. A ~55% file-count and ~69%
+  size reduction, consistent with the plan's own stated goal of cutting
+  the per-entity-per-language tree down to 2 shared JSON files + 6 shell
+  pages.
+
+**Step 6 (live re-verification)**: pushed this clean export via
+`poslib.remote.push_remote(cfg)` - returned `True` in 398.8s. Since
+Cloudflare Pages Direct Upload fully replaces a deployment's entire file
+set on every push, this confirms the old per-entity URLs
+(`/en/products/<id>.html` etc.) are now gone from the live
+`promakeupmihoubipos.pages.dev` deployment - any stale bookmark to one
+should now hit the existing `404.html` "not available remotely" page,
+the same way any other never-exported static path already does.
+**Still needs the owner's own phone check** (same standing "don't
+declare a live deploy verified until the owner confirms it" discipline
+as every other live-deploy claim in this project) to close out Step 6
+for real - not yet done as of this note.
+
+**Commit**: `export_static.py` + `tests/test_export_static.py`,
+message `refactor(remote): remove now-redundant per-entity
+product/customer HTML export (JSON+shell replatform verified live)`,
+per the plan's own Step 7 text.
+
+This closes out every task in
+`docs/superpowers/plans/2026-09-01-product-customer-json-replatform.md`
+except the owner's final phone re-check above - once that lands, this
+whole plan is complete and the branch is ready to be considered for
+merging into `main`.

@@ -17,14 +17,27 @@ request carries `?__static__=1` (added below) - every real local request
 never sets it, so this export can share 100% of the routes/templates with
 zero behavioural change to the live local server.
 
-Customer and product drill-down pages (/customers/<id>, /products/<id>)
-ARE exported too, in full, for every real customer/product - unlike
-tickets, these don't grow without bound day after day; they're catalog/
-roster sizes (roughly 600 customers, 1,600 products here) that grow
-slowly, the same reasoning that already applied to purchases below. The
-anonymous walk-in till (customer_id matching `Metrics.walkin_id`) has no
-profile of its own (`customer_profile()` returns None for it) and is
-skipped, same as it always was locally.
+Customer and product drill-downs are exported too, in full, for every
+real customer/product - unlike tickets, these don't grow without bound
+day after day; they're catalog/roster sizes (roughly 600 customers,
+1,600 products here) that grow slowly, the same reasoning that already
+applies to purchases below. Unlike every other page here, these are NOT
+one pre-rendered file per entity per language (that was the original
+design - see
+docs/superpowers/plans/2026-09-01-product-customer-json-replatform.md
+for why it was replaced): a single `products.json`/`customers.json` (all
+entities, no per-language variant - the same "one JSON file" shape as
+`stock.json` below) is fetched client-side by one `product.html`/
+`customer.html` shell per language (`templates/product_shell.html`/
+`templates/customer_shell.html`, rendered via `static/remote-detail.js`),
+which reads the entity id from its own query string and fills itself in.
+This cut the file count for this piece of the export from ~13,600 files
+(2 x 1 per entity per language) to 2 JSON files + 6 shell pages (2 x 3
+languages), while keeping the exact same information on the page - only
+the client-side JS knows how to format it now, not Jinja. The anonymous
+walk-in till (customer_id matching `Metrics.walkin_id`) has no profile of
+its own (`customer_profile()` returns None for it) and is skipped, same
+as it always was.
 
 Ticket drill-downs (/tickets/<id>) ARE exported too, but only for the
 recent window `DRILLDOWN_WINDOW_DAYS` covers - a ticket from years ago is
@@ -277,14 +290,12 @@ def export(cfg: Config | None = None) -> Path:
         (out_dir / "_headers").write_text(
             f"/{stock_filename}\n  Access-Control-Allow-Origin: *\n", encoding="utf-8")
 
-        # Products/customers detail, replatformed from per-entity-per-
-        # language pre-rendered HTML (see the old products_dir/customers_dir
-        # loops further down, still present in parallel - see
-        # docs/superpowers/plans/2026-09-01-product-customer-json-replatform.md)
-        # to two JSON payloads consumed by templates/product_shell.html and
-        # templates/customer_shell.html client-side, the same "one JSON
-        # file, all entities, no per-language variant" shape as stock.json
-        # above. Every value here is exactly what row_dict()/rows() already
+        # Products/customers detail: one JSON payload per entity type,
+        # consumed by templates/product_shell.html and
+        # templates/customer_shell.html client-side (see the module
+        # docstring above for the full "why" and the replatform plan this
+        # replaced the old per-entity-per-language HTML export with).
+        # Every value here is exactly what row_dict()/rows() already
         # produce for the live local dashboard - only the datetime -> ISO
         # string conversion (_json_safe) differs, since JSON has no native
         # datetime type.
@@ -410,46 +421,6 @@ def export(cfg: Config | None = None) -> Path:
                     )
                 (purchases_dir / f"{purchase_id}.html").write_text(html, encoding="utf-8")
 
-            products_dir = lang_dir / "products"
-            products_dir.mkdir(parents=True, exist_ok=True)
-            for item_id in item_ids:
-                profile = m.product_profile(item_id)
-                if profile is None:
-                    raise RuntimeError(f"item {item_id} vanished mid-export")
-                competitor_prices = ownerdata.competitor_prices_for_item(cfg, item_id)
-                with app.test_request_context(
-                        f"/products/{item_id}?lang={lang}&__static__=1",
-                        environ_overrides={"SCRIPT_NAME": f"/{lang}"}):
-                    html = render_template(
-                        "product_detail.html",
-                        summary=row_dict(profile["summary"]),
-                        family=row_dict(profile["family"]),
-                        sales_history=rows(profile["sales_history"], limit=200),
-                        purchase_history=rows(profile["purchase_history"], limit=200),
-                        competitor_prices=rows(competitor_prices),
-                        form_error=None,
-                        cache=cache_info,
-                    )
-                (products_dir / f"{item_id}.html").write_text(html, encoding="utf-8")
-
-            customers_dir = lang_dir / "customers"
-            customers_dir.mkdir(parents=True, exist_ok=True)
-            for customer_id in customer_ids:
-                profile = m.customer_profile(customer_id)
-                if profile is None:
-                    raise RuntimeError(f"customer {customer_id} vanished mid-export")
-                with app.test_request_context(
-                        f"/customers/{customer_id}?lang={lang}&__static__=1",
-                        environ_overrides={"SCRIPT_NAME": f"/{lang}"}):
-                    html = render_template(
-                        "customer_detail.html",
-                        summary=row_dict(profile["summary"]),
-                        receivable=row_dict(profile["receivable"]),
-                        purchases=rows(profile["purchases"], limit=200),
-                        payments=rows(profile["payments"], limit=100),
-                        cache=cache_info,
-                    )
-                (customers_dir / f"{customer_id}.html").write_text(html, encoding="utf-8")
     finally:
         conn.close()
 
@@ -466,11 +437,15 @@ def export(cfg: Config | None = None) -> Path:
     (out_dir / "status.json").write_text(
         json.dumps(status, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    # +2 per language: product.html/customer.html, the two client-rendered
+    # shells - real per-language files, unlike products.json/customers.json
+    # below (one shared file each, not per-language, so they don't belong
+    # in a "pages x languages" count at all).
     total_per_lang = (len(PAGES) + len(NESTED_PAGES) + len(presets) + len(ticket_ids)
-                       + len(purchase_ids) + len(item_ids) + len(customer_ids))
+                       + len(purchase_ids) + 2)
     log.info("Static export written to %s (%d pages x %d languages, "
-             "%d tickets within the last %d days + %d purchases + "
-             "%d products + %d customers)",
+             "%d tickets within the last %d days + %d purchases, "
+             "products.json (%d products) + customers.json (%d customers))",
              out_dir, total_per_lang, len(LANGUAGES),
              len(ticket_ids), DRILLDOWN_WINDOW_DAYS, len(purchase_ids),
              len(item_ids), len(customer_ids))

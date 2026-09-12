@@ -152,38 +152,6 @@ class TestExport:
         assert 'id="refresh-btn"' not in html
         assert "/export?lang=" not in html
 
-    def test_customer_and_product_drilldowns_are_exported(self, cfg, metrics, monkeypatch, tmp_path):
-        """
-        Customer/product detail pages are exported in full, same as
-        purchases - there are only ~1,600 products and ~660 customers in
-        this database, the same catalog/roster order of magnitude as
-        purchases (already exported without a window), not an
-        unboundedly-growing series like tickets. The walk-in till
-        account has no real profile and must be skipped.
-        """
-        _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
-        out_dir = export_static.export(cfg)
-
-        catalog = metrics.catalog()
-        real_customer_ids = metrics.customers.loc[
-            metrics.customers["customer_id"] != metrics.walkin_id, "customer_id"]
-
-        for lang in LANGUAGES:
-            products_dir = out_dir / lang / "products"
-            customers_dir = out_dir / lang / "customers"
-            assert products_dir.is_dir(), f"missing {products_dir}"
-            assert customers_dir.is_dir(), f"missing {customers_dir}"
-
-            product_files = {p.stem for p in products_dir.glob("*.html")}
-            customer_files = {p.stem for p in customers_dir.glob("*.html")}
-            assert product_files == {str(int(i)) for i in catalog["item_id"]}
-            assert customer_files == {str(int(i)) for i in real_customer_ids}
-            assert str(int(metrics.walkin_id)) not in customer_files
-
-            html = (products_dir / f"{product_files.pop()}.html").read_text(encoding="utf-8")
-            assert "Traceback" not in html
-            assert "Undefined" not in html
-
     def test_ticket_and_purchase_drilldowns_are_exported(self, cfg, monkeypatch, tmp_path):
         """
         Unlike customer/product, ticket and purchase drill-downs ARE
@@ -381,10 +349,11 @@ class TestProductCustomerShells:
         for lang in LANGUAGES:
             assert (out_dir / lang / "product.html").is_file()
             assert (out_dir / lang / "customer.html").is_file()
-        # The old per-entity trees still exist too (parallel path, not
-        # removed until Task 6) - both must be true right now.
-        assert (out_dir / "en" / "products").is_dir()
-        assert (out_dir / "en" / "customers").is_dir()
+        # The old per-entity-per-language trees are gone (Task 6 removed
+        # them) - products.json/customers.json + the shells above are the
+        # only way this data is exported now.
+        assert not (out_dir / "en" / "products").exists()
+        assert not (out_dir / "en" / "customers").exists()
 
     def test_shell_contains_static_labels_and_fetch_call(self, cfg, monkeypatch, tmp_path):
         _cfg_with_export_dir(monkeypatch, cfg, tmp_path)
