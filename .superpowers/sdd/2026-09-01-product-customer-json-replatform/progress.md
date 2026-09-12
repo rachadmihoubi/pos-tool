@@ -588,3 +588,14 @@ name, two distinct purchase costs, family comparison), that satisfies
 Step 4 and Task 5 can be marked passed; if this session's own
 connectivity recovers first, retry the Python `requests` check above
 before waiting further on the user.
+
+## Task 5: PASSED (2026-09-12)
+
+This session's own connectivity recovered first - retried the
+unauthenticated `requests` check and got the same Access-login redirect
+as before (confirming the deployment is still live and still correctly
+gated). The owner then checked
+`https://promakeupmihoubipos.pages.dev/en/product.html?id=595` from his
+own device and confirmed it renders correctly ("everything sees fine").
+That's the plan's own real gate satisfied - **Task 5 is complete.**
+Proceeding to Task 6.
