@@ -22,6 +22,7 @@ PROJECT_ROOT = Path(SPECPATH).resolve().parent
 datas = [
     (str(PROJECT_ROOT / "templates"), "templates"),
     (str(PROJECT_ROOT / "static" / "style.css"), "static"),
+    (str(PROJECT_ROOT / "static" / "remote-detail.js"), "static"),
     (str(PROJECT_ROOT / "locales" / "en.json"), "locales"),
     (str(PROJECT_ROOT / "locales" / "fr.json"), "locales"),
     (str(PROJECT_ROOT / "locales" / "ar.json"), "locales"),
