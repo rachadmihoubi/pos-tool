@@ -593,8 +593,12 @@ class TestUpdateInProgressMarker:
         assert updater.update_in_progress() is True
 
     def test_expired_marker_means_no_update_in_progress(self, _isolated_data_dir):
+        # Older than _UPDATE_IN_PROGRESS_EXPIRY_SECONDS (10h) - this is
+        # only ever the backstop for an update that never let a fresh
+        # watcher start to clear the marker itself (see
+        # clear_update_in_progress), so it must be well past that.
         old = (updater.datetime.datetime.now(updater.datetime.timezone.utc)
-               - updater.datetime.timedelta(hours=5))
+               - updater.datetime.timedelta(hours=11))
         (_isolated_data_dir / "update_in_progress.txt").write_text(
             old.isoformat(), encoding="utf-8")
         assert updater.update_in_progress() is False
@@ -629,3 +633,19 @@ class TestUpdateInProgressMarker:
 
         assert updater.launch_silent_install(installer) is True
         assert order == ["mark", "close", "popen"]
+
+    def test_clear_removes_an_existing_marker(self, _isolated_data_dir):
+        updater._mark_update_in_progress()
+        assert updater.update_in_progress() is True
+
+        updater.clear_update_in_progress()
+
+        assert updater.update_in_progress() is False
+
+    def test_clear_never_raises_when_no_marker_exists(self, _isolated_data_dir):
+        updater.clear_update_in_progress()  # must not raise
+
+    def test_clear_never_raises_when_the_directory_does_not_exist(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(updater, "_update_in_progress_path",
+                            lambda: tmp_path / "nonexistent" / "nested" / "f.txt")
+        updater.clear_update_in_progress()  # must not raise

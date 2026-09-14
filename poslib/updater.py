@@ -313,12 +313,19 @@ def _close_other_running_instances() -> None:
 # (CloseApplications negotiating with a still-running process) reappearing
 # through a different door.
 _UPDATE_IN_PROGRESS_FILE_NAME = "update_in_progress.txt"
-# Generous on purpose - must comfortably outlast the slowest real update
-# already observed on this store (multiple hours) so the marker can never
-# expire mid-install. A stale marker just means the Watchdog stays
-# passive a bit longer than strictly necessary after a genuinely failed
-# update - far cheaper than the alternative.
-_UPDATE_IN_PROGRESS_EXPIRY_SECONDS = 4 * 60 * 60
+# A pure backstop, not the primary way this clears - watcher.py's own
+# Watcher.run() clears the marker directly at startup (a live watcher
+# proves the install released its files), which is the common case.
+# This only matters for a genuinely failed/stuck update that never lets a
+# fresh watcher start, so it must comfortably outlast the slowest real
+# update already observed on this store (CLAUDE.md records v1.0.11 taking
+# "several hours longer than expected") - opus-reviewer follow-up finding,
+# 2026-09-14: the original 4h value was not comfortable margin over that
+# and, since nothing cleared the marker early, a FAILED update also left
+# the Watchdog muzzled for the full window regardless of outcome. Raised
+# to 10h and paired with the explicit early-clear below to fix both
+# halves at once.
+_UPDATE_IN_PROGRESS_EXPIRY_SECONDS = 10 * 60 * 60
 
 
 def _update_in_progress_path() -> Path:
@@ -331,6 +338,23 @@ def _mark_update_in_progress() -> None:
             datetime.datetime.now(datetime.timezone.utc).isoformat(), encoding="utf-8")
     except OSError:
         log.debug("Could not write the update-in-progress marker", exc_info=True)
+
+
+def clear_update_in_progress() -> None:
+    """
+    Called once by Watcher.run() at the very top of every startup - a
+    live watcher process is direct proof any update that was in flight
+    has either finished (successfully or not) and released the files it
+    needed, so there is nothing left for the marker to protect. This is
+    the common-case clear; _UPDATE_IN_PROGRESS_EXPIRY_SECONDS above is
+    only the backstop for the case where no fresh watcher ever starts at
+    all. Never raises - a failure to delete a file that may not even
+    exist is not an error.
+    """
+    try:
+        _update_in_progress_path().unlink(missing_ok=True)
+    except OSError:
+        log.debug("Could not clear the update-in-progress marker", exc_info=True)
 
 
 def update_in_progress() -> bool:

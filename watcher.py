@@ -495,6 +495,14 @@ class Watcher:
                  int(self.cfg.get("digest.hour", 20)),
                  int(self.cfg.get("digest.minute", 0)))
 
+        # A live watcher is direct proof any update that was in flight has
+        # finished and released the files it needed - clears
+        # ensure_watcher_running's update-in-progress guard immediately
+        # rather than relying only on its own multi-hour backstop expiry.
+        # Opus-reviewer follow-up finding, 2026-09-14.
+        from poslib.updater import clear_update_in_progress
+        clear_update_in_progress()
+
         # Written before the startup rebuild below (which can itself take
         # minutes on a slow first read) rather than after, so there is no
         # heartbeat-less window right at process start - opus-reviewer

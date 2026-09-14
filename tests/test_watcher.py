@@ -91,6 +91,39 @@ class TestHeartbeat:
         watcher._write_heartbeat()  # must not raise
 
 
+class TestRunHidden:
+    """
+    Regression coverage for an opus-reviewer finding, 2026-09-14: a
+    schtasks.exe/powershell.exe child launched from a console=False
+    PyInstaller build (no console of its own to inherit) gets a NEW,
+    visible console allocated unless creationflags explicitly suppresses
+    it - capture_output alone does not prevent this. Without this test,
+    reverting the CREATE_NO_WINDOW fix would leave the rest of the suite
+    green (every other test only checks the returned CompletedProcess,
+    never the kwargs the real call was made with).
+    """
+
+    def test_passes_create_no_window(self, monkeypatch):
+        seen_kwargs = {}
+
+        def fake_run(cmd, **kwargs):
+            seen_kwargs.update(kwargs)
+            return watcher.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        monkeypatch.setattr(watcher.subprocess, "run", fake_run)
+
+        watcher._run_hidden(["schtasks", "/query"])
+
+        assert seen_kwargs.get("creationflags") == watcher._NO_WINDOW
+        assert watcher._NO_WINDOW != 0  # the flag must actually be set on this platform
+
+    def test_never_raises_on_decode_error(self, monkeypatch):
+        def _raise(*a, **k):
+            raise UnicodeDecodeError("cp1252", b"\x81", 0, 1, "invalid byte")
+        monkeypatch.setattr(watcher.subprocess, "run", _raise)
+
+        assert watcher._run_hidden(["schtasks", "/query"]) is None
+
+
 def _fake_powershell_state(state: str):
     """A fake subprocess.run matching _run_hidden's Get-ScheduledTask call shape."""
     def fake_run(cmd, **k):
@@ -297,6 +330,54 @@ class TestSafeLoopIteration:
 
         with pytest.raises(KeyboardInterrupt):
             w._safe_loop_iteration()
+
+
+class _FakeObserver:
+    """A no-op stand-in for watchdog.observers.Observer - this test suite
+    has no interest in real filesystem-event delivery."""
+
+    def schedule(self, *a, **k):
+        pass
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def join(self, timeout=None):
+        pass
+
+
+class TestRunStartup:
+    """
+    Exercises Watcher.run()'s startup sequence (everything before the
+    main loop) without ever entering the loop itself - stop() is called
+    up front, so `while not self._stop.is_set()` is immediately False.
+    """
+
+    def test_clears_update_in_progress_at_startup(self, monkeypatch, tmp_path):
+        """
+        Regression coverage for an opus-reviewer follow-up finding,
+        2026-09-14: a live watcher starting is direct proof any update
+        that was in flight has finished, so the update-in-progress guard
+        (poslib.updater.update_in_progress, read by
+        ensure_watcher_running) must be cleared immediately here rather
+        than relying only on its own multi-hour backstop expiry.
+        """
+        import poslib.updater as updater_module
+        monkeypatch.setattr(watcher, "Observer", _FakeObserver)
+        calls = []
+        monkeypatch.setattr(updater_module, "clear_update_in_progress",
+                            lambda: calls.append(1))
+
+        w = watcher.Watcher(_FakeConfig(tmp_path))
+        monkeypatch.setattr(w, "rebuild", lambda *a, **k: None)
+        w.stop()  # so the loop body never actually runs
+
+        w.run()
+
+        assert calls == [1]
 
 
 class TestLoopIterationWritesHeartbeat:
