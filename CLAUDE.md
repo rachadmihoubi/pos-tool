@@ -2401,44 +2401,91 @@ on every attempt) is working again. Both bugs are closed per this file's
 own hard rule — root-caused, opus-reviewed, and shipped as a real
 `Setup.exe` release, not just a commit on `main`.
 
-## What's left (optional, not blocking)
+## What's left — audited fresh 2026-09-14, checked against the real running store, not just old notes
 
-- **DONE 2026-08-31 — adding a newly provisioned store to the cross-store
-  hub is now automatic**, no longer a manual step. See "Cross-store hub
-  auto-registration + installer reliability fixes" above for the full
-  design, the live cutover, and two real installer bugs (Updater
-  scheduled task, a v1.0.5 version-mismatch) found and fixed the same
-  session. Current recommended build: `v1.0.7`.
-- **Fix implemented and unit-tested 2026-08-31 (a later, separate
-  autonomous session), NOT yet live-verified** — see "Full-export push
-  reliability fix" below for the full detail and, critically, a bigger
-  unrelated finding from the same session: this machine currently has
-  **no packaged install at all**, so `promakeupboumati.pages.dev` has no
-  live content source right now regardless of this fix.
-- **`.env` is empty on every machine** (gitignored, by design). Email and
-  Telegram digest channels are wired up but need real credentials. WhatsApp
-  additionally needs Meta template approval — see
-  `poslib/channels/whatsapp_channel.py` before turning it on.
+Everything below was verified directly this session (real config files,
+real services, real log/data directories on store #1's actual till PC),
+not assumed from earlier write-ups elsewhere in this file — several of
+which had gone stale (e.g. an old note here claiming "no packaged install
+at all" — there now is one, real, running, on `v1.0.17`).
+
+**Real, currently-open items:**
+
+- **The daily digest has no remote delivery channel enabled on the real
+  store.** Checked directly: `email.enabled`, `telegram.enabled`, and
+  `whatsapp.enabled` are all `false` in the real install's own
+  `config.yaml`, and every credential in its `.env`
+  (`SMTP_PASSWORD`/`SMTP_USERNAME`/`TELEGRAM_BOT_TOKEN`/
+  `TELEGRAM_CHAT_ID`/`WHATSAPP_ACCESS_TOKEN`) is blank. Only the `file`
+  channel is on, which just saves the digest as a local HTML/PDF on the
+  till PC itself — nobody reads it there. **This directly undercuts the
+  brand-new remote-sync staleness warning (v1.0.17, see above)**: the
+  whole point of that warning is a visible signal reaching the
+  *owner*, but right now the digest that carries it never leaves the
+  till PC. Needs real SMTP or Telegram bot credentials before that
+  warning can actually do its job. WhatsApp additionally needs Meta
+  template approval — see `poslib/channels/whatsapp_channel.py`.
+  Separately confirmed: no digest has actually run yet since the most
+  recent reinstalls (`digests/` doesn't exist on the real install) —
+  not a bug, it's just not 20:00 (the configured `digest.hour`) yet
+  today.
+- **Only 1 of the owner's 3 stores (Boumati) has ever been set up.**
+  Setif and Eulma are named exactly once in this whole file (the
+  "Boumati/this one, Setif, Eulma" note) — neither has a packaged
+  install, a Cloudflare project, or any provisioning work done at all.
+  This is the actual next major milestone for the "customer
+  distribution" effort, not a bug — the installer + auto-provisioning
+  flow (Component 5) exists and is proven on store #1, so the mechanism
+  itself doesn't need building, just running for the other two stores
+  whenever the owner is ready.
+- **Hub search cost/price real security fix — deferred, not rejected**
+  (see "Hub search shows cost, not price" above): the `stock-<token>.json`
+  unguessable-filename gate is a real, accepted tradeoff, not a bug, but
+  the *actually*-correct fix (every store + the hub on subdomains of one
+  real domain, so Cloudflare Access can share one login session and the
+  Bypass-policy gate isn't needed at all) needs the owner to own a
+  domain. Not started because that precondition was never met, not
+  because of any remaining technical blocker.
 - **Arabic web font not fetched** (`tools/get_fonts.py` — harmless, falls
-  back to Windows' own Arabic font).
-- **Patch #1 (expiry stock) was explicitly dropped** — see discovery #6.
+  back to Windows' own Arabic font). Unchanged, still true, still low
+  priority.
 - **Task 14's manual spot-check against a live POS screenshot was not
-  done** — it needs a screenshot from the shop owner, which wasn't
-  available this session. The programmatic tender/on-account
-  reconciliation (discovery #9) is the automated substitute; a manual
-  screenshot comparison is still worth doing next time the owner is
-  available, per the plan's Task 14 Step 2.
+  done** — still needs a screenshot from the shop owner. The programmatic
+  tender/on-account reconciliation (discovery #9) is the automated
+  substitute in the meantime.
+- **The auto-update "already up to date, do nothing" path still hasn't
+  been explicitly confirmed against a real log line** — every real
+  Updater-task run observed so far has been checking-into-a-real-newer-
+  release, never checking-while-already-current. Low risk (the code path
+  is simple, `check_for_update` just returns `None`), will get exercised
+  naturally the next time the till PC logs in already on the latest
+  version — not worth chasing deliberately.
+
+**Confirmed NOT open (checked directly this session, despite older notes
+elsewhere in this file that might read as unresolved):**
+
+- Kaspersky's core protection (`AVP21.26`) is running on the real till
+  PC — re-confirmed directly, closing out the 2026-09-05 network-
+  diagnostic session's own loose end about this ("had NOT yet been
+  confirmed turned back on"). Its separate VPN component (`KSDE5.7`) is
+  stopped, which is fine — that was a red herring even at the time, per
+  that session's own write-up, not something that needs to be running.
+- A real packaged install exists and is current (`v1.0.17`) — an older
+  note in this file describing "no packaged install at all" describes a
+  since-superseded state, not today's.
+- The hub's Access-app wildcard-scoping gap (Task 1, Component 5) was
+  fixed the same day it was found (2026-08-29) — an earlier "still-open"
+  note above describes the moment it was *found*, not its final state.
+- Bugs #1-#4 (store #1 watcher/auto-update reliability) and the
+  self-healing 3-part fix Bug #2's own section had proposed but left
+  unbuilt are now **all** shipped and live-verified — see "Two real bugs
+  found live on store #1 after merging the replatform" above.
+- **Patch #1 (expiry stock) was explicitly dropped** — see discovery #6,
+  an intentional decision, not an open item.
 - Nothing else from Patch #2/#3/#4 is outstanding. New metrics belong in
   `poslib/metrics.py`, new diagnostic rules in `poslib/diagnostics.py`, new
   owner-entered data in `poslib/ownerdata.py` (never in a file `etl.py`
   rebuilds) — see the architecture rules at the bottom of `README.md`.
-- **Work tree cleaned 2026-08-26**: removed `build/`, `dist/`,
-  `dist-installer/` (regenerable PyInstaller/Inno Setup output),
-  `.wrangler/` (stale, wrangler no longer used), `__pycache__`/
-  `.pytest_cache` (regenerable), and `graphify-out/` (stray unrelated
-  `/graphify` skill output). All were already gitignored — nothing tracked
-  changed. Real data (`data/`, `digests/`, `backups/`, `cache.db`,
-  `logs/`, `remote-site/`, `static/photo-cache/`) was left untouched.
 
 ## Environment note
 
