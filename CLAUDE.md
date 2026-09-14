@@ -2302,9 +2302,104 @@ file-count and ~69% size reduction. Pushed live
 fully replaces a deployment's file set on every push, the old
 per-entity URLs are now gone from the live site (a stale bookmark to one
 falls through to the existing `404.html` "not available remotely"
-page). **Still needs the owner's own phone re-check** before Task 6's
-own Step 6 (and this whole plan) is considered fully closed — not yet
-done as of this note.
+page). **Owner-confirmed 2026-09-12** ("everything sees fine") — Task 6
+Step 6 and this whole plan are complete. Branch merged to `main`
+(fast-forward, `a138fff`), worktree removed.
+
+## Two real bugs found live on store #1 after merging the replatform, both fixed and shipped (2026-09-14)
+
+Right after the replatform above landed in a real release (v1.0.15), the
+owner restarted store #1's till PC to watch the auto-update happen live
+(per his own request, having just learned how the mechanism works) — and
+that live exercise surfaced two more genuinely real production bugs, each
+root-caused, opus-reviewed, and shipped the same session.
+
+### Bug: `static/remote-detail.js` never bundled into the installer — fixed in v1.0.16
+
+The replatform's own Task 2 added `static/remote-detail.js` (the
+client-rendered product/customer shell's JS) back on 2026-09-01, but
+`packaging/pos-tool.spec`'s explicit `datas` allowlist was never updated
+to bundle it — only `static/style.css` was. Invisible until v1.0.15
+actually shipped code that depends on the file at export time: every
+real watcher export/push attempt on store #1 crashed identically with
+`FileNotFoundError` at `export_static.py`'s `shutil.copy2` call, visible
+directly in `%LOCALAPPDATA%\Shop Analysis\logs\pos-tool.log`. Slipped
+past the whole test suite because pytest always runs in dev mode, where
+`PROJECT_ROOT` (`poslib.paths.app_root()`) resolves to the real source
+tree — this failure mode only exists in a frozen build, which no
+existing test exercised. Fixed by adding the missing `datas` entry, plus
+a new fast regression test (`tests/test_packaging_spec.py`) that
+statically cross-checks every `static/` file `export_static.py`
+`copy2`'s (and every file a template references via
+`url_for('static', ...)`, the other real consumer of `static/` in a
+frozen build) against the spec's bundle list — no real PyInstaller build
+needed, so this class of gap is now caught by the normal test suite.
+Opus-reviewer-confirmed correct and complete (checked broadly for any
+OTHER similarly-missing file — none found). Shipped as `v1.0.16`.
+
+### Bug #2's proposed fix, finally built and shipped — v1.0.17
+
+CLAUDE.md's own "Store #1 watcher outage + timeout bug" section
+(2026-09-05) had proposed a 3-part fix for Bug #2 (the watcher dying
+silently with nothing to bring it back) but explicitly left it
+unimplemented. Built this session, all 3 parts:
+
+1. **`Watcher.run()`'s main loop hardened** — every pass now runs
+   through a new `_safe_loop_iteration()` wrapper catching any
+   `Exception` (never `BaseException` — `KeyboardInterrupt` still
+   propagates correctly, checked explicitly) and logging+continuing
+   instead of letting a single unexpected exception kill the whole
+   process silently.
+2. **A heartbeat file + self-healing "Shop Analysis - Watchdog"
+   scheduled task**, recurring every 10 minutes, restarting the Watcher
+   task via `schtasks /run` if the heartbeat has gone stale (50 min —
+   raised from an initial 15 min after review found a real busy push can
+   take ~40-45 min) and Task Scheduler itself confirms the task isn't
+   already running.
+3. **A "remote sync last succeeded N hours ago" warning** in the daily
+   digest when `remote.enabled` and the last successful push is older
+   than `remote.stale_warning_hours` (default 24) — never warns before
+   the very first successful push.
+
+**Two full opus-reviewer passes, the first of which caught a bug that
+would have made the entire fix a silent no-op on this exact store**:
+`_watcher_task_is_running()` originally parsed `schtasks /query`'s own
+text output for an English "Status: Running"/"Ready" line — but schtasks
+localizes that VALUE to the OS display language, and store #1's till PC
+runs **French Windows** (`Statut: En cours`/`Prêt`). Proven live on this
+machine, not just plausible. Fixed by switching to PowerShell's
+`(Get-ScheduledTask -TaskName '...').State.ToString()`, independently
+re-verified live to return a culture-invariant `"Running"`/`"Ready"`
+regardless of OS language. The same review pass also caught: the new
+Watchdog task's `[Run]`-section creation in `packaging/setup.iss` was
+correctly `skipifsilent` (to avoid a silent auto-update baking SYSTEM as
+its principal) but that meant it would **never** be created on any
+already-installed store, only a fresh interactive install — fixed by
+having the watcher itself self-heal the task's existence at every
+startup instead (`watcher.py::_ensure_watchdog_task_exists`, idempotent,
+frozen builds only); and a missing `CREATE_NO_WINDOW` that would have
+flashed a console window on the till screen every 10 minutes — fixed via
+a shared `_run_hidden()` helper (which also fixed a `UnicodeDecodeError`
+risk on schtasks' OEM-codepage output). A second, smaller review pass
+caught that a real auto-update in progress (has taken multiple hours on
+this store before) could have the new Watchdog restart the watcher
+mid-install, reintroducing Bug #3's own file-lock hang class — fixed
+with an `update_in_progress` marker (`poslib/updater.py`, written before
+`Popen`, cleared immediately at the next real watcher startup, 10h
+backstop expiry) that `ensure_watcher_running()` checks first.
+
+**Fully live-verified, 2026-09-14, on the real store**: the owner
+restarted store #1's till PC specifically to watch this happen —
+`v1.0.16`'s auto-update applied cleanly (confirmed via
+`C:\Program Files\Shop Analysis\VERSION` and a clean `setup-update.log`,
+zero `Message box` lines), which then surfaced the `remote-detail.js`
+crash live; `v1.0.17` (containing both fixes) was built, opus-reviewed
+twice, shipped, and auto-updated onto the same till PC on its own next
+Updater cycle — owner-confirmed: the `v1.0.17` version badge is showing
+on the live remote dashboard, and the remote push (previously crashing
+on every attempt) is working again. Both bugs are closed per this file's
+own hard rule — root-caused, opus-reviewed, and shipped as a real
+`Setup.exe` release, not just a commit on `main`.
 
 ## What's left (optional, not blocking)
 
