@@ -243,7 +243,9 @@
 
   "remote": {
     "generated_note": "تم إنشاء هذه اللقطة {when}. إذا كان حاسوب المتجر مطفأً، تستمر هذه الصفحة في عرض هذه اللقطة حتى يعود.",
-    "synced_badge": "تمت المزامنة {when}"
+    "synced_badge": "تمت المزامنة {when}",
+    "app_version_badge": "الإصدار {version}",
+    "app_version_note": "إصدار التطبيق المثبت: {version}"
   },
 
   "customers": {

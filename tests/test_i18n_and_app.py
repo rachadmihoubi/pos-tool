@@ -316,6 +316,25 @@ class TestDashboard:
         body = client.get("/today?__static__=1").get_data(as_text=True)
         assert 'id="refresh-btn"' not in body
 
+    def test_static_marker_shows_the_installed_app_version(self, client):
+        """
+        Regression coverage for a real bug (2026-09-14): the badge shown
+        here reads cache.tool_version, which used to come from a hardcoded,
+        never-updated poslib.__version__ ("1.0.0" since the project's first
+        commit) instead of the real installed VERSION file - see
+        tests/test_etl_version.py for the fix itself. This just confirms
+        the remote page actually surfaces some real "vX.Y.Z"-shaped
+        version, not that it hides behind an empty/falsy cache.tool_version.
+        """
+        body = client.get("/today?__static__=1").get_data(as_text=True)
+        assert re.search(r"badge-version[^>]*>[^<]*\d+\.\d+\.\d+", body), \
+            f"no app-version badge with a real X.Y.Z version found in: {body!r}"
+
+    def test_normal_requests_do_not_show_the_version_badge(self, client):
+        """The version badge is a remote-only aid, same as the Synced badge."""
+        body = client.get("/today").get_data(as_text=True)
+        assert "badge-version" not in body
+
 
 class TestCompetitorPriceRoutes:
     """

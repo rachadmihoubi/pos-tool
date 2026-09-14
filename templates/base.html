@@ -24,6 +24,11 @@
         {{ t('remote.synced_badge', when=t.datetime(cache.parsed_at)) }}
       </span>
     {% endif %}
+    {% if is_static_export and cache and cache.tool_version %}
+      <span class="badge badge-version" title="{{ t('remote.app_version_note', version=cache.tool_version) }}">
+        {{ t('remote.app_version_badge', version=cache.tool_version) }}
+      </span>
+    {% endif %}
     {% if not is_static_export %}
       <button type="button" class="btn" id="refresh-btn" title="{{ t('app.refresh') }}">
         <span id="refresh-label">{{ t('app.refresh') }}</span>

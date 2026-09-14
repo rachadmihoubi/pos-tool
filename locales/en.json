@@ -243,7 +243,9 @@
 
   "remote": {
     "generated_note": "This snapshot was generated {when}. If the store PC is off, this page keeps showing this snapshot until it comes back.",
-    "synced_badge": "Synced {when}"
+    "synced_badge": "Synced {when}",
+    "app_version_badge": "v{version}",
+    "app_version_note": "Installed app version: {version}"
   },
 
   "customers": {

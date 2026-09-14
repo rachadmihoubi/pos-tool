@@ -243,7 +243,9 @@
 
   "remote": {
     "generated_note": "Cet instantané a été généré {when}. Si le PC du magasin est éteint, cette page continue d'afficher cet instantané jusqu'à son retour.",
-    "synced_badge": "Synchronisé {when}"
+    "synced_badge": "Synchronisé {when}",
+    "app_version_badge": "v{version}",
+    "app_version_note": "Version de l'application installée : {version}"
   },
 
   "customers": {

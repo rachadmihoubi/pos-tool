@@ -646,8 +646,16 @@ def _to_sqlite(value: Any, col_type: int) -> Any:
 
 
 def _tool_version() -> str:
-    from . import __version__
-    return __version__
+    """
+    This build's own version, as a "X.Y.Z" string - the same VERSION file
+    poslib.updater.current_version() reads (bumped every real release),
+    not poslib.__version__ (a hardcoded constant that was never updated
+    past its original "1.0.0" and so could never detect a real version
+    change - see this module's cache-rebuild-after-tool-update check just
+    above, and tests/test_etl_version.py).
+    """
+    from . import updater
+    return "{}.{}.{}".format(*updater.current_version())
 
 
 # ---------------------------------------------------------------------------
