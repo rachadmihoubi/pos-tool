@@ -71,9 +71,9 @@ def _write_version(version: tuple[int, int, int]) -> str:
 
 def _update_setup_iss(version_text: str) -> None:
     content = SETUP_ISS.read_text(encoding="utf-8")
-    updated = re.sub(r"AppVersion=\S+", f"AppVersion={version_text}", content)
-    if updated == content:
+    if not re.search(r"AppVersion=\S+", content):
         raise SystemExit("Could not find an AppVersion= line in setup.iss to update.")
+    updated = re.sub(r"AppVersion=\S+", f"AppVersion={version_text}", content)
     SETUP_ISS.write_text(updated, encoding="utf-8")
 
 
