@@ -2449,10 +2449,20 @@ at all" — there now is one, real, running, on `v1.0.17`).
 - **Arabic web font not fetched** (`tools/get_fonts.py` — harmless, falls
   back to Windows' own Arabic font). Unchanged, still true, still low
   priority.
-- **Task 14's manual spot-check against a live POS screenshot was not
-  done** — still needs a screenshot from the shop owner. The programmatic
-  tender/on-account reconciliation (discovery #9) is the automated
-  substitute in the meantime.
+- ~~Task 14's manual spot-check against a live POS screenshot~~ —
+  **DONE 2026-09-14.** Owner supplied a real "État ventes du jour"
+  screenshot (today, generated 13:35). First comparison showed a
+  discrepancy (14 tickets/422,020 DA vs the report's 15/446,980 DA) —
+  investigated per the plan's own "stop and investigate, don't force a
+  match" instruction rather than dismissed: the local cache was stale
+  (last refreshed 13:00, before a ticket at ~13:1x-13:3x landed).
+  `ETL.refresh(force=True)` picked it up, and every figure then matched
+  **exactly**, not just the "same ballpark" the plan itself expected:
+  revenue 446,980.00, collections 106,800.00, on-account 57,700.00,
+  cash-in 496,080.00, 15 tickets, gross profit 31,314.11 — all identical
+  to the DZD against the real POS report. Strongest confirmation yet
+  that `metrics.py`'s cash-realized/on-account/collections split reads
+  the real database correctly.
 - **The auto-update "already up to date, do nothing" path still hasn't
   been explicitly confirmed against a real log line** — every real
   Updater-task run observed so far has been checking-into-a-real-newer-
