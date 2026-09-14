@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -26,8 +27,110 @@ from watchdog.observers import Observer
 
 from poslib.config import Config, get_config, setup_logging
 from poslib.etl import ETL, ETLError
+from poslib.paths import user_data_dir
 
 log = logging.getLogger(__name__)
+
+# -- self-healing: a heartbeat file plus a separate recurring "watchdog"
+# scheduled task (packaging/setup.iss) that restarts the watcher if it goes
+# stale. Added 2026-09-14 after CLAUDE.md's "Bug #2" (a real incident,
+# 2026-09-05): the watcher died from an unhandled exception and stayed dead
+# for ~17 hours until the next Windows logon, because its scheduled task's
+# only trigger is onlogon (one-shot, not recurring) and nothing else was
+# watching for it to come back. See ensure_watcher_running's own docstring
+# for how the restart decision is made.
+_HEARTBEAT_FILE_NAME = "watcher_heartbeat.txt"
+# Comfortably above the default poll_seconds (120s) and min_gap (60s), with
+# margin for a slow rebuild on a big database - not a measurement of a
+# healthy cycle's real cost, just a bound loose enough that a genuinely
+# healthy watcher never trips it.
+_HEARTBEAT_STALE_SECONDS = 15 * 60
+_WATCHER_TASK_NAME = "Shop Analysis - Watcher"
+
+
+def _heartbeat_path() -> Path:
+    return user_data_dir() / _HEARTBEAT_FILE_NAME
+
+
+def _write_heartbeat() -> None:
+    """Records that the watcher's main loop is alive and looping. Never raises."""
+    try:
+        _heartbeat_path().write_text(
+            datetime.datetime.now(datetime.timezone.utc).isoformat(), encoding="utf-8")
+    except OSError:
+        log.debug("Could not write the watcher heartbeat file", exc_info=True)
+
+
+def _heartbeat_age_seconds() -> float | None:
+    """Seconds since the last heartbeat, or None if it's missing/unreadable."""
+    try:
+        text = _heartbeat_path().read_text(encoding="utf-8").strip()
+        written = datetime.datetime.fromisoformat(text)
+        if written.tzinfo is None:
+            written = written.replace(tzinfo=datetime.timezone.utc)
+        return (datetime.datetime.now(datetime.timezone.utc) - written).total_seconds()
+    except (OSError, ValueError):
+        return None
+
+
+def _watcher_task_is_running() -> bool:
+    """
+    Asks Task Scheduler itself whether "Shop Analysis - Watcher" is
+    currently executing - not process enumeration, so this can't be
+    confused by a separately-opened dashboard instance of the same exe
+    (this machine has a documented history of stray duplicate processes -
+    see CLAUDE.md). Fails safe: any error here returns True ("assume it
+    might be running"), so a query hiccup can never trigger a duplicate
+    restart - a duplicate watcher is worse than one missed restart
+    attempt, which the next watchdog cycle retries anyway.
+    """
+    try:
+        result = subprocess.run(
+            ["schtasks", "/query", "/tn", _WATCHER_TASK_NAME, "/fo", "list", "/v"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return True
+        for line in result.stdout.splitlines():
+            if line.strip().lower().startswith("status:"):
+                return "running" in line.lower()
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return True
+
+
+def ensure_watcher_running() -> None:
+    """
+    Run periodically by the "Shop Analysis - Watchdog" scheduled task
+    (packaging/setup.iss), never by the watcher itself - see
+    main.py's --ensure-watcher-running dispatch. Restarts the watcher via
+    its own scheduled task if its heartbeat has gone stale and Task
+    Scheduler confirms it isn't already running. Never raises - a failure
+    here just means no restart happens this cycle, the same fail-safe
+    contract as every other watcher-adjacent function in this codebase.
+    """
+    age = _heartbeat_age_seconds()
+    if age is not None and age < _HEARTBEAT_STALE_SECONDS:
+        log.debug("Watcher heartbeat is %.0fs old - healthy.", age)
+        return
+
+    if _watcher_task_is_running():
+        log.debug("Watcher heartbeat is %s but the task is still running - "
+                  "leaving it alone.",
+                  "missing" if age is None else f"{age:.0f}s old")
+        return
+
+    log.warning("Watcher heartbeat is %s - restarting it.",
+                "missing" if age is None else f"{age:.0f}s old")
+    try:
+        result = subprocess.run(
+            ["schtasks", "/run", "/tn", _WATCHER_TASK_NAME],
+            capture_output=True, text=True, timeout=30,
+        )
+        log.info("Restarted the watcher task (exit %d): %s", result.returncode,
+                 (result.stdout or result.stderr or "").strip() or "(no output)")
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.error("Could not restart the watcher task: %s", exc)
 
 
 class DatabaseChanged(FileSystemEventHandler):
@@ -72,6 +175,8 @@ class Watcher:
         self._last_digest_date: datetime.date | None = None
         self._last_backup_date: datetime.date | None = None
         self._last_remote_push = 0.0
+        self._last_poll = 0.0
+        self._last_heartbeat = 0.0
 
     # -- being told something happened -------------------------------------
 
@@ -222,9 +327,11 @@ class Watcher:
         self._last_remote_push = time.time()
         try:
             from export_static import export
-            from poslib.remote import push_remote
+            from poslib.remote import mark_push_succeeded, push_remote
             export(self.cfg)
-            if not push_remote(self.cfg):
+            if push_remote(self.cfg):
+                mark_push_succeeded()
+            else:
                 log.debug("  remote push did not succeed this cycle - will retry next time.")
         except Exception:                                # noqa: BLE001
             # A failed export/push must never stop the watcher - the real
@@ -232,6 +339,57 @@ class Watcher:
             log.exception("The remote export/push failed")
 
     # -- the loop ----------------------------------------------------------
+
+    # 30s: frequent enough that a stuck-not-crashed loop (one iteration
+    # taking a very long time) is caught almost as fast as a genuinely dead
+    # process, cheap enough (a few bytes) not to matter on a till PC's disk.
+    _HEARTBEAT_WRITE_INTERVAL_SECONDS = 30.0
+
+    def _loop_iteration(self) -> None:
+        """One pass of the main loop's real work - see _safe_loop_iteration
+        for the try/except that wraps this, and run() for the loop itself."""
+        if time.time() - self._last_heartbeat >= self._HEARTBEAT_WRITE_INTERVAL_SECONDS:
+            _write_heartbeat()
+            self._last_heartbeat = time.time()
+
+        if self._dirty.wait(timeout=2.0):
+            self._dirty.clear()
+            # Let a burst of writes finish before reacting to them.
+            time.sleep(1.0)
+            self._dirty.clear()
+            self.rebuild()
+            self._last_poll = time.time()
+
+        # Safety net, in case a change was somehow missed.
+        if time.time() - self._last_poll >= self.poll_seconds:
+            self._last_poll = time.time()
+            self.rebuild()
+
+        if self._digest_due():
+            self._run_digest()
+
+        if self._backup_due():
+            self._run_backup()
+
+    def _safe_loop_iteration(self) -> None:
+        """
+        Hardened 2026-09-14 (CLAUDE.md's "Bug #2"): the loop used to call
+        _loop_iteration's body directly with no try/except at all, so any
+        single unexpected exception anywhere in it - not just inside
+        rebuild()/_run_digest()/_run_backup(), which already guard their
+        own real work - killed the entire process silently (console=False,
+        no crash dialog). A store PC that stays logged in for days had no
+        way back short of a fresh logon. This can now only ever log and
+        keep going. Never raises.
+        """
+        try:
+            self._loop_iteration()
+        except Exception:                                # noqa: BLE001
+            log.exception("Unexpected error in the watcher's main loop - continuing")
+            # A brief pause so a persistently-broken condition (e.g.
+            # _digest_due() itself raising every call) can't spin the loop
+            # hot instead of just logging once per pass.
+            time.sleep(1.0)
 
     def run(self) -> None:
         folder = self.source.parent
@@ -252,29 +410,13 @@ class Watcher:
 
         # Read once at startup so the dashboard is never empty.
         self.rebuild(force=False)
+        _write_heartbeat()
+        self._last_poll = time.time()
+        self._last_heartbeat = time.time()
 
-        last_poll = time.time()
         try:
             while not self._stop.is_set():
-                if self._dirty.wait(timeout=2.0):
-                    self._dirty.clear()
-                    # Let a burst of writes finish before reacting to them.
-                    time.sleep(1.0)
-                    self._dirty.clear()
-                    self.rebuild()
-                    last_poll = time.time()
-
-                # Safety net, in case a change was somehow missed.
-                if time.time() - last_poll >= self.poll_seconds:
-                    last_poll = time.time()
-                    self.rebuild()
-
-                if self._digest_due():
-                    self._run_digest()
-
-                if self._backup_due():
-                    self._run_backup()
-
+                self._safe_loop_iteration()
         except KeyboardInterrupt:
             log.info("Stopping.")
         finally:

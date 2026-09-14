@@ -22,6 +22,7 @@ find - see _cf_hash's docstring.
 from __future__ import annotations
 
 import base64
+import datetime
 import json
 import logging
 import mimetypes
@@ -474,6 +475,50 @@ def _create_deployment(session: requests.Session, account_id: str, project: str,
                 log.warning("create-deployment: giving up after %d attempts (%s).",
                             _MAX_UPLOAD_ATTEMPTS, exc)
     return None
+
+
+# -- last-successful-push marker, read by poslib/digest.py -----------------
+#
+# Deliberately NOT inside push_remote() itself: push_remote is also used for
+# the hub push and provision.py's disposable placeholder push (via its
+# project/export_dir overrides), neither of which should count as "the
+# store's own dashboard synced." watcher.py's _run_remote_push() - the one
+# call site that pushes a store's real export - calls mark_push_succeeded()
+# explicitly instead. Added 2026-09-14, CLAUDE.md's "Bug #2" section: "give
+# the non-technical owner a visible signal when sync goes stale" - this is
+# what poslib/digest.py's remote-sync warning line reads. Deliberately
+# separate from the ETL cache's own parsed_at/the local "Synced" badge,
+# which only reflect a local export having run, not a real successful push -
+# see CLAUDE.md's "Synced badge" investigation for why that distinction
+# matters (a manually-driven dev worktree's local cache can look fresh while
+# nothing has actually been pushed anywhere).
+_REMOTE_PUSH_SUCCESS_FILE_NAME = "remote_push_success.txt"
+
+
+def _remote_push_success_path() -> Path:
+    from .paths import user_data_dir
+    return user_data_dir() / _REMOTE_PUSH_SUCCESS_FILE_NAME
+
+
+def mark_push_succeeded() -> None:
+    """Records that a real store push just succeeded, right now. Never raises."""
+    try:
+        _remote_push_success_path().write_text(
+            datetime.datetime.now(datetime.timezone.utc).isoformat(), encoding="utf-8")
+    except OSError:
+        log.debug("Could not write the remote-push-success marker", exc_info=True)
+
+
+def remote_push_success_age_seconds() -> float | None:
+    """Seconds since the last successful store push, or None if never/unreadable."""
+    try:
+        text = _remote_push_success_path().read_text(encoding="utf-8").strip()
+        written = datetime.datetime.fromisoformat(text)
+        if written.tzinfo is None:
+            written = written.replace(tzinfo=datetime.timezone.utc)
+        return (datetime.datetime.now(datetime.timezone.utc) - written).total_seconds()
+    except (OSError, ValueError):
+        return None
 
 
 def push_remote(cfg: Config, *, project: str | None = None,

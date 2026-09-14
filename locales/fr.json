@@ -853,6 +853,7 @@
     "overdue_alert": "{name} doit {amount} et n'a pas acheté depuis {days} jours",
     "quiet_customer_alert": "{name} achète normalement tous les {usual} jours et n'est pas venu depuis {days}",
     "footer": "Produit par votre outil d'analyse à {time}. Les chiffres viennent directement de votre base de caisse.",
+    "remote_sync_stale": "Votre tableau de bord mobile n'a pas été mis à jour depuis plus de {hours} heures. Vérifiez que le PC de la caisse est allumé, connecté et relié à internet.",
     "attachment_note": "Le rapport Excel complet est joint.",
     "no_sales": "Aucune vente n'a été enregistrée hier.",
     "channel_file": "Enregistré en fichier",

@@ -60,6 +60,10 @@ class Digest:
     weekday: int = 0
     generated_at: datetime.datetime = field(default_factory=datetime.datetime.now)
     cfg: Config | None = None
+    # Hours since the phone dashboard last actually synced, only set when
+    # remote.enabled and it's overdue (see build_digest) - None means either
+    # remote viewing is off, or it's healthy and nothing needs saying.
+    remote_sync_stale_hours: float | None = None
 
     # Filled in by the file channel once it has written them.
     html_path: Path | None = None
@@ -96,6 +100,11 @@ class Digest:
 
         lines.append(f"{t.get('digest.title')} — {t.date(self.for_date)}")
         lines.append("")
+
+        if self.remote_sync_stale_hours is not None:
+            lines.append("! " + t.get("digest.remote_sync_stale",
+                                       hours=t.number(round(self.remote_sync_stale_hours))))
+            lines.append("")
 
         if not n.get("tickets"):
             lines.append(t.get("digest.no_sales"))
@@ -241,6 +250,10 @@ class Digest:
 
         parts.append(f"<h1>{e(t.get('digest.title'))}</h1>")
         parts.append(f'<p class="sub">{e(t.date(self.for_date))} · {e(weekday)}</p>')
+
+        if self.remote_sync_stale_hours is not None:
+            parts.append(
+                f'<div class="urgent">{e(t.get("digest.remote_sync_stale", hours=t.number(round(self.remote_sync_stale_hours))))}</div>')
 
         if not n.get("tickets"):
             parts.append(f'<div class="urgent">{e(t.get("digest.no_sales"))}</div>')
@@ -459,11 +472,38 @@ def build_digest(cfg: Config | None = None,
             findings=findings,
             weekday=weekday,
             cfg=cfg,
+            remote_sync_stale_hours=_remote_sync_stale_hours(cfg),
         )
         digest.new_finding_ids = _find_new(cfg, [f.id for f in findings])
         return digest
     finally:
         conn.close()
+
+
+def _remote_sync_stale_hours(cfg: Config) -> float | None:
+    """
+    Hours since the phone dashboard last actually synced, only when
+    remote.enabled and it's overdue - None means nothing worth saying
+    (remote viewing is off, the last successful push is recent enough, or
+    none has ever succeeded yet - a fresh install with remote just turned
+    on is not something to alarm the owner about on day one; the
+    per-store first-push failure path already has its own visibility via
+    the provisioning log). Threshold defaults to 24h: generous enough that
+    a normal quiet overnight period never false-positives, per CLAUDE.md's
+    "Bug #2" section ("give the non-technical owner a visible signal when
+    sync goes stale") - this is the digest half of that fix; watcher.py's
+    ensure_watcher_running/heartbeat is the self-healing half.
+    """
+    if not bool(cfg.get("remote.enabled", False)):
+        return None
+    from .remote import remote_push_success_age_seconds
+    age_seconds = remote_push_success_age_seconds()
+    if age_seconds is None:
+        return None
+    threshold_hours = float(cfg.get("remote.stale_warning_hours", 24))
+    if age_seconds <= threshold_hours * 3600:
+        return None
+    return age_seconds / 3600
 
 
 def _urgent_items(m: Metrics, cfg: Config) -> list[dict[str, Any]]:

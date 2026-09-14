@@ -853,6 +853,7 @@
     "overdue_alert": "{name} owes {amount} and has not bought for {days} days",
     "quiet_customer_alert": "{name} normally buys every {usual} days and has not been in for {days}",
     "footer": "Produced by your shop analysis tool at {time}. Numbers come straight from your POS database.",
+    "remote_sync_stale": "Your phone dashboard has not updated in over {hours} hours. Check that the till PC is on, logged in, and connected to the internet.",
     "attachment_note": "The full Excel report is attached.",
     "no_sales": "No sales were recorded yesterday.",
     "channel_file": "Saved to file",

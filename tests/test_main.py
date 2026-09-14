@@ -367,3 +367,43 @@ class TestRunProvisioningWithWatchdog:
         assert exit_calls == [1]
         assert "taking far longer than expected" in capsys.readouterr().out
         assert calls["provision_store"] == []  # never actually invoked directly
+
+
+class TestEnsureWatcherRunningDispatch:
+    """
+    --ensure-watcher-running - the "Shop Analysis - Watchdog" scheduled
+    task's own entry point, added 2026-09-14 (CLAUDE.md's "Bug #2").
+    """
+
+    def _patch(self, monkeypatch, *, config_error=None):
+        import poslib.config as config_module
+
+        calls = {"get_config": 0, "setup_logging": 0, "ensure_watcher_running": 0}
+
+        def fake_get_config():
+            calls["get_config"] += 1
+            if config_error is not None:
+                raise config_error
+            return FakeConfig()
+
+        monkeypatch.setattr(config_module, "get_config", fake_get_config)
+        monkeypatch.setattr(config_module, "setup_logging",
+                            lambda cfg: calls.__setitem__("setup_logging", calls["setup_logging"] + 1))
+        monkeypatch.setattr(main_module.watcher, "ensure_watcher_running",
+                            lambda: calls.__setitem__("ensure_watcher_running",
+                                                       calls["ensure_watcher_running"] + 1))
+        return calls
+
+    def test_flag_calls_ensure_watcher_running(self, monkeypatch):
+        calls = self._patch(monkeypatch)
+        assert main_module.main(["--ensure-watcher-running"]) == 0
+        assert calls["get_config"] == 1
+        assert calls["setup_logging"] == 1
+        assert calls["ensure_watcher_running"] == 1
+
+    def test_bad_config_skips_ensure_watcher_running(self, monkeypatch, capsys):
+        from poslib.config import ConfigError
+        calls = self._patch(monkeypatch, config_error=ConfigError("bad database.path"))
+        assert main_module.main(["--ensure-watcher-running"]) == 1
+        assert calls["ensure_watcher_running"] == 0
+        assert "bad database.path" in capsys.readouterr().out

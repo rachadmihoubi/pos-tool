@@ -66,6 +66,20 @@ Filename: "schtasks.exe"; Parameters: "/end /tn ""Shop Analysis - Watcher"""; Fl
 ; silent-auto-update cases, so this one line covers both without a
 ; skipifsilent split.
 Filename: "schtasks.exe"; Parameters: "/run /tn ""Shop Analysis - Watcher"""; Flags: runhidden
+; Third scheduled task, "Shop Analysis - Watchdog" - added 2026-09-14 per
+; CLAUDE.md's "Bug #2" (a real incident, 2026-09-05: the watcher died from
+; an unhandled exception and stayed dead for ~17 hours, since the Watcher
+; task's only trigger is onlogon - one-shot, not recurring - and nothing
+; else was watching for it to come back). Runs
+; "ShopAnalysis.exe --ensure-watcher-running" (main.py/watcher.py) every 10
+; minutes to restart the Watcher task if its heartbeat has gone stale -
+; same skipifsilent reasoning as the Watcher task's own recreate line just
+; above (a silent auto-update's [Run] section runs as SYSTEM; recreating
+; this here unconditionally would silently rewrite a correctly-configured
+; "run as the real user" task into one owned by SYSTEM). /rl limited, same
+; principal as the Watcher task itself - it only ever calls `schtasks /run`
+; on a task it already has rights to, never anything requiring elevation.
+Filename: "schtasks.exe"; Parameters: "/create /f /tn ""Shop Analysis - Watchdog"" /tr ""\""{app}\{#MyAppExeName}\"" --ensure-watcher-running"" /sc minute /mo 10 /rl limited"; Flags: runhidden skipifsilent
 ; The second, always-elevated "Updater" task used to be created here too,
 ; as a passive [Run] entry - moved into CurStepChanged's CreateUpdaterTask
 ; procedure below (2026-08-31) after a real install left it silently
@@ -86,6 +100,7 @@ Filename: "schtasks.exe"; Parameters: "/run /tn ""Shop Analysis - Watcher"""; Fl
 Filename: "taskkill.exe"; Parameters: "/F /IM ""{#MyAppExeName}"""; Flags: runhidden; RunOnceId: "KillRunningApp"
 Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""Shop Analysis - Watcher"""; Flags: runhidden; RunOnceId: "DeleteWatcherTask"
 Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""Shop Analysis - Updater"""; Flags: runhidden; RunOnceId: "DeleteUpdaterTask"
+Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""Shop Analysis - Watchdog"""; Flags: runhidden; RunOnceId: "DeleteWatchdogTask"
 
 [Code]
 var

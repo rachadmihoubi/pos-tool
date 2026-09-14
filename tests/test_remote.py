@@ -807,3 +807,36 @@ class TestCfHash:
         data = b"no extension here"
         expected = blake3_direct(base64.b64encode(data) + b"").hexdigest()[:32]
         assert remote._cf_hash(data, "Makefile") == expected
+
+
+class TestPushSuccessMarker:
+    """
+    mark_push_succeeded/remote_push_success_age_seconds - read by
+    poslib/digest.py to warn the owner when the remote (phone) dashboard
+    has been stale for a while. Added 2026-09-14, CLAUDE.md's "Bug #2".
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(remote, "_remote_push_success_path",
+                             lambda: tmp_path / "remote_push_success.txt")
+        return tmp_path
+
+    def test_never_marked_returns_none(self):
+        assert remote.remote_push_success_age_seconds() is None
+
+    def test_mark_then_read_is_fresh(self):
+        remote.mark_push_succeeded()
+        age = remote.remote_push_success_age_seconds()
+        assert age is not None
+        assert 0 <= age < 5
+
+    def test_corrupt_marker_returns_none(self, _isolated_data_dir):
+        (_isolated_data_dir / "remote_push_success.txt").write_text(
+            "not a timestamp", encoding="utf-8")
+        assert remote.remote_push_success_age_seconds() is None
+
+    def test_mark_never_raises_when_the_directory_does_not_exist(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(remote, "_remote_push_success_path",
+                             lambda: tmp_path / "nonexistent" / "nested" / "f.txt")
+        remote.mark_push_succeeded()  # must not raise

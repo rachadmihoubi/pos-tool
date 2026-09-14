@@ -27,6 +27,18 @@ of separate exes:
       --project-slug SLUG            packaging/setup.iss's optional
       --owner-email EMAIL            provisioning wizard page only.
       [--data-dir PATH]
+    ShopAnalysis.exe                 one-shot: restart the watcher (via its
+      --ensure-watcher-running        own scheduled task) if its heartbeat
+                                      has gone stale. This is what the
+                                      recurring "Shop Analysis - Watchdog"
+                                      scheduled task (packaging/setup.iss)
+                                      runs every few minutes - see
+                                      watcher.py's ensure_watcher_running
+                                      for the restart decision itself, and
+                                      CLAUDE.md's "Bug #2" section for the
+                                      real incident (watcher died, stayed
+                                      dead for ~17 hours) this exists to
+                                      prevent from recurring.
 """
 
 from __future__ import annotations
@@ -232,6 +244,29 @@ def _provision_cloudflare(argv: list[str]) -> int:
     return 0 if result.ok else 1
 
 
+def _ensure_watcher_running() -> int:
+    """
+    Runs from the recurring "Shop Analysis - Watchdog" scheduled task
+    (packaging/setup.iss), same principal as the Watcher task itself (not
+    SYSTEM - it only ever calls `schtasks /run` on a task it already has
+    rights to). Never raises - watcher.ensure_watcher_running() already
+    fails safe on every internal step; a bad config here just means no
+    restart decision can be made this cycle, same as a normal watcher
+    startup failing for the same reason.
+    """
+    from poslib.config import ConfigError, get_config, setup_logging
+
+    try:
+        cfg = get_config()
+    except ConfigError as exc:
+        print(f"\nThere is a problem with config.yaml:\n\n{exc}\n")
+        return 1
+
+    setup_logging(cfg)
+    watcher.ensure_watcher_running()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
 
@@ -244,6 +279,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if argv and argv[0] == "--provision-cloudflare":
         return _provision_cloudflare(argv[1:])
+
+    if argv and argv[0] == "--ensure-watcher-running":
+        return _ensure_watcher_running()
 
     sys.argv = ["app.py", *argv]
     return app.main()
