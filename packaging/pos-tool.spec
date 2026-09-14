@@ -11,6 +11,13 @@
 # backups/, remote-site/, or static/photo-cache/* - all of those either hold
 # secrets or this dev machine's own shop data, and none of them belong on a
 # customer's PC.
+#
+# This allowlist is coupled to tests/test_packaging_spec.py: adding a new
+# file under static/ that export_static.py copy2's or a template
+# url_for('static', ...)'s must also be added to the "static" entries below,
+# or a real packaged install will crash/404 on it - see that test's own
+# docstring for the real incident (store #1, 2026-09-14) this now guards
+# against.
 
 import sys
 from pathlib import Path
