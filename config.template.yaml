@@ -325,6 +325,13 @@ remote:
   # Leave blank to keep stock.json public/price-only, no cost exposed.
   stock_json_token: ""
 
+  # If the phone dashboard hasn't actually synced in more than this many
+  # hours (remote.enabled only), the daily digest includes a warning line
+  # so the owner notices instead of assuming everything is fine. Never
+  # warns before the very first successful push (a fresh install with
+  # remote just turned on is not something to alarm about on day one).
+  stale_warning_hours: 24
+
 
 # -----------------------------------------------------------------------------
 #  THE WATCHER - notices when the POS saves new sales and refreshes the tool.

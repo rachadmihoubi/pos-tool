@@ -26,6 +26,7 @@ the full original design.
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import hashlib
 import logging
 import os
@@ -300,6 +301,57 @@ def _close_other_running_instances() -> None:
         log.warning("Could not close other running instances before update: %s", exc)
 
 
+# -- "an update might still be in flight" marker, read by
+# watcher.ensure_watcher_running() -----------------------------------------
+#
+# Added 2026-09-14 (opus-reviewer finding on the Watchdog self-healing
+# task, CLAUDE.md's "Bug #2"): without this, a real update in progress -
+# which has taken multiple hours on this store before (v1.0.11) - could
+# have its own newly-launched Setup.exe race against the Watchdog task
+# restarting the watcher mid-install, holding .pyd/.dll files open the
+# installer needs to replace. That is exactly Bug #3's hang class
+# (CloseApplications negotiating with a still-running process) reappearing
+# through a different door.
+_UPDATE_IN_PROGRESS_FILE_NAME = "update_in_progress.txt"
+# Generous on purpose - must comfortably outlast the slowest real update
+# already observed on this store (multiple hours) so the marker can never
+# expire mid-install. A stale marker just means the Watchdog stays
+# passive a bit longer than strictly necessary after a genuinely failed
+# update - far cheaper than the alternative.
+_UPDATE_IN_PROGRESS_EXPIRY_SECONDS = 4 * 60 * 60
+
+
+def _update_in_progress_path() -> Path:
+    return user_data_dir() / _UPDATE_IN_PROGRESS_FILE_NAME
+
+
+def _mark_update_in_progress() -> None:
+    try:
+        _update_in_progress_path().write_text(
+            datetime.datetime.now(datetime.timezone.utc).isoformat(), encoding="utf-8")
+    except OSError:
+        log.debug("Could not write the update-in-progress marker", exc_info=True)
+
+
+def update_in_progress() -> bool:
+    """
+    True if a silent auto-update was launched recently enough that it
+    might still be running. Never raises - a failure to read the marker
+    is treated the same as "no update in progress" (False), same
+    fail-open contract as everything else this module exposes to a
+    caller that must never be blocked by this module's own failure.
+    """
+    try:
+        text = _update_in_progress_path().read_text(encoding="utf-8").strip()
+        written = datetime.datetime.fromisoformat(text)
+        if written.tzinfo is None:
+            written = written.replace(tzinfo=datetime.timezone.utc)
+        age = (datetime.datetime.now(datetime.timezone.utc) - written).total_seconds()
+        return age < _UPDATE_IN_PROGRESS_EXPIRY_SECONDS
+    except (OSError, ValueError):
+        return False
+
+
 def launch_silent_install(installer_path: Path) -> bool:
     """
     Spawns the installer detached and returns immediately without waiting
@@ -308,6 +360,7 @@ def launch_silent_install(installer_path: Path) -> bool:
     releases the lock. Returns True if the process was launched, False if
     spawning itself failed. Never raises.
     """
+    _mark_update_in_progress()
     _close_other_running_instances()
     # /LOG: this whole investigation (both the CloseApplications hang and
     # the SYSTEM-context post-install bugs it uncovered, 2026-09-07) was

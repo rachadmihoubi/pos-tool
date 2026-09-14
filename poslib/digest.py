@@ -491,8 +491,16 @@ def _remote_sync_stale_hours(cfg: Config) -> float | None:
     the provisioning log). Threshold defaults to 24h: generous enough that
     a normal quiet overnight period never false-positives, per CLAUDE.md's
     "Bug #2" section ("give the non-technical owner a visible signal when
-    sync goes stale") - this is the digest half of that fix; watcher.py's
-    ensure_watcher_running/heartbeat is the self-healing half.
+    sync goes stale").
+
+    Deliberately NOT the same coverage as watcher.py's
+    ensure_watcher_running/heartbeat self-healing - they catch disjoint
+    failure modes, not overlapping ones. This warning can only ever fire
+    for a *push* that stopped succeeding (network down, Cloudflare
+    rejecting uploads, etc.) - it is produced BY the watcher's own
+    _run_digest(), so a watcher that has actually died sends no digest at
+    all and this code never runs. The self-healing watchdog is what
+    covers that case; this is the other one.
     """
     if not bool(cfg.get("remote.enabled", False)):
         return None

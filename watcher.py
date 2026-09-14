@@ -40,12 +40,27 @@ log = logging.getLogger(__name__)
 # watching for it to come back. See ensure_watcher_running's own docstring
 # for how the restart decision is made.
 _HEARTBEAT_FILE_NAME = "watcher_heartbeat.txt"
-# Comfortably above the default poll_seconds (120s) and min_gap (60s), with
-# margin for a slow rebuild on a big database - not a measurement of a
-# healthy cycle's real cost, just a bound loose enough that a genuinely
-# healthy watcher never trips it.
-_HEARTBEAT_STALE_SECONDS = 15 * 60
+# Must comfortably exceed the worst-case single loop pass, not just the
+# normal poll_seconds (120s)/min_gap (60s) cadence - a real remote push can
+# legitimately take up to poslib.remote._MAX_PUSH_SECONDS (25 min) plus
+# several more minutes for export() first (942s measured on this store's
+# real catalog), during which _loop_iteration only refreshes the heartbeat
+# at its own top, not mid-push. 50 minutes gives real margin above that
+# ~40-45 min worst case. Found too short (15 min) by opus-reviewer pass,
+# 2026-09-14 - a threshold shorter than a healthy busy cycle would make
+# _watcher_task_is_running's own "is it still running" check load-bearing
+# on every busy push, not just a genuine crash.
+_HEARTBEAT_STALE_SECONDS = 50 * 60
 _WATCHER_TASK_NAME = "Shop Analysis - Watcher"
+_WATCHDOG_TASK_NAME = "Shop Analysis - Watchdog"
+# Only Windows ever runs this file (see the class docstring below and
+# poslib/paths.py's own Windows-only assumptions elsewhere) - suppresses the
+# console window schtasks.exe/powershell.exe would otherwise flash on the
+# till screen every time this runs, since the parent (a console=False
+# PyInstaller build) has no console of its own to inherit. Found live,
+# opus-reviewer pass, 2026-09-14: capture_output alone does not prevent
+# this, a new console is allocated for the child regardless.
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
 
 def _heartbeat_path() -> Path:
@@ -73,64 +88,135 @@ def _heartbeat_age_seconds() -> float | None:
         return None
 
 
+def _run_hidden(cmd: list[str]) -> subprocess.CompletedProcess | None:
+    """
+    subprocess.run with the two things every schtasks/powershell call in
+    this module needs: no visible window, and a decode that can't raise on
+    an odd byte (schtasks emits OEM-codepage text; text=True's default
+    strict decode raised UnicodeDecodeError on a real machine during
+    review, which escaped every "never raises" contract downstream of it -
+    opus-reviewer finding, 2026-09-14). Returns None (not raises) on any
+    failure to even run the command.
+    """
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, errors="replace", timeout=30,
+            creationflags=_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
 def _watcher_task_is_running() -> bool:
     """
     Asks Task Scheduler itself whether "Shop Analysis - Watcher" is
     currently executing - not process enumeration, so this can't be
     confused by a separately-opened dashboard instance of the same exe
     (this machine has a documented history of stray duplicate processes -
-    see CLAUDE.md). Fails safe: any error here returns True ("assume it
-    might be running"), so a query hiccup can never trigger a duplicate
-    restart - a duplicate watcher is worse than one missed restart
-    attempt, which the next watchdog cycle retries anyway.
+    see CLAUDE.md). Uses PowerShell's Get-ScheduledTask rather than
+    parsing `schtasks /query`'s own text output: schtasks localizes its
+    "Status:" field's VALUE to the OS's display language (confirmed live
+    on this exact store's till PC, which runs French Windows - the real
+    value is "En cours"/"Prêt", never the English "Running"/"Ready" this
+    code originally matched against) while Get-ScheduledTask's .State
+    property is a culture-invariant enum name regardless of OS language -
+    opus-reviewer finding, 2026-09-14, caught on this machine specifically
+    because it was actually tested here rather than assumed from an
+    English dev environment.
+
+    Fails safe: any error here (including a query that couldn't even run)
+    returns True ("assume it might be running"), so a query hiccup can
+    never trigger a duplicate restart - a duplicate watcher is worse than
+    one missed restart attempt, which the next watchdog cycle retries
+    anyway.
     """
-    try:
-        result = subprocess.run(
-            ["schtasks", "/query", "/tn", _WATCHER_TASK_NAME, "/fo", "list", "/v"],
-            capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode != 0:
-            return True
-        for line in result.stdout.splitlines():
-            if line.strip().lower().startswith("status:"):
-                return "running" in line.lower()
+    result = _run_hidden([
+        "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+        f"(Get-ScheduledTask -TaskName '{_WATCHER_TASK_NAME}' "
+        "-ErrorAction Stop).State.ToString()",
+    ])
+    if result is None or result.returncode != 0:
         return True
-    except (OSError, subprocess.SubprocessError):
-        return True
+    return result.stdout.strip().lower() == "running"
+
+
+def _ensure_watchdog_task_exists() -> None:
+    """
+    Self-heals the "Shop Analysis - Watchdog" scheduled task at every
+    watcher startup. packaging/setup.iss's own [Run]-section creation of
+    this task must be skipifsilent (a silent auto-update's [Run] section
+    runs as SYSTEM; creating the task unconditionally there would bake
+    SYSTEM as its principal instead of the real user - the same reasoning
+    already established for the pre-existing Watcher-task-recreate line
+    in that file) - which means that [Run] entry only ever fires on a
+    fresh interactive install, never on a store that only ever receives
+    updates via silent auto-update. Doing it here instead reaches every
+    store: this function always runs as the real user (the Watcher task
+    itself is /rl limited, and schtasks /run always uses a task's own
+    configured principal regardless of who triggered it), so a task
+    created from inside it inherits the same correct, non-elevated
+    context. Idempotent (/f) and cheap - opus-reviewer finding, 2026-09-14.
+    Never raises; only acts in a frozen build (never touches a dev
+    checkout's own machine).
+    """
+    from poslib.paths import app_root, is_frozen
+    if not is_frozen():
+        return
+    exe = app_root() / "ShopAnalysis.exe"
+    result = _run_hidden([
+        "schtasks", "/create", "/f", "/tn", _WATCHDOG_TASK_NAME,
+        "/tr", f'"{exe}" --ensure-watcher-running',
+        "/sc", "minute", "/mo", "10", "/rl", "limited",
+    ])
+    if result is None:
+        log.warning("Could not create the Watchdog task (schtasks did not run).")
+    elif result.returncode != 0:
+        log.warning("Could not create the Watchdog task (exit %d): %s",
+                    result.returncode,
+                    (result.stdout or result.stderr or "").strip() or "(no output)")
 
 
 def ensure_watcher_running() -> None:
     """
     Run periodically by the "Shop Analysis - Watchdog" scheduled task
-    (packaging/setup.iss), never by the watcher itself - see
-    main.py's --ensure-watcher-running dispatch. Restarts the watcher via
-    its own scheduled task if its heartbeat has gone stale and Task
-    Scheduler confirms it isn't already running. Never raises - a failure
-    here just means no restart happens this cycle, the same fail-safe
-    contract as every other watcher-adjacent function in this codebase.
+    (packaging/setup.iss / _ensure_watchdog_task_exists), never by the
+    watcher itself - see main.py's --ensure-watcher-running dispatch.
+    Restarts the watcher via its own scheduled task if its heartbeat has
+    gone stale and Task Scheduler confirms it isn't already running.
+    Never raises - a failure here just means no restart happens this
+    cycle, the same fail-safe contract as every other watcher-adjacent
+    function in this codebase.
     """
+    from poslib.updater import update_in_progress
+    if update_in_progress():
+        # A real auto-update can legitimately hold the watcher dead for
+        # a while (poslib/updater.py force-kills it before Setup.exe
+        # replaces files) - restarting into a half-written {app} would
+        # hold files open the installer needs, reintroducing the exact
+        # CloseApplications hang class Bug #3 exists to prevent. Opus-
+        # reviewer finding, 2026-09-14.
+        log.debug("An update is in progress - not touching the watcher.")
+        return
+
     age = _heartbeat_age_seconds()
     if age is not None and age < _HEARTBEAT_STALE_SECONDS:
-        log.debug("Watcher heartbeat is %.0fs old - healthy.", age)
+        log.info("Watcher heartbeat is %.0fs old - healthy.", age)
         return
 
     if _watcher_task_is_running():
-        log.debug("Watcher heartbeat is %s but the task is still running - "
-                  "leaving it alone.",
-                  "missing" if age is None else f"{age:.0f}s old")
+        log.info("Watcher heartbeat is %s but the task is still running - "
+                 "leaving it alone.",
+                 "missing" if age is None else f"{age:.0f}s old")
         return
 
     log.warning("Watcher heartbeat is %s - restarting it.",
                 "missing" if age is None else f"{age:.0f}s old")
-    try:
-        result = subprocess.run(
-            ["schtasks", "/run", "/tn", _WATCHER_TASK_NAME],
-            capture_output=True, text=True, timeout=30,
-        )
+    result = _run_hidden(["schtasks", "/run", "/tn", _WATCHER_TASK_NAME])
+    if result is None:
+        log.error("Could not restart the watcher task (schtasks did not run).")
+    else:
         log.info("Restarted the watcher task (exit %d): %s", result.returncode,
                  (result.stdout or result.stderr or "").strip() or "(no output)")
-    except (OSError, subprocess.SubprocessError) as exc:
-        log.error("Could not restart the watcher task: %s", exc)
 
 
 class DatabaseChanged(FileSystemEventHandler):
@@ -325,6 +411,12 @@ class Watcher:
         # push must not be retried in a tight loop before its own interval
         # is up again.
         self._last_remote_push = time.time()
+        # A real push (export + upload) can take tens of minutes on this
+        # store's real catalog - refreshed here too, not just once per
+        # _loop_iteration pass, so a long-but-healthy push is never the
+        # reason ensure_watcher_running sees a stale heartbeat.
+        _write_heartbeat()
+        self._last_heartbeat = time.time()
         try:
             from export_static import export
             from poslib.remote import mark_push_succeeded, push_remote
@@ -403,6 +495,14 @@ class Watcher:
                  int(self.cfg.get("digest.hour", 20)),
                  int(self.cfg.get("digest.minute", 0)))
 
+        # Written before the startup rebuild below (which can itself take
+        # minutes on a slow first read) rather than after, so there is no
+        # heartbeat-less window right at process start - opus-reviewer
+        # finding, 2026-09-14.
+        _write_heartbeat()
+        self._last_heartbeat = time.time()
+        _ensure_watchdog_task_exists()
+
         handler = DatabaseChanged(self.source, self.mark_dirty)
         observer = Observer()
         observer.schedule(handler, str(folder), recursive=False)
@@ -410,9 +510,7 @@ class Watcher:
 
         # Read once at startup so the dashboard is never empty.
         self.rebuild(force=False)
-        _write_heartbeat()
         self._last_poll = time.time()
-        self._last_heartbeat = time.time()
 
         try:
             while not self._stop.is_set():

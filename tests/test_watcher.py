@@ -11,8 +11,18 @@ was watching for it to come back. Three parts, tested here:
    Watchdog" scheduled task's own entry point, which restarts the watcher
    via its scheduled task if the heartbeat has gone stale.
 
+Note on _watcher_task_is_running: this originally parsed `schtasks
+/query`'s own text output for an English "Status: Running"/"Ready" line -
+an opus-reviewer pass caught, live on this exact store's till PC (which
+runs French Windows), that schtasks localizes that VALUE too ("En
+cours"/"Prêt"), making the whole self-healing mechanism a silent no-op on
+the machine Bug #2 actually happened on. Fixed to use PowerShell's
+Get-ScheduledTask, whose .State enum is culture-invariant - tests below
+mock that mechanism, not the old one.
+
 Entirely mocked/isolated: no real database, no real subprocess calls, no
-real Observer/threading loop.
+real Observer/threading loop, and no dependency on this machine's own real
+heartbeat/marker files (see _isolated_data_dir).
 """
 from __future__ import annotations
 
@@ -37,9 +47,28 @@ class _FakeConfig:
 
 @pytest.fixture(autouse=True)
 def _isolated_data_dir(monkeypatch, tmp_path):
-    """Every heartbeat/marker file lands under tmp_path, never a real machine's."""
+    """
+    Every heartbeat/marker file lands under tmp_path, never a real
+    machine's - both watcher.py's own user_data_dir and poslib.updater's
+    (ensure_watcher_running checks poslib.updater.update_in_progress(),
+    which reads its own marker via poslib.paths.user_data_dir()
+    independently - patching only watcher.user_data_dir would leave that
+    check reading this real machine's actual data dir).
+    """
     monkeypatch.setattr(watcher, "user_data_dir", lambda: tmp_path)
+    import poslib.updater as updater_module
+    monkeypatch.setattr(updater_module, "user_data_dir", lambda: tmp_path)
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _no_update_in_progress(monkeypatch):
+    """
+    Default every test to "no update in progress" - TestUpdateInProgressGuard
+    below overrides this explicitly to exercise the guard itself.
+    """
+    import poslib.updater as updater_module
+    monkeypatch.setattr(updater_module, "update_in_progress", lambda: False)
 
 
 class TestHeartbeat:
@@ -62,20 +91,30 @@ class TestHeartbeat:
         watcher._write_heartbeat()  # must not raise
 
 
-class TestWatcherTaskIsRunning:
+def _fake_powershell_state(state: str):
+    """A fake subprocess.run matching _run_hidden's Get-ScheduledTask call shape."""
+    def fake_run(cmd, **k):
+        assert cmd[0] == "powershell.exe"
+        joined = " ".join(cmd)
+        assert "Get-ScheduledTask" in joined
+        assert "Shop Analysis - Watcher" in joined
+        return watcher.subprocess.CompletedProcess(cmd, 0, stdout=f"{state}\r\n", stderr="")
+    return fake_run
 
-    def test_true_when_status_line_says_running(self, monkeypatch):
-        def fake_run(cmd, **k):
-            return watcher.subprocess.CompletedProcess(
-                cmd, 0, stdout="Status:               Running\n", stderr="")
-        monkeypatch.setattr(watcher.subprocess, "run", fake_run)
+
+class TestWatcherTaskIsRunning:
+    """
+    Deliberately does NOT test any English/French text-matching - the
+    whole point of the Get-ScheduledTask fix is that .State.ToString() is
+    culture-invariant, so there is no locale axis left to test against.
+    """
+
+    def test_true_when_state_is_running(self, monkeypatch):
+        monkeypatch.setattr(watcher.subprocess, "run", _fake_powershell_state("Running"))
         assert watcher._watcher_task_is_running() is True
 
-    def test_false_when_status_line_says_ready(self, monkeypatch):
-        def fake_run(cmd, **k):
-            return watcher.subprocess.CompletedProcess(
-                cmd, 0, stdout="Status:               Ready\n", stderr="")
-        monkeypatch.setattr(watcher.subprocess, "run", fake_run)
+    def test_false_when_state_is_ready(self, monkeypatch):
+        monkeypatch.setattr(watcher.subprocess, "run", _fake_powershell_state("Ready"))
         assert watcher._watcher_task_is_running() is False
 
     def test_fails_safe_true_on_nonzero_exit(self, monkeypatch):
@@ -88,14 +127,20 @@ class TestWatcherTaskIsRunning:
 
     def test_fails_safe_true_on_subprocess_error(self, monkeypatch):
         def _raise(*a, **k):
-            raise OSError("schtasks.exe not found")
+            raise OSError("powershell.exe not found")
         monkeypatch.setattr(watcher.subprocess, "run", _raise)
         assert watcher._watcher_task_is_running() is True
 
-    def test_fails_safe_true_when_status_line_is_missing(self, monkeypatch):
-        def fake_run(cmd, **k):
-            return watcher.subprocess.CompletedProcess(cmd, 0, stdout="TaskName: foo\n", stderr="")
-        monkeypatch.setattr(watcher.subprocess, "run", fake_run)
+    def test_fails_safe_true_on_decode_error(self, monkeypatch):
+        """
+        schtasks/powershell can emit OEM-codepage bytes that aren't valid
+        in the process's ANSI codepage - text=True's default strict decode
+        would raise UnicodeDecodeError (a ValueError subclass) here.
+        Regression coverage for an opus-reviewer finding, 2026-09-14.
+        """
+        def _raise(*a, **k):
+            raise UnicodeDecodeError("cp1252", b"\x81", 0, 1, "invalid byte")
+        monkeypatch.setattr(watcher.subprocess, "run", _raise)
         assert watcher._watcher_task_is_running() is True
 
 
@@ -117,17 +162,16 @@ class TestEnsureWatcherRunning:
 
         def fake_run(cmd, **k):
             run_calls.append(cmd)
-            return watcher.subprocess.CompletedProcess(
-                cmd, 0, stdout="Status:               Running\n", stderr="")
+            return watcher.subprocess.CompletedProcess(cmd, 0, stdout="Running\r\n", stderr="")
         monkeypatch.setattr(watcher.subprocess, "run", fake_run)
 
         watcher.ensure_watcher_running()
 
-        # Only the /query call happened - never /run, which would risk a
+        # Only the status query happened - never /run, which would risk a
         # duplicate watcher process (this machine's own documented
         # recurring nuisance - see CLAUDE.md).
         assert len(run_calls) == 1
-        assert "/query" in run_calls[0]
+        assert run_calls[0][0] == "powershell.exe"
 
     def test_stale_heartbeat_and_task_not_running_restarts_it(self, monkeypatch, _isolated_data_dir):
         old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
@@ -137,17 +181,16 @@ class TestEnsureWatcherRunning:
 
         def fake_run(cmd, **k):
             run_calls.append(cmd)
-            if "/query" in cmd:
-                return watcher.subprocess.CompletedProcess(
-                    cmd, 0, stdout="Status:               Ready\n", stderr="")
+            if cmd[0] == "powershell.exe":
+                return watcher.subprocess.CompletedProcess(cmd, 0, stdout="Ready\r\n", stderr="")
             return watcher.subprocess.CompletedProcess(cmd, 0, stdout="SUCCESS", stderr="")
         monkeypatch.setattr(watcher.subprocess, "run", fake_run)
 
         watcher.ensure_watcher_running()
 
         assert len(run_calls) == 2
-        assert "/query" in run_calls[0]
-        assert "/run" in run_calls[1]
+        assert run_calls[0][0] == "powershell.exe"
+        assert run_calls[1][:3] == ["schtasks", "/run", "/tn"]
         assert "Shop Analysis - Watcher" in run_calls[1]
 
     def test_missing_heartbeat_and_task_not_running_restarts_it(self, monkeypatch):
@@ -157,25 +200,48 @@ class TestEnsureWatcherRunning:
 
         def fake_run(cmd, **k):
             run_calls.append(cmd)
-            if "/query" in cmd:
-                return watcher.subprocess.CompletedProcess(
-                    cmd, 0, stdout="Status:               Ready\n", stderr="")
+            if cmd[0] == "powershell.exe":
+                return watcher.subprocess.CompletedProcess(cmd, 0, stdout="Ready\r\n", stderr="")
             return watcher.subprocess.CompletedProcess(cmd, 0, stdout="SUCCESS", stderr="")
         monkeypatch.setattr(watcher.subprocess, "run", fake_run)
 
         watcher.ensure_watcher_running()
 
-        assert any("/run" in cmd for cmd in run_calls)
+        assert any(cmd[:2] == ["schtasks", "/run"] for cmd in run_calls)
 
     def test_never_raises_when_restart_itself_fails(self, monkeypatch):
         def fake_run(cmd, **k):
-            if "/query" in cmd:
-                return watcher.subprocess.CompletedProcess(
-                    cmd, 0, stdout="Status:               Ready\n", stderr="")
+            if cmd[0] == "powershell.exe":
+                return watcher.subprocess.CompletedProcess(cmd, 0, stdout="Ready\r\n", stderr="")
             raise OSError("schtasks.exe not found")
         monkeypatch.setattr(watcher.subprocess, "run", fake_run)
 
         watcher.ensure_watcher_running()  # must not raise
+
+
+class TestUpdateInProgressGuard:
+    """
+    Regression coverage for an opus-reviewer finding, 2026-09-14: without
+    this guard, a real auto-update in progress (which has taken multiple
+    hours on this store before) could have the Watchdog task restart the
+    watcher mid-install, holding files open the installer needs to
+    replace - reintroducing Bug #3's own hang class through a new door.
+    """
+
+    def test_stale_heartbeat_but_update_in_progress_does_nothing(self, monkeypatch, _isolated_data_dir):
+        import poslib.updater as updater_module
+        monkeypatch.setattr(updater_module, "update_in_progress", lambda: True)
+
+        old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
+        watcher._heartbeat_path().write_text(old.isoformat(), encoding="utf-8")
+
+        calls = []
+        monkeypatch.setattr(watcher.subprocess, "run",
+                             lambda *a, **k: calls.append(a) or watcher.subprocess.CompletedProcess(a, 0))
+
+        watcher.ensure_watcher_running()
+
+        assert calls == []  # never even queried the task - update_in_progress short-circuits first
 
 
 class TestSafeLoopIteration:
@@ -218,6 +284,20 @@ class TestSafeLoopIteration:
 
         assert len(attempts) == 5
 
+    def test_keyboard_interrupt_is_not_swallowed(self, monkeypatch, tmp_path):
+        """
+        bare `except Exception` must not catch KeyboardInterrupt (a
+        BaseException subclass) - confirms Ctrl+C during an iteration
+        still reaches run()'s own outer handler and stops the process
+        cleanly, rather than being logged-and-continued like a real bug.
+        """
+        w = watcher.Watcher(_FakeConfig(tmp_path))
+        monkeypatch.setattr(w, "_loop_iteration",
+                             lambda: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+        with pytest.raises(KeyboardInterrupt):
+            w._safe_loop_iteration()
+
 
 class TestLoopIterationWritesHeartbeat:
 
@@ -259,3 +339,49 @@ class TestLoopIterationWritesHeartbeat:
         w._loop_iteration()
 
         assert calls == []
+
+
+class TestEnsureWatchdogTaskExists:
+
+    def test_does_nothing_in_a_dev_checkout(self, monkeypatch):
+        import poslib.paths as paths_module
+        monkeypatch.setattr(paths_module, "is_frozen", lambda: False)
+        calls = []
+        monkeypatch.setattr(watcher.subprocess, "run",
+                             lambda *a, **k: calls.append(a) or watcher.subprocess.CompletedProcess(a, 0))
+
+        watcher._ensure_watchdog_task_exists()
+
+        assert calls == []
+
+    def test_creates_the_task_in_a_frozen_build(self, monkeypatch, tmp_path):
+        import poslib.paths as paths_module
+        monkeypatch.setattr(paths_module, "is_frozen", lambda: True)
+        monkeypatch.setattr(paths_module, "app_root", lambda: tmp_path)
+        run_calls = []
+
+        def fake_run(cmd, **k):
+            run_calls.append(cmd)
+            return watcher.subprocess.CompletedProcess(cmd, 0, stdout="SUCCESS", stderr="")
+        monkeypatch.setattr(watcher.subprocess, "run", fake_run)
+
+        watcher._ensure_watchdog_task_exists()
+
+        assert len(run_calls) == 1
+        cmd = run_calls[0]
+        assert cmd[:3] == ["schtasks", "/create", "/f"]
+        assert "Shop Analysis - Watchdog" in cmd
+        assert "--ensure-watcher-running" in " ".join(cmd)
+        assert "/sc" in cmd and "minute" in cmd
+        assert "/mo" in cmd and "10" in cmd
+
+    def test_never_raises_when_creation_fails(self, monkeypatch, tmp_path):
+        import poslib.paths as paths_module
+        monkeypatch.setattr(paths_module, "is_frozen", lambda: True)
+        monkeypatch.setattr(paths_module, "app_root", lambda: tmp_path)
+
+        def _raise(*a, **k):
+            raise OSError("schtasks.exe not found")
+        monkeypatch.setattr(watcher.subprocess, "run", _raise)
+
+        watcher._ensure_watchdog_task_exists()  # must not raise

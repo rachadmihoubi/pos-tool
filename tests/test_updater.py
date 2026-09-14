@@ -366,8 +366,18 @@ class TestLaunchSilentInstall:
     """
 
     @pytest.fixture(autouse=True)
-    def _stub_close_other_instances(self, monkeypatch):
+    def _stub_close_other_instances(self, monkeypatch, tmp_path):
         monkeypatch.setattr(updater, "_close_other_running_instances", lambda: None)
+        # Isolates the update-in-progress marker (added 2026-09-14) from
+        # this machine's real data dir the same way - a dev checkout's
+        # user_data_dir() falls back to the repo root itself, so an
+        # unmocked real launch_silent_install() call in any test here
+        # would otherwise write a real file into this repo. Redirects
+        # only the marker's own path, not user_data_dir() itself - one
+        # test below (test_passes_a_log_path_so_a_hang_leaves_evidence)
+        # deliberately asserts against the real user_data_dir().
+        monkeypatch.setattr(updater, "_update_in_progress_path",
+                            lambda: tmp_path / "update_in_progress.txt")
 
     def test_launches_installer_with_silent_flags(self, monkeypatch, tmp_path):
         installer = tmp_path / "Setup.exe"
@@ -443,6 +453,13 @@ class TestLaunchSilentInstallClosesOtherInstancesFirst:
         which would stay green even if the ordering were reversed and the
         fix made useless).
         """
+        # Isolates the update-in-progress marker launch_silent_install now
+        # writes (added 2026-09-14) from this machine's real data dir - in
+        # a dev checkout, user_data_dir() falls back to the repo root
+        # itself, so leaving this unmocked would write a real file here.
+        monkeypatch.setattr(updater, "_update_in_progress_path",
+                            lambda: tmp_path / "update_in_progress.txt")
+
         installer = tmp_path / "Setup.exe"
         installer.write_bytes(b"fake")
         order = []
@@ -552,3 +569,63 @@ class TestCheckAndApplyUpdate:
         monkeypatch.setattr(updater.tempfile, "mkdtemp", _raise)
 
         assert updater.check_and_apply_update(FakeConfig()) is False
+
+
+class TestUpdateInProgressMarker:
+    """
+    mark_update_in_progress/update_in_progress - read by
+    watcher.ensure_watcher_running() so the Watchdog task never restarts
+    the watcher mid-update. Added 2026-09-14, opus-reviewer finding on
+    CLAUDE.md's "Bug #2" fix.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(updater, "_update_in_progress_path",
+                             lambda: tmp_path / "update_in_progress.txt")
+        return tmp_path
+
+    def test_no_marker_means_no_update_in_progress(self):
+        assert updater.update_in_progress() is False
+
+    def test_fresh_marker_means_update_in_progress(self):
+        updater._mark_update_in_progress()
+        assert updater.update_in_progress() is True
+
+    def test_expired_marker_means_no_update_in_progress(self, _isolated_data_dir):
+        old = (updater.datetime.datetime.now(updater.datetime.timezone.utc)
+               - updater.datetime.timedelta(hours=5))
+        (_isolated_data_dir / "update_in_progress.txt").write_text(
+            old.isoformat(), encoding="utf-8")
+        assert updater.update_in_progress() is False
+
+    def test_corrupt_marker_means_no_update_in_progress(self, _isolated_data_dir):
+        (_isolated_data_dir / "update_in_progress.txt").write_text(
+            "not a timestamp", encoding="utf-8")
+        assert updater.update_in_progress() is False
+
+    def test_mark_never_raises_when_the_directory_does_not_exist(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(updater, "_update_in_progress_path",
+                             lambda: tmp_path / "nonexistent" / "nested" / "f.txt")
+        updater._mark_update_in_progress()  # must not raise
+
+    def test_launch_silent_install_marks_before_spawning(self, monkeypatch, tmp_path):
+        """
+        Order matters: the marker must be written before the installer is
+        spawned, not after - a killed process between the two would
+        otherwise leave the Watchdog free to restart the watcher into a
+        half-installed {app}.
+        """
+        installer = tmp_path / "Setup.exe"
+        installer.write_bytes(b"fake")
+        order = []
+
+        monkeypatch.setattr(updater, "_mark_update_in_progress",
+                            lambda: order.append("mark"))
+        monkeypatch.setattr(updater, "_close_other_running_instances",
+                            lambda: order.append("close"))
+        monkeypatch.setattr(updater.subprocess, "Popen",
+                            lambda *a, **k: order.append("popen"))
+
+        assert updater.launch_silent_install(installer) is True
+        assert order == ["mark", "close", "popen"]
